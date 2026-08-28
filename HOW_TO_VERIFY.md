@@ -1,126 +1,117 @@
-# HOW TO VERIFY — SkillPass v0.2
+# HOW TO VERIFY — SkillPass v0.3
 
-## A. Zero-dependency local verification
+## A. One-command verification
 
 ```bash
-npm run bootstrap
-npm run doctor
-npm run verify
+chmod +x run_all.sh
+./run_all.sh
 ```
 
-Expected final messages include:
+For the local JS path only:
 
-```text
-31 tests
-31 pass
-0 fail
-HTTP/UI SMOKE PASSED
-LOCAL VERIFIED
+```bash
+./run_all.sh --no-rust
 ```
 
-## B. Human-clickable local acceptance test
+The script installs missing developer tooling locally under `.tooling/`; it does not require global Node/Rust installation.
+
+## B. Deterministic protocol tests
+
+```bash
+npm test
+npm run smoke:http
+npm run smoke:fiber
+npm run smoke:paid
+```
+
+The combined paid smoke must prove:
+
+1. resource returns HTTP 402 without payment;
+2. unpaid quote is rejected;
+3. paid quote + current owner succeeds;
+4. replaying the consumed payment is rejected;
+5. capability transfers A -> B;
+6. A creates/pays a fresh quote but is rejected as `NOT_OWNER`;
+7. B creates/pays a fresh quote and succeeds.
+
+## C. Human-clickable local demo
 
 ```bash
 npm run dev
 ```
 
-Open `http://127.0.0.1:8787/` and perform:
-
-1. **Use as Alice** → accepted.
-2. **Transfer Alice → Bob** → successor Cell appears.
-3. **Use as Alice** → rejected.
-4. **Use as Bob** → accepted.
+Open `http://127.0.0.1:8787/` and exercise both ordinary and **Paid use** buttons.
 
 This is simulation evidence only.
 
-## C. Contract verification
-
-Local Rust:
+## D. CKB contract verification
 
 ```bash
 npm run verify:contract
 ```
 
-or Docker:
+or:
 
 ```bash
 npm run verify:contract:docker
 ```
 
-Required contract cases include valid creation/transfer and rejection of malformed data, unsupported version/flags, forged creation ID, changed immutable fields, non-transferable owner change, unauthorized issue, and burn.
+Required cases include valid creation/transfer and rejection of malformed data, unsupported version/flags, forged creation ID, changed immutable fields, non-transferable owner change, unauthorized issue, and burn.
 
-## D. CCC client
+## E. CCC client/frontend
 
 ```bash
-npm run setup:live
+npm install --prefix packages/ckb-client
+npm install --prefix apps/web
 npm run typecheck:ckb
+npm run build:web
 ```
 
-This checks the browser/testnet transaction code against the installed CCC package.
+CCC remains the wallet/transaction SDK used by the real CKB path.
 
-## E. Real testnet deployment
-
-Create config:
+## F. Real CKB testnet
 
 ```bash
 npm run bootstrap:live
-```
-
-Fill `.env.live` from the real contract deployment, then:
-
-```bash
+# edit .env.live using real deployment metadata
 npm run doctor:live
 docker compose -f compose.live.yaml up --build
 ```
 
-The live application must report **CKB Testnet**.
+Record real deployment, issue, and transfer transaction hashes.
 
-## F. Real two-user test
+## G. Real Fiber adapter
 
-### Actor A
+Install FNN using the project's wrapper around the official installer:
 
-1. connects a CCC-compatible CKB wallet;
-2. owns or receives a `paper-analyzer-v1` capability;
-3. uses the service successfully;
-4. transfers the capability to Actor B and explicitly signs the transaction.
+```bash
+./run_all.sh --no-rust --with-fiber
+```
 
-### Actor B
+Then point the facilitator at a receiver FNN RPC endpoint:
 
-5. connects independently;
-6. sees the successor live Capability Cell;
-7. uses the service successfully.
+```bash
+FIBER_BACKEND=fnn \
+FIBER_RPC_URL=http://127.0.0.1:8227 \
+FACILITATOR_STATE_FILE=.runtime/fiber-settled.json \
+npm run facilitator
+```
 
-### Actor A again
+A real payment test additionally needs a funded payer node/channel and should record the payment hash, status, and (where supported by the FNN version) successful payment preimage/receipt evidence.
 
-8. old consumed out point is rejected;
-9. B's successor Cell is rejected because A no longer controls its lock.
+## H. Funding-ready evidence checklist
 
-Record the issue and transfer transaction hashes.
+Do not mark the system externally verified until all are public/reproducible:
 
-## G. Backend authorization checks
-
-For every protected request the server must verify:
-
-1. one-time nonce exists and is unexpired;
-2. nonce cannot be reused;
-3. wallet signature is valid;
-4. MVP signature identity is bound to the claimed CKB address;
-5. referenced Capability Cell is currently live;
-6. Type Script matches configured SkillPass deployment;
-7. Type Script args match capability data identity;
-8. service ID is `paper-analyzer-v1`;
-9. capability is unexpired;
-10. current Cell lock equals requester address.
-
-## H. Funding-ready status
-
-Only mark the public MVP `VERIFIED` after publishing:
-
-- testnet deployment tx hash;
+- CKB deployment tx hash;
 - issue tx hash;
 - transfer tx hash;
-- public application URL;
-- passing CI link;
-- complete screen recording;
-- unrelated external-user report;
-- updated `reports/verification-matrix.md`.
+- owner succeeds before transfer;
+- old owner rejected after transfer;
+- new owner succeeds;
+- real Fiber payment evidence;
+- payment replay rejection;
+- public URL;
+- passing CI;
+- unrelated tester report;
+- measured real network latency/error rates.

@@ -1,147 +1,94 @@
-# SkillPass Deployment Guide
+# SkillPass v0.3 Deployment Guide
 
-This repository has **two deployment modes**. Do not confuse them.
+SkillPass has three deliberately separated modes.
 
-## Mode A — zero-dependency local product demo
-
-Use this first. It exercises the complete product consequence without pretending that an in-memory Cell is CKB testnet evidence.
-
-### Native Node.js
+## Mode A — local deterministic research demo
 
 ```bash
-npm run bootstrap
-npm run doctor
-npm run verify
+./run_all.sh --no-rust --serve
+```
+
+or, after setup:
+
+```bash
 npm run dev
 ```
 
 Open `http://127.0.0.1:8787/`.
 
-The UI lets you demonstrate:
+This mode uses in-memory CKB/Fiber models. It is suitable for CI, protocol testing, demos, and adversarial-flow reproduction. It is **not** network evidence.
 
-1. Alice owns a capability;
-2. Alice can use `paper-analyzer-v1`;
-3. Alice transfers the capability to Bob;
-4. Alice is denied after the transfer;
-5. Bob succeeds.
+## Mode B — real CKB testnet capability
 
-### Docker
-
-```bash
-docker compose up --build
-```
-
-Open `http://127.0.0.1:8787/`.
-
-This image contains no npm runtime dependencies beyond Node itself.
-
----
-
-## Mode B — real CKB testnet application
-
-This mode uses:
-
-- a real deployed `CapabilityType` script;
-- a CCC wallet in the browser;
-- CKB testnet live Cells;
-- an API that verifies a one-time wallet message signature;
-- a fresh CKB live-cell query on every protected-service use.
-
-The live service has **no user private key**.
-
-### 1. Verify/build the contract
-
-With local Rust:
+### 1. Verify/build the Type Script
 
 ```bash
 npm run verify:contract
 ```
 
-Or with Docker only:
-
-```bash
-npm run verify:contract:docker
-```
-
-The expected binary is:
+Expected binary:
 
 ```text
 contracts/capability-type/build/release/capability-type
 ```
 
-### 2. Deploy the contract to CKB testnet
+### 2. Deploy to CKB testnet
 
-Deploy the compiled binary using your normal CKB/OffCKB deployment workflow. Record:
+Use your CKB/OffCKB workflow. `run_all.sh --with-offckb` can install OffCKB locally, but does not deploy automatically.
+
+Record:
 
 - deployment transaction hash;
-- output index of the code cell;
-- code/data hash used by the Type Script;
+- code Cell output index;
+- configured code/data hash;
 - hash type.
 
-Do not put a wallet private key in this repository or in the SkillPass web/API container.
+Never place wallet private keys/seed phrases in this repository or service environment.
 
-### 3. Create runtime configuration
+### 3. Configure the live application
 
 ```bash
 npm run bootstrap:live
 ```
 
-Edit `.env.live` and replace the two placeholder hashes:
-
-```dotenv
-CAPABILITY_CODE_HASH=0x...
-CAPABILITY_HASH_TYPE=data1
-CAPABILITY_DEP_TX_HASH=0x...
-CAPABILITY_DEP_INDEX=0
-ENABLE_PUBLIC_ISSUE=false
-```
-
-Then validate it:
+Fill `.env.live`, then:
 
 ```bash
 npm run doctor:live
-```
-
-### 4. Build and run the real testnet app
-
-```bash
 docker compose -f compose.live.yaml up --build
 ```
 
-Open `http://127.0.0.1:8787/`.
+The live service verifies a fresh wallet challenge plus the current live Capability Cell. It does not hold a user wallet private key.
 
-The live image builds the React/CCC browser application and serves it from the same Node service. The same-origin design avoids a separate CORS configuration and keeps deployment to one container.
+## Mode C — real Fiber payment integration
 
-### 5. Provider issuance
+Install current official FNN locally if needed:
 
-For a public demo in which any connected testnet user may issue a pass from their own wallet, set:
-
-```dotenv
-ENABLE_PUBLIC_ISSUE=true
+```bash
+./run_all.sh --no-rust --with-fiber
 ```
 
-For a normal demo, keep it `false` and have the provider issue/transfer test passes separately.
+Run the local compatibility facilitator against an FNN receiver RPC:
 
-Issuance always requires an explicit wallet transaction signature in the browser.
+```bash
+FIBER_BACKEND=fnn \
+FIBER_NETWORK=testnet \
+FIBER_RPC_URL=http://127.0.0.1:8227 \
+npm run facilitator
+```
 
-### 6. Public hosting
+The adapter creates/queries Fiber invoices through JSON-RPC. A complete real payment requires a separately configured payer/Fiber route/channel. Channel funding is intentionally left as an explicit operator action.
 
-`Dockerfile.live` is suitable for a single-container host such as a Docker VM or a container PaaS. Configure the values from `.env.live` as service environment variables and expose port `8787`.
+## Production hardening required before multi-replica/mainnet
 
-For the MVP, run **one live-service instance**. The nonce replay store is intentionally in process memory. Horizontal scaling requires replacing that store with a shared atomic TTL store such as Redis before running multiple replicas.
+- shared atomic replay/nonce store (Redis/DB or equivalent);
+- authenticated/least-privilege FNN RPC access;
+- TLS and reverse-proxy limits;
+- structured logs/metrics/traces;
+- dependency/SBOM/vulnerability scanning;
+- contract and service security review;
+- idempotent delivery/settlement design for crash boundaries;
+- independent testnet soak/load tests;
+- backup/recovery procedure for FNN and service state.
 
-### 7. Funding-ready verification
-
-Do not call the project testnet-verified until all of these exist:
-
-- real deployment tx hash;
-- real issue tx hash;
-- real transfer tx hash;
-- Actor A succeeds before transfer;
-- Actor A is rejected after transfer;
-- Actor B succeeds after transfer;
-- public app URL;
-- CI/test evidence;
-- unrelated external-user reproduction.
-
-See `HOW_TO_VERIFY.md` and `reports/verification-matrix.md`.
+See `SECURITY.md` and `reports/limitations.md`.

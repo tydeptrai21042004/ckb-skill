@@ -1,46 +1,61 @@
-# Security Notes
+# Security Notes — v0.3
 
 ## Key custody
 
-- The live API never needs or accepts the user's wallet private key or seed phrase.
-- Issue and transfer transactions are signed in the browser through the connected CCC wallet.
-- The local `TestWallet` is HMAC-based test code and exists only in `local-test-only` simulation mode.
+- The live API never needs or accepts a user's wallet private key or seed phrase.
+- CKB issue/transfer transactions are signed through the connected CCC wallet.
+- The local `TestWallet` is deterministic test code only.
+- `run_all.sh --with-fiber` installs FNN but does not create/fund channels or import keys.
 
-## Authorization
+## Authorization rule
 
-A protected service request requires both:
+A protected paid request is authorized only when **all** required predicates hold:
 
-1. a one-time wallet message proof; and
-2. successful verification of the current live Capability Cell on CKB.
+```text
+payment valid
+AND payment not previously consumed
+AND wallet challenge valid
+AND referenced Capability Cell is live
+AND Capability Type/identity matches
+AND service + expiry policy matches
+AND current Cell owner matches requester
+```
 
-A valid signature alone is not an entitlement. A cached database ownership row alone is not an entitlement.
+Payment alone never grants capability access.
 
 ## Replay protection
 
-The live MVP nonce store:
+- wallet challenge nonces are single-use and expiring;
+- local x402/Fiber settlement hashes are single-use;
+- file-backed payment replay state uses atomic temp-file rename for a single process;
+- payment quotes are request-bound and expire from the local quote cache.
 
-- generates cryptographically random nonces;
-- has a 60-second expiry;
-- marks a nonce used before expensive verification completes;
-- rejects replay;
-- prunes stale records;
-- is intentionally process-local.
+The file-backed replay store is **not a distributed lock**. Before running multiple replicas, use a shared store with atomic compare-and-set/unique-key semantics.
 
-Run one backend replica for the MVP. Before horizontal scaling, replace it with a shared atomic TTL store.
+## Fiber/x402 compatibility boundary
 
-## Browser wallet scope
+`packages/x402-fiber` is explicitly experimental. The project does not claim its custom `ckb:fiber-*` scheme/network pair is an upstream registered x402 scheme. Track the official Fiber/x402 work and replace/adapt this harness when the upstream interface stabilizes.
 
-The first public MVP intentionally requires a CKB-native message-signing identity that can be directly bound to the connected CKB address. Do not silently enable BTC/EVM/Nostr/JoyID identity modes until a tested identity-to-CKB-lock binding rule exists for each signer class.
+## Crash/settlement boundary
 
-## Input and HTTP controls
+The local demonstration authorizes service execution before persisting final local payment consumption. A production implementation must define idempotency and crash recovery so a service result cannot be delivered repeatedly around a failed settlement-state write.
 
-- request body size is bounded;
-- paper input size is bounded;
-- demo/live APIs include basic per-IP rate limiting;
-- security response headers are set;
-- live frontend/API use same origin by default;
-- deployment config exposes only public chain metadata.
+## FNN RPC
+
+For real FNN:
+
+- bind RPC privately where possible;
+- use the narrowest supported Biscuit/Bearer capability;
+- never expose dev/admin RPC scopes to the public internet;
+- treat payment/channel state as valuable operational state and back it up according to the active FNN release.
 
 ## Mainnet
 
-Mainnet is not supported by this MVP. Keep the React provider and backend on CKB testnet until independent contract/security review and explicit mainnet configuration are added.
+Mainnet is not claimed ready. Complete independent Type Script/service review and real testnet acceptance first.
+
+## Dependency reproducibility
+
+- JavaScript dependency versions in the manifests are pinned exactly; once `npm install` succeeds, keep the generated `package-lock.json` files and use `npm ci` on subsequent runs.
+- The contract pins Rust `1.95.0`, `ckb-std = 1.1.0`, and `ckb-testtool = 1.1.1` exactly.
+- If `contracts/capability-type/Cargo.lock` is absent, `run_all.sh` generates it on the first Rust-enabled run. Commit/preserve that generated lockfile for release artifacts and use the same lockfile in CI/review builds.
+- Review dependency updates deliberately; do not regenerate lockfiles as an incidental deployment step.

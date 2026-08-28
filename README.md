@@ -1,80 +1,148 @@
-# SkillPass — CKB Capability Protocol
+# SkillPass v0.3 — Portable CKB Service Rights + Fiber/x402 Payments
 
-SkillPass turns access to `paper-analyzer-v1` into a CKB-native capability: **the current owner of the live Capability Cell may use the service; after a valid transfer, the previous owner is rejected and the new owner is accepted.**
+SkillPass is a research/product prototype for **portable digital service rights on CKB**.
+A provider issues a capability as a CKB Cell. The current live Cell owner is authorized to use the protected service. A valid transfer moves that authorization to the new owner without updating a centralized entitlement row.
 
-## v0.2 improvements
+v0.3 adds a second, independent condition: a service request may also require an **x402-v2-style payment completed over Fiber**. Payment never replaces authorization: the request must satisfy both the payment rule and the current CKB capability rule.
 
-This version is designed to be easier for a new developer, reviewer, or external tester to run:
+```text
+user / AI agent
+     |
+     | HTTP request
+     v
+x402-style 402 challenge ----> Fiber invoice/payment
+     |                              |
+     | PAYMENT-SIGNATURE            v
+     +------------------------> payment verification
+                                    |
+                                    v
+                            SkillPass verifier
+                               |          |
+                               |          +--> payment not replayed
+                               v
+                       current CKB live Cell
+                               |
+                         current owner?
+                               |
+                               v
+                         protected service
+```
 
-- dependency-free interactive local web application;
-- browser-safe shared Capability codec (`Uint8Array`, no Node `Buffer` dependency);
-- one-command environment bootstrap and doctor;
-- automated HTTP/UI smoke test;
-- local Docker deployment;
-- Dockerized Rust/CKB contract verification path;
-- React + CCC real-testnet frontend;
-- live testnet service that verifies wallet proof + current CKB Cell;
-- one-container testnet deployment path;
-- runtime config through `.env.live`, not source edits;
-- no user private key on the backend.
+## Important research positioning
 
-## Fastest start
+The **Fiber x402 facilitator itself is not claimed as SkillPass novelty**. Nervos/Fiber has an official agent-payment design and an x402 facilitator MVP draft/PR. SkillPass uses a small compatibility harness so the repository is independently reproducible, while the actual research question is:
 
-Requires Node.js 22+ only:
+> Can a provider-authorized service right remain portable and independently verifiable from CKB state while high-frequency payment is handled by Fiber/x402, without restoring a provider-owned entitlement database?
+
+See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
+
+## One-command setup + verification
+
+On Linux, macOS, or WSL:
 
 ```bash
-npm run bootstrap
-npm run verify
+chmod +x run_all.sh
+./run_all.sh
+```
+
+`run_all.sh` detects the OS/CPU and then:
+
+1. uses system Node.js when it is >=22, otherwise downloads a portable Node 22 into `.tooling/`;
+2. installs a local Rust toolchain pinned by this project and the CKB RISC-V target;
+3. installs the isolated npm dependencies for the CCC client, React app, and live service;
+4. bootstraps safe config templates;
+5. runs the complete Node test suite;
+6. runs the basic HTTP smoke test;
+7. runs the x402/Fiber facilitator smoke test;
+8. runs the combined **payment + capability + transfer** smoke test;
+9. type-checks the CCC client;
+10. builds the React/CCC frontend;
+11. writes a benchmark report;
+12. builds/tests the CKB Type Script.
+
+Useful variants:
+
+```bash
+./run_all.sh --no-rust        # fastest JS/local verification
+./run_all.sh --serve          # verify everything, then open local demo on :8787
+./run_all.sh --with-offckb    # also install OffCKB locally
+./run_all.sh --with-fiber     # also install current official Fiber FNN locally
+./run_all.sh --skip-install   # reuse already-installed dependencies
+```
+
+`--with-fiber` installs software only. It deliberately does **not** create/fund channels or move assets.
+
+## Local product demo
+
+```bash
 npm run dev
 ```
 
-Open:
+Open `http://127.0.0.1:8787/`.
+
+The UI supports both:
+
+- capability-only access; and
+- a local mock of `402 -> Fiber payment -> retry -> capability authorization`.
+
+The deterministic combined smoke test proves:
 
 ```text
-http://127.0.0.1:8787/
+402 quote
+  -> unpaid request rejected
+  -> payment marked paid
+  -> Alice paid access succeeds
+  -> same payment replay rejected
+  -> capability transferred Alice -> Bob
+  -> Alice can pay but is still rejected as NOT_OWNER
+  -> Bob pays with a fresh quote and succeeds
 ```
 
-Current dependency-free verification covers **31 automated Node tests** plus an HTTP/UI smoke test.
+This is **simulation evidence**, not a claim of a real Fiber payment or CKB testnet deployment.
 
-## Local Docker demo
+## Current automated evidence
+
+The dependency-free Node path currently contains **36 tests** plus three HTTP/integration smoke paths. The local benchmark writes results to `reports/benchmarks/latest.md`.
+
+Run:
 
 ```bash
-docker compose up --build
+npm test
+npm run smoke:http
+npm run smoke:fiber
+npm run smoke:paid
+npm run benchmark
 ```
 
-Then open `http://127.0.0.1:8787/`.
+For the complete environment:
 
-## Real CKB testnet deployment
+```bash
+npm run verify:full
+```
 
-After the contract is deployed and its metadata is known:
+## Real CKB/Fiber path
+
+The live CKB path uses **CCC** for wallet/transaction integration and the Rust CKB Type Script for capability invariants. The Fiber adapter uses FNN JSON-RPC (`new_invoice`, `get_invoice`, etc.).
+
+Start with:
 
 ```bash
 npm run bootstrap:live
-# edit .env.live
+# fill .env.live with real deployed contract metadata
 npm run doctor:live
-docker compose -f compose.live.yaml up --build
 ```
 
-See [`DEPLOY.md`](DEPLOY.md) for the complete workflow.
+For a local FNN receiver endpoint:
 
-## Main architecture
-
-```text
-Browser / CCC wallet
-        │
-        ├── issue / transfer transaction ──► CKB Testnet
-        │                                     │
-        │                                     │ current live Capability Cell
-        │                                     ▼
-        └── signed one-time challenge ──► SkillPass service
-                                              │
-                                              ├── verify signature
-                                              ├── query live Cell
-                                              ├── verify service + expiry + owner
-                                              └── return paper analysis
+```bash
+FIBER_BACKEND=fnn \
+FIBER_RPC_URL=http://127.0.0.1:8227 \
+npm run facilitator
 ```
 
-CKB remains authoritative for ownership. A database or cached entitlement flag is not required for authorization.
+A real paid E2E requires funded Fiber peers/channels. It is intentionally not auto-created by `run_all.sh` because that is a network/asset operation.
+
+See [`DEPLOY.md`](DEPLOY.md) and [`HOW_TO_VERIFY.md`](HOW_TO_VERIFY.md).
 
 ## Capability data
 
@@ -89,7 +157,7 @@ Fixed 106-byte v1 layout:
 | 66 | 32 | capability ID |
 | 98 | 8 | expiry, unsigned LE Unix seconds |
 
-Type Script args are:
+Type Script args:
 
 ```text
 issuer_id || capability_id
@@ -101,41 +169,34 @@ Creation uses a Type-ID-style identity:
 CKB_HASH(serialized first CellInput || uint64_le(capability_output_index))
 ```
 
-This prevents a fresh valid issuance from recreating the same singleton identity.
-
-## Useful commands
-
-| Command | Purpose |
-|---|---|
-| `npm run bootstrap` | create safe local config templates without overwriting files |
-| `npm run doctor` | show local/testnet readiness |
-| `npm test` | run Node protocol/service/E2E tests |
-| `npm run smoke:http` | start the service temporarily and verify the clickable HTTP flow |
-| `npm run verify` | tests + demo + HTTP/UI smoke verification |
-| `npm run dev` | run interactive local app |
-| `npm run verify:contract` | build/test CKB contract using local Rust |
-| `npm run verify:contract:docker` | build/test CKB contract using Docker |
-| `npm run bootstrap:live` | create `.env.live` safely |
-| `npm run doctor:live` | validate real deployment metadata |
-| `npm run setup:live` | install isolated CCC client dependencies |
-| `npm run typecheck:ckb` | type-check the CCC transaction client |
-| `npm run release` | create a source release ZIP |
+The transfer keeps capability identity/service/issuer/expiry/flags immutable while ownership moves via the Cell lock.
 
 ## Repository layout
 
 ```text
-apps/demo-service/          dependency-free local UI/API simulation
-apps/web/                   React + CCC real-testnet frontend
-apps/live-service/          live-chain protected-service backend
-contracts/capability-type/  Rust CKB Type Script + ckb-testtool tests
-packages/capability-codec/  browser/server shared 106-byte codec
-packages/protocol-core/     deterministic transition rules
-packages/verifier/          local verifier + nonce/test-wallet model
-packages/ckb-client/        CCC issue/discovery/transfer/live-cell client
-docs/                       protocol documentation
-reports/                    verification status and limitations
+apps/demo-service/           local clickable API/UI and combined paid-access demo
+apps/fiber-facilitator/      small x402/Fiber compatibility server (mock or FNN RPC)
+apps/web/                    React + CCC real-CKB frontend
+apps/live-service/           live CKB protected-service backend
+contracts/capability-type/   CKB Rust Type Script + ckb-testtool tests
+packages/capability-codec/   browser/server 106-byte codec
+packages/protocol-core/      deterministic capability transition rules
+packages/verifier/           ownership + challenge/replay verification model
+packages/ckb-client/         CCC issue/discovery/transfer/live-cell helpers
+packages/x402-fiber/         experimental x402-v2/Fiber compatibility layer
+scripts/                     bootstrap, smoke, benchmark, release, verification
+docs/                        protocol + research documentation
+reports/                     benchmark, limits, verification matrix
 ```
 
-## Verification boundary
+## External technical references
 
-The local protocol path is executed and green in this repository. A **funding-ready CKB testnet claim** still requires a real script deployment, real wallet transactions, public tx hashes, a public URL, and an unrelated tester. No placeholder hash or simulated Cell should be presented as testnet evidence.
+- CCC: https://github.com/ckb-devrel/ccc
+- Fiber: https://github.com/nervosnetwork/fiber
+- Fiber agent/x402 design: https://github.com/nervosnetwork/fiber/issues/1255
+- Fiber x402 facilitator draft: https://github.com/nervosnetwork/fiber/pull/1301
+- x402 v2 specification: https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md
+
+## Claim boundary
+
+This repository is a **funding/research-ready prototype**, not a production-security certification. Do not label it mainnet-ready until the Type Script is independently reviewed, real CKB/Fiber transactions are published, real replay/state storage is productionized, and unrelated users reproduce the flow.

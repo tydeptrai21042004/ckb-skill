@@ -32,4 +32,6 @@ console.log("\nNext commands:");
 console.log("  npm run doctor      # environment/readiness report");
 console.log("  npm run dev         # interactive local demo");
 console.log("  npm run smoke:http  # automated HTTP/UI smoke test");
-console.log("  npm run verify      # full dependency-free acceptance suite");
+console.log("  npm run smoke:paid  # combined capability + x402/Fiber paid flow");
+console.log("  npm run verify      # dependency-free protocol/payment verification");
+console.log("  ./run_all.sh        # install missing tools/deps and verify all layers");

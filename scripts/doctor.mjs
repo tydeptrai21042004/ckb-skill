@@ -26,6 +26,8 @@ const rows = [
   ["git", command("git")],
   ["Rust/Cargo (contract)", command("cargo")],
   ["Docker (optional)", command("docker")],
+  ["OffCKB (optional)", command("offckb")],
+  ["Fiber FNN (optional)", command("fnn")],
   [".env", { ok: existsSync(".env"), detail: existsSync(".env") ? "present" : "missing; npm run bootstrap creates it" }],
   ["testnet deployment", deploymentReady("deployments/testnet.json")],
 ];
@@ -38,4 +40,5 @@ console.log("\nReadiness levels:");
 console.log("- Local demo/tests need only Node 22+.");
 console.log("- Contract verification additionally needs Rust + riscv64imac-unknown-none-elf.");
 console.log("- Testnet use additionally needs real deployment metadata and a CCC-compatible wallet.");
-console.log("- Docker is optional; it exists only to make the local UI one-command deployable.");
+console.log("- Fiber FNN is optional for deterministic tests; a real paid E2E needs configured/funded Fiber topology.");
+console.log("- OffCKB/Docker are optional helpers for deployment/reproducibility.");
