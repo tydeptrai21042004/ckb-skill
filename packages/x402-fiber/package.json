@@ -1,0 +1,10 @@
+{
+  "name": "@skillpass/x402-fiber",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./fiber-rpc": "./src/fiber-rpc.mjs"
+  }
+}

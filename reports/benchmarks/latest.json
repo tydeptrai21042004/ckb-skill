@@ -1,0 +1,13 @@
+{
+  "generatedAt": "2026-08-28T06:24:04.498Z",
+  "iterations": 10000,
+  "totalMs": 129.06365799999998,
+  "opsPerSecond": 77481.14500210433,
+  "latencyMs": {
+    "p50": 0.009910999999988235,
+    "p95": 0.016891999999998575,
+    "p99": 0.1001850000000033,
+    "max": 0.9522070000000014
+  },
+  "boundary": "in-memory verifier only; excludes CKB RPC/network latency"
+}

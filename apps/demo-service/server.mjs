@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -10,6 +11,16 @@ import { CapabilityVerifier } from "../../packages/verifier/src/verifier.mjs";
 import { ChallengeStore } from "../../packages/verifier/src/challenge-store.mjs";
 import { TestProofVerifier, TestWallet } from "../../packages/verifier/src/mock-wallet.mjs";
 import { SkillPassService } from "./src/service.mjs";
+import {
+  FIBER_TESTNET,
+  FiberFacilitator,
+  MockFiberBackend,
+  ReplayStore,
+  decodeHeaderJson,
+  encodeHeaderJson,
+  makePaymentPayload,
+  makePaymentRequired,
+} from "../../packages/x402-fiber/src/index.mjs";
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787);
@@ -50,6 +61,13 @@ function createDemoRuntime() {
 }
 
 let runtime = createDemoRuntime();
+function createPaymentRuntime() {
+  const backend = new MockFiberBackend();
+  const facilitator = new FiberFacilitator({ backend, replayStore: new ReplayStore(), network: FIBER_TESTNET });
+  const quotes = new Map();
+  return { backend, facilitator, quotes };
+}
+let payments = createPaymentRuntime();
 const rate = new Map();
 
 function clientKey(req) {
@@ -101,8 +119,8 @@ function baseHeaders(contentType) {
   };
 }
 
-function send(res, status, body) {
-  res.writeHead(status, baseHeaders("application/json; charset=utf-8"));
+function send(res, status, body, extraHeaders = {}) {
+  res.writeHead(status, { ...baseHeaders("application/json; charset=utf-8"), ...extraHeaders });
   res.end(JSON.stringify(body));
 }
 
@@ -140,6 +158,43 @@ function useAs(identity, outPoint, text) {
     outPoint,
     text,
   });
+}
+
+async function newPaymentQuote(req, requestBody) {
+  const origin = `http://${req.headers.host || `127.0.0.1:${PORT}`}`;
+  const created = await payments.backend.createInvoice({ amount: "100000", currency: "Fibt", description: "SkillPass paid paper analysis" });
+  const requestBinding = createHash("sha256").update(JSON.stringify({ identity: requestBody?.identity, outPoint: requestBody?.outPoint })).digest("hex");
+  const requirement = {
+    scheme: "exact",
+    network: FIBER_TESTNET,
+    amount: created.amount,
+    asset: "CKB",
+    payTo: "skillpass-demo-provider",
+    maxTimeoutSeconds: 60,
+    extra: {
+      assetTransferMethod: "fiber-invoice",
+      paymentFlow: "authorization",
+      invoice: created.invoice,
+      paymentHash: created.paymentHash,
+      requestBinding: `sha256:${requestBinding}`,
+    },
+  };
+  const resource = {
+    url: `${origin}/api/demo/paid-use`,
+    description: "SkillPass capability-authorized paid paper analysis",
+    mimeType: "application/json",
+    serviceName: "SkillPass Research",
+    tags: ["ckb", "fiber", "research"],
+  };
+  const required = makePaymentRequired({ resource, requirement });
+  payments.quotes.set(created.paymentHash.toLowerCase(), { requirement, resource, createdAt: Date.now(), identity: requestBody?.identity, outPoint: requestBody?.outPoint });
+  return { required, requirement, resource, created };
+}
+
+function prunePaymentQuotes() {
+  const cutoff = Date.now() - 10 * 60_000;
+  for (const [key, quote] of payments.quotes) if (quote.createdAt < cutoff) payments.quotes.delete(key);
+  while (payments.quotes.size > 2_000) payments.quotes.delete(payments.quotes.keys().next().value);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -184,8 +239,45 @@ const server = http.createServer(async (req, res) => {
       const successor = runtime.chain.transfer({ outPoint: sourceOutPoint, signerLockHash: fromLock, recipientLockHash: toLock });
       return send(res, 200, { ok: true, successorOutPoint: successor.outPoint, state: demoState() });
     }
+    // Combined research path: portable CKB right + x402-v2-style Fiber payment.
+    if (req.method === "POST" && url.pathname === "/api/demo/paid-use") {
+      prunePaymentQuotes();
+      const requestBody = await jsonBody(req);
+      const signatureHeader = req.headers["payment-signature"];
+      if (!signatureHeader) {
+        const quote = await newPaymentQuote(req, requestBody);
+        return send(res, 402, quote.required, { "payment-required": encodeHeaderJson(quote.required) });
+      }
+      const payload = decodeHeaderJson(String(signatureHeader), "PAYMENT-SIGNATURE");
+      const hash = String(payload?.payload?.paymentHash || "").toLowerCase();
+      const quote = payments.quotes.get(hash);
+      if (!quote) return send(res, 402, { error: "PAYMENT_QUOTE_UNKNOWN", message: "payment quote is missing or expired; request a fresh 402" });
+      if (quote.identity !== requestBody.identity || JSON.stringify(quote.outPoint) !== JSON.stringify(requestBody.outPoint)) {
+        return send(res, 402, { error: "PAYMENT_REQUEST_BINDING_MISMATCH", message: "payment quote was issued for a different requester/capability" });
+      }
+      const verification = await payments.facilitator.verify({ x402Version: 2, paymentPayload: payload, paymentRequirements: quote.requirement });
+      if (!verification.isValid) return send(res, 402, { error: verification.invalidReason, message: "Fiber payment has not been verified" }, { "payment-required": encodeHeaderJson(makePaymentRequired({ resource: quote.resource, requirement: quote.requirement, error: verification.invalidReason })) });
+      const { identity, outPoint, text } = requestBody;
+      // Authorization remains CKB-capability based. Payment alone never grants service access.
+      const result = useAs(identity, outPoint, text || "Method. SkillPass checks live ownership and payment. Result. Access follows the current Capability Cell. Conclusion.");
+      const settlement = await payments.facilitator.settle({ x402Version: 2, paymentPayload: payload, paymentRequirements: quote.requirement });
+      if (!settlement.success) throw Object.assign(new Error(settlement.errorReason || "payment settlement failed"), { status: 402, code: settlement.errorReason || "PAYMENT_SETTLEMENT_FAILED" });
+      payments.quotes.delete(hash);
+      return send(res, 200, { ok: true, result, payment: settlement }, { "payment-response": encodeHeaderJson(settlement) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/demo/pay") {
+      const { paymentHash, payer = "demo-agent" } = await jsonBody(req);
+      return send(res, 200, { ok: true, invoice: await payments.backend.markPaid(paymentHash, payer) });
+    }
+    if (req.method === "POST" && url.pathname === "/api/demo/payment-payload") {
+      const { paymentHash, payer = "demo-agent" } = await jsonBody(req);
+      const quote = payments.quotes.get(String(paymentHash || "").toLowerCase());
+      if (!quote) throw new Error("unknown payment quote");
+      return send(res, 200, { paymentPayload: makePaymentPayload({ resource: quote.resource, requirement: quote.requirement, payer }) });
+    }
     if (req.method === "POST" && url.pathname === "/api/demo/reset") {
       runtime = createDemoRuntime();
+      payments = createPaymentRuntime();
       return send(res, 200, { ok: true, state: demoState() });
     }
 

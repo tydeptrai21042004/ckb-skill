@@ -49,6 +49,52 @@ for (const button of document.querySelectorAll("[data-use]")) {
   });
 }
 
+
+async function paidUse(identity) {
+  const requestBody = { identity, outPoint: state.currentOutPoint, text: $("#paper").value };
+  const first = await fetch("/api/demo/paid-use", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+  const required = await first.json();
+  if (first.status !== 402 || !required?.accepts?.[0]?.extra?.paymentHash) {
+    throw Object.assign(new Error("expected x402 Payment Required response"), { payload: required });
+  }
+
+  const paymentHash = required.accepts[0].extra.paymentHash;
+  await api("/api/demo/pay", {
+    method: "POST",
+    body: JSON.stringify({ paymentHash, payer: `local-${identity}` }),
+  });
+  const formed = await api("/api/demo/payment-payload", {
+    method: "POST",
+    body: JSON.stringify({ paymentHash, payer: `local-${identity}` }),
+  });
+  const signature = btoa(JSON.stringify(formed.paymentPayload));
+  const second = await fetch("/api/demo/paid-use", {
+    method: "POST",
+    headers: { "content-type": "application/json", "payment-signature": signature },
+    body: JSON.stringify(requestBody),
+  });
+  const body = await second.json();
+  if (!second.ok) throw Object.assign(new Error(body.message || body.error || `HTTP ${second.status}`), { payload: body });
+  return body;
+}
+
+for (const button of document.querySelectorAll("[data-paid-use]")) {
+  button.addEventListener("click", async () => {
+    const identity = button.dataset.paidUse;
+    try {
+      const result = await paidUse(identity);
+      log(`${identity.toUpperCase()} PAID ACCESS GRANTED`, result);
+    } catch (error) {
+      log(`${identity.toUpperCase()} PAID ACCESS DENIED`, error.payload || error.message);
+    }
+    await refresh();
+  });
+}
+
 $("#transfer").addEventListener("click", async () => {
   try {
     const result = await api("/api/demo/transfer", {

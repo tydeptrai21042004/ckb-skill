@@ -41,6 +41,11 @@
           <button data-use="alice">Use as Alice</button>
           <button data-use="bob" class="secondary">Use as Bob</button>
         </div>
+        <p><strong>Payment-linked path:</strong> the local mock follows the x402 v2 402/payment/retry flow before checking the same capability ownership.</p>
+        <div class="actions">
+          <button data-paid-use="alice">Paid use as Alice</button>
+          <button data-paid-use="bob" class="secondary">Paid use as Bob</button>
+        </div>
       </article>
 
       <article class="card">
@@ -67,6 +72,7 @@
         <li>Alice transfers the capability to Bob.</li>
         <li>Alice is rejected after transfer.</li>
         <li>Bob can use the same capability.</li>
+        <li>A paid request requires both a valid Fiber payment proof/state and current capability ownership.</li>
       </ol>
     </section>
   </main>
