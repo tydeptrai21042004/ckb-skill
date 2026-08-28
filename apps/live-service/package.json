@@ -1,6 +1,6 @@
 {
   "name": "@skillpass/live-service",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@ckb-ccc/ccc": "1.2.7",
-    "@skillpass/capability-codec": "file:../../packages/capability-codec"
+    "@skillpass/capability-codec": "file:../../packages/capability-codec",
+    "@skillpass/x402-fiber": "file:../../packages/x402-fiber"
   },
   "scripts": {
     "start": "node server.mjs"

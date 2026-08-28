@@ -1,4 +1,4 @@
-# Current Limitations — v0.3
+# Current Limitations — v0.4
 
 1. The local demo uses an in-memory CKB-like chain and mock Fiber backend; it is deterministic simulation, not CKB/Fiber network evidence.
 2. The actual CKB wallet/transaction layer is isolated in `packages/ckb-client` and `apps/web` and requires npm dependencies plus a real wallet/network to execute.

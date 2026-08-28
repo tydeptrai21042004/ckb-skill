@@ -15,6 +15,7 @@ const MODE = process.env.FIBER_BACKEND || "mock";
 const NETWORK = process.env.FIBER_NETWORK === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const STATE_FILE = process.env.FACILITATOR_STATE_FILE || join(process.cwd(), ".runtime", "fiber-settled.json");
 const ALLOW_DEV_PAYMENT = MODE === "mock" && process.env.ALLOW_DEV_PAYMENT !== "false";
+const AUTH_TOKEN = process.env.FACILITATOR_AUTH_TOKEN || "";
 
 const backend = MODE === "fnn"
   ? new FnnFiberBackend({ rpcUrl: process.env.FIBER_RPC_URL || "http://127.0.0.1:8227", token: process.env.FIBER_RPC_TOKEN || "" })
@@ -40,11 +41,22 @@ async function body(req) {
   }
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
 }
+function requireAuth(req) {
+  if (!AUTH_TOKEN) return;
+  if (req.headers.authorization !== `Bearer ${AUTH_TOKEN}`) {
+    throw Object.assign(new Error("facilitator authentication required"), { status: 401 });
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
-    if (req.method === "GET" && url.pathname === "/health") return send(res, 200, { ok: true, mode: MODE, network: NETWORK });
+    if (req.method === "GET" && url.pathname === "/livez") return send(res, 200, { ok: true, service: "skillpass-facilitator" });
+    if (req.method === "GET" && (url.pathname === "/readyz" || url.pathname === "/health")) {
+      const upstream = await backend.health();
+      return send(res, 200, { ok: true, mode: MODE, network: NETWORK, upstream });
+    }
+    requireAuth(req);
     if (req.method === "GET" && url.pathname === "/supported") return send(res, 200, facilitator.supported());
     if (req.method === "POST" && url.pathname === "/invoice") {
       const input = await body(req);
@@ -61,12 +73,14 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 404, { error: "not_found" });
   } catch (error) {
-    return send(res, error?.status || 400, { error: "bad_request", message: error?.message || "request failed" });
+    const status = error?.status || (error?.name === "FiberRpcError" ? 503 : 400);
+    return send(res, status, { error: status === 503 ? "upstream_unavailable" : "bad_request", message: error?.message || "request failed" });
   }
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`SkillPass x402/Fiber facilitator listening on http://${HOST}:${PORT}`);
   console.log(`backend=${MODE} network=${NETWORK}`);
-  if (MODE === "mock") console.log("Mock mode is for reproducible tests only. Set FIBER_BACKEND=fnn for a real local Fiber node.");
+  if (AUTH_TOKEN) console.log("facilitator API authentication: enabled");
+  if (MODE === "mock") console.log("Mock mode is for reproducible tests only. Set FIBER_BACKEND=fnn for a real Fiber node.");
 });

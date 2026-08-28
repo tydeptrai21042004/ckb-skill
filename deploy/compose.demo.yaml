@@ -1,0 +1,33 @@
+services:
+  demo:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "${SKILLPASS_BIND:-0.0.0.0}:${SKILLPASS_PORT:-8787}:8787"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+    restart: unless-stopped
+    init: true
+
+  facilitator:
+    build:
+      context: ..
+      dockerfile: Dockerfile.facilitator
+    environment:
+      FACILITATOR_HOST: 0.0.0.0
+      FACILITATOR_PORT: 8790
+      FIBER_BACKEND: mock
+      FIBER_NETWORK: testnet
+      FACILITATOR_STATE_FILE: /state/fiber-settled.json
+      ALLOW_DEV_PAYMENT: "true"
+    volumes:
+      - demo_facilitator_state:/state
+    ports:
+      - "127.0.0.1:${FACILITATOR_PORT_PUBLIC:-8790}:8790"
+    restart: unless-stopped
+    init: true
+
+volumes:
+  demo_facilitator_state:

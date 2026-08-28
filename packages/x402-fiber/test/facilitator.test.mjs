@@ -99,3 +99,28 @@ test("x402 requirement validation rejects amount/invoice/hash mismatch", async (
   wrongHash.payload.paymentHash = "0x" + "00".repeat(32);
   assert.throws(() => validatePayload(wrongHash, f.requirement), /payment hash mismatch/);
 });
+
+test("facilitator HTTP client sends bearer auth and parses JSON", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ ok: true, path: new URL(url).pathname }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const { FacilitatorHttpClient } = await import("../src/index.mjs");
+  const client = new FacilitatorHttpClient({ baseUrl: "https://fac.example/", token: "secret", fetchImpl });
+  const result = await client.invoice({ amount: "10" });
+  assert.equal(result.path, "/invoice");
+  assert.equal(calls[0].init.headers.authorization, "Bearer secret");
+  assert.equal(JSON.parse(calls[0].init.body).amount, "10");
+});
+
+test("backend health probes distinguish mock and FNN", async () => {
+  const mock = new MockFiberBackend();
+  assert.equal((await mock.health()).backend, "mock");
+  const { FnnFiberBackend } = await import("../src/index.mjs");
+  const fnn = new FnnFiberBackend({ client: { nodeInfo: async () => ({ version: "0.9.0" }) } });
+  assert.equal((await fnn.health()).node.version, "0.9.0");
+});

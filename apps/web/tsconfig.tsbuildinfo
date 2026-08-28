@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","../../packages/ckb-client/src/challenge.ts","../../packages/ckb-client/src/live.ts","../../packages/ckb-client/src/testnet-example.ts","../../packages/capability-codec/src/index.d.mts","../../packages/capability-codec/src/node-ids.d.mts","../../packages/capability-codec/src/service-ids.d.mts"],"errors":true,"version":"5.8.3"}

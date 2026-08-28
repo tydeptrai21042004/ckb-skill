@@ -15,9 +15,34 @@ type RuntimeConfig = {
   serviceId: `0x${string}`;
   service: string;
   enablePublicIssue: boolean;
+  payments?: { required: boolean; amount?: string; asset?: string; network?: string; x402Version?: number };
 };
 
 type Found = Awaited<ReturnType<typeof discoverOwnedCapabilities>>[number];
+
+type PaymentRequired = {
+  x402Version: 2;
+  resource: { url: string; description?: string; mimeType: string; serviceName?: string; tags?: string[] };
+  accepts: Array<{
+    scheme: string; network: string; amount: string; asset: string; payTo: string; maxTimeoutSeconds: number;
+    extra: { invoice: string; paymentHash: string; assetTransferMethod: string; paymentFlow?: string };
+  }>;
+};
+
+type PendingPayment = { required: PaymentRequired; outPoint: { txHash: string; index: string }; text: string };
+
+function decodeBase64Json<T>(value: string): T {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
+
+function encodeBase64Json(value: unknown) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
 
 function short(value: string, n = 9) {
   return value.length > n * 2 ? `${value.slice(0, n)}…${value.slice(-n)}` : value;
@@ -49,6 +74,7 @@ export default function App() {
   const [recipient, setRecipient] = useState("");
   const [text, setText] = useState("Method. We verify access against the current live CKB Capability Cell. Result. Ownership controls access. Conclusion.");
   const [issueDays, setIssueDays] = useState(7);
+  const [pendingPayment, setPendingPayment] = useState<PendingPayment>();
 
   useEffect(() => {
     api<RuntimeConfig>("/api/config")
@@ -103,24 +129,74 @@ export default function App() {
     finally { setBusy(""); }
   }
 
+  async function signedRequestBody(outPoint: { txHash: string; index: string }, requestText: string) {
+    if (!signer || !address) throw new Error("Connect a wallet first.");
+    const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", { address });
+    const signature = await signer.signMessage(challenge.message);
+    if (signature.identity !== address) {
+      throw new Error("This MVP currently requires a CKB-native signer whose message-signature identity equals the connected CKB address.");
+    }
+    return { address, nonce: challenge.nonce, signature, outPoint, text: requestText };
+  }
+
+  async function sendAnalyze(body: Awaited<ReturnType<typeof signedRequestBody>>, paymentRequired?: PaymentRequired) {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (paymentRequired) {
+      const requirement = paymentRequired.accepts[0];
+      if (!requirement) throw new Error("Server returned PAYMENT-REQUIRED without an accepted payment method.");
+      headers["PAYMENT-SIGNATURE"] = encodeBase64Json({
+        x402Version: 2,
+        resource: paymentRequired.resource,
+        accepted: requirement,
+        payload: { invoice: requirement.extra.invoice, paymentHash: requirement.extra.paymentHash, payer: address },
+        extensions: {},
+      });
+    }
+    const res = await fetch("/api/analyze", { method: "POST", headers, body: JSON.stringify(body) });
+    const value = await res.json();
+    if (res.status === 402) {
+      const header = res.headers.get("payment-required");
+      if (!header) throw new Error(value.message || "Payment required, but PAYMENT-REQUIRED header is missing.");
+      return { kind: "payment" as const, required: decodeBase64Json<PaymentRequired>(header), value };
+    }
+    if (!res.ok) throw new Error(value.message || value.error || `HTTP ${res.status}`);
+    return { kind: "success" as const, value };
+  }
+
   async function useService(cap: Found) {
     if (!signer || !config || !address) return;
     setBusy(`use:${cap.capability.capabilityId}`);
     try {
-      const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", { address });
-      const signature = await signer.signMessage(challenge.message);
-      if (signature.identity !== address) {
-        throw new Error("This MVP currently requires a CKB-native signer whose message-signature identity equals the connected CKB address.");
+      const outPoint = outPointJson(cap.cell);
+      const body = await signedRequestBody(outPoint, text);
+      const response = await sendAnalyze(body);
+      if (response.kind === "payment") {
+        setPendingPayment({ required: response.required, outPoint, text });
+        const req = response.required.accepts[0];
+        setStatus(`Fiber payment required: ${req?.amount ?? "?"} ${req?.asset ?? ""}. Pay the displayed invoice, then click Retry paid request.`);
+      } else {
+        setPendingPayment(undefined);
+        setStatus(`Access granted: ${JSON.stringify(response.value.result)}`);
       }
-      const response = await api<{ result: unknown }>("/api/analyze", {
-        address,
-        nonce: challenge.nonce,
-        signature,
-        outPoint: outPointJson(cap.cell),
-        text,
-      });
-      setStatus(`Access granted: ${JSON.stringify(response.result)}`);
     } catch (e) { setStatus(`Access denied/failed: ${(e as Error).message}`); }
+    finally { setBusy(""); }
+  }
+
+  async function retryPaidUse() {
+    if (!pendingPayment || !signer || !address) return;
+    setBusy("paid-retry");
+    try {
+      // A fresh CKB challenge avoids a payment delay causing the original one-time challenge to expire.
+      const body = await signedRequestBody(pendingPayment.outPoint, pendingPayment.text);
+      const response = await sendAnalyze(body, pendingPayment.required);
+      if (response.kind === "payment") {
+        setPendingPayment({ ...pendingPayment, required: response.required });
+        setStatus(`Payment is not verified yet: ${response.value.message || response.value.error || "pay the Fiber invoice and retry"}`);
+      } else {
+        setPendingPayment(undefined);
+        setStatus(`Paid access granted: ${JSON.stringify(response.value.result)}`);
+      }
+    } catch (e) { setStatus(`Paid request failed: ${(e as Error).message}`); }
     finally { setBusy(""); }
   }
 
@@ -147,6 +223,24 @@ export default function App() {
       </header>
 
       <section className="status"><strong>Status</strong><span>{status}</span></section>
+
+      {pendingPayment && (
+        <section className="panel payment-panel">
+          <div>
+            <h2>Fiber payment required</h2>
+            <p>Pay this invoice with a Fiber-capable wallet/tool. SkillPass keeps no payer private key.</p>
+          </div>
+          <dl>
+            <div><dt>Amount</dt><dd>{pendingPayment.required.accepts[0]?.amount} {pendingPayment.required.accepts[0]?.asset}</dd></div>
+            <div><dt>Payment hash</dt><dd><code>{pendingPayment.required.accepts[0]?.extra.paymentHash}</code></dd></div>
+          </dl>
+          <textarea readOnly rows={4} value={pendingPayment.required.accepts[0]?.extra.invoice || ""} />
+          <div className="actions">
+            <button className="secondary" onClick={() => navigator.clipboard?.writeText(pendingPayment.required.accepts[0]?.extra.invoice || "")}>Copy invoice</button>
+            <button disabled={Boolean(busy)} onClick={retryPaidUse}>I paid — retry request</button>
+          </div>
+        </section>
+      )}
 
       <section className="panel hero-panel">
         <div>
@@ -181,7 +275,7 @@ export default function App() {
                 <div><dt>Out point</dt><dd><code>{short(cap.cell.outPoint.txHash)}:{cap.cell.outPoint.index.toString()}</code></dd></div>
               </dl>
               <textarea value={text} onChange={(e) => setText(e.target.value)} rows={5} />
-              <button disabled={!active || Boolean(busy)} onClick={() => useService(cap)}>Use paper-analyzer-v1</button>
+              <button disabled={!active || Boolean(busy)} onClick={() => useService(cap)}>{config?.payments?.required ? "Request paid analysis" : "Use paper-analyzer-v1"}</button>
               <div className="transfer">
                 <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Recipient ckt1… address" />
                 <button className="secondary" disabled={!recipient.trim() || Boolean(busy)} onClick={() => transfer(cap)}>Transfer</button>
@@ -192,7 +286,7 @@ export default function App() {
       )}
 
       <footer>
-        <p>Testnet only. User private keys stay in the connected wallet. The service verifies a one-time wallet challenge and then reads the current live Capability Cell.</p>
+        <p>Testnet only. User private keys stay in the connected wallet. The service verifies a one-time wallet challenge and the current live Capability Cell. When payments are enabled, the browser displays the Fiber invoice and retries with x402 v2 headers after you pay externally.</p>
       </footer>
     </main>
   );

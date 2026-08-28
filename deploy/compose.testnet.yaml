@@ -1,0 +1,38 @@
+services:
+  facilitator:
+    build:
+      context: ..
+      dockerfile: Dockerfile.facilitator
+    env_file:
+      - ../.env.testnet
+    environment:
+      FACILITATOR_HOST: 0.0.0.0
+      FACILITATOR_PORT: 8790
+      FACILITATOR_STATE_FILE: /state/fiber-settled.json
+    volumes:
+      - testnet_facilitator_state:/state
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    init: true
+
+  skillpass:
+    build:
+      context: ..
+      dockerfile: Dockerfile.live
+    env_file:
+      - ../.env.testnet
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      FACILITATOR_URL: http://facilitator:8790
+    depends_on:
+      facilitator:
+        condition: service_healthy
+    ports:
+      - "${SKILLPASS_BIND:-0.0.0.0}:${SKILLPASS_PORT:-8787}:8787"
+    restart: unless-stopped
+    init: true
+
+volumes:
+  testnet_facilitator_state:

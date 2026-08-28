@@ -1,4 +1,4 @@
-# Verification Matrix — v0.3
+# Verification Matrix — v0.4
 
 Status values: `NOT_STARTED`, `IMPLEMENTED`, `VERIFIED`, `BLOCKED`.
 

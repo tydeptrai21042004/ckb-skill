@@ -16,6 +16,7 @@ export class MockFiberBackend {
     row.status = "paid"; row.payer = payer; row.paidAt = Date.now(); return row;
   }
   async isPaid(paymentHash) { return (await this.getInvoice(paymentHash))?.status === "paid"; }
+  async health() { return { ok: true, backend: "mock" }; }
 }
 
 export class FnnFiberBackend {
@@ -39,4 +40,5 @@ export class FnnFiberBackend {
   }
   async getInvoice(paymentHash) { return this.client.getInvoice(paymentHash); }
   async isPaid(paymentHash) { return isFiberInvoicePaid(await this.getInvoice(paymentHash)); }
+  async health() { const info = await this.client.nodeInfo(); return { ok: true, backend: "fnn", node: info }; }
 }

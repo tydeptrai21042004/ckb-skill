@@ -1,4 +1,4 @@
-# Research gap and funding direction — SkillPass v0.3
+# Research gap and funding direction — SkillPass v0.4
 
 ## What is no longer a defensible gap
 
@@ -49,7 +49,7 @@ When does `CKB capability + Fiber payment` offer a meaningful advantage over dat
 | B0 database/API key | provider DB | external | no | latency/ops baseline |
 | B1 x402/Fiber only | none | yes | no | payer can access after payment |
 | B2 CKB capability only | CKB | no | yes | transfer revokes/grants |
-| B3 SkillPass v0.3 | CKB | Fiber/x402 | yes | wrong owner pays but is denied |
+| B3 SkillPass v0.4 | CKB | Fiber/x402 | yes | wrong owner pays but is denied |
 
 ## Measurements still needed for a serious result
 
