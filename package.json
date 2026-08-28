@@ -1,0 +1,27 @@
+{
+  "name": "ckb-skillpass-mvp",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "doctor": "node scripts/doctor.mjs",
+    "dev": "node apps/demo-service/server.mjs",
+    "serve": "node apps/demo-service/server.mjs",
+    "test": "node --test",
+    "smoke:http": "node scripts/smoke-http.mjs",
+    "demo": "node scripts/demo-flow.mjs",
+    "verify": "node scripts/verify.mjs",
+    "verify:contract": "make -C contracts/capability-type test",
+    "verify:full": "bash scripts/verify-full.sh",
+    "setup:live": "npm install --prefix packages/ckb-client",
+    "typecheck:ckb": "npm run typecheck --prefix packages/ckb-client",
+    "release": "node scripts/release.mjs",
+    "verify:contract:docker": "node scripts/contract-docker.mjs",
+    "bootstrap:live": "node scripts/bootstrap-live.mjs",
+    "doctor:live": "node scripts/doctor-live.mjs"
+  }
+}

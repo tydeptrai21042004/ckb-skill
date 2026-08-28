@@ -1,0 +1,10 @@
+services:
+  skillpass:
+    build:
+      context: .
+      dockerfile: Dockerfile.live
+    env_file:
+      - .env.live
+    ports:
+      - "8787:8787"
+    restart: unless-stopped

@@ -1,0 +1,6 @@
+FROM rust:1.95-bookworm
+RUN rustup target add riscv64imac-unknown-none-elf
+WORKDIR /work
+COPY contracts/capability-type ./contracts/capability-type
+WORKDIR /work/contracts/capability-type
+CMD ["make", "test"]
