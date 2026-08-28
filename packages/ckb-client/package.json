@@ -1,0 +1,15 @@
+{
+  "name": "@skillpass/ckb-client",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ckb-ccc/ccc": "^1.2.7"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

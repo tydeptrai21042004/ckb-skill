@@ -1,0 +1,22 @@
+export type Capability = Readonly<{
+  version: number;
+  flags: number;
+  serviceId: `0x${string}`;
+  issuerId: `0x${string}`;
+  capabilityId: `0x${string}`;
+  expiry: bigint;
+}>;
+export const CAPABILITY_VERSION: number;
+export const CAPABILITY_DATA_LENGTH: number;
+export const FLAG_TRANSFERABLE: number;
+export const FLAG_DELEGATABLE: number;
+export const FLAG_REVOCABLE: number;
+export const KNOWN_FLAGS_MASK: number;
+export function normalizeHex32(value: string, field?: string): `0x${string}`;
+export function encodeCapability(input: Partial<Capability> & Pick<Capability,"serviceId"|"issuerId"|"capabilityId"|"expiry">): Uint8Array;
+export function encodeCapabilityHex(input: Partial<Capability> & Pick<Capability,"serviceId"|"issuerId"|"capabilityId"|"expiry">): `0x${string}`;
+export function decodeCapability(data: string | Uint8Array): Capability;
+export function encodeTypeArgs(input: {issuerId:string; capabilityId:string}): `0x${string}`;
+export function decodeTypeArgs(argsHex: string): Readonly<{issuerId:`0x${string}`; capabilityId:`0x${string}`}>;
+export function hasFlag(capabilityOrFlags: Capability | number, flag: number): boolean;
+export function isActive(capability: Capability, nowUnixSeconds: bigint | number | string): boolean;

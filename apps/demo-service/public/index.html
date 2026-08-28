@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SkillPass Local Demo</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">CKB Capability Protocol</p>
+        <h1>SkillPass</h1>
+        <p class="lede">A capability is useful only while you own its current live Cell. Transfer the Cell and access moves with it.</p>
+      </div>
+      <div class="badge">LOCAL SIMULATION</div>
+    </header>
+
+    <section class="warning">
+      This page is deliberately a dependency-free local demo. It does not claim a real CKB transaction. Use it to understand and test the product flow before testnet deployment.
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <span class="step">1</span>
+        <h2>Current capability</h2>
+        <dl>
+          <div><dt>Service</dt><dd id="service">—</dd></div>
+          <div><dt>Owner</dt><dd id="owner">—</dd></div>
+          <div><dt>Live out point</dt><dd id="outpoint" class="mono">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="card">
+        <span class="step">2</span>
+        <h2>Use service</h2>
+        <p>Try access as the current owner or as the other user.</p>
+        <textarea id="paper" rows="6">Method. We test SkillPass capability ownership. Result. Access follows the current live capability. Conclusion. Transfer should revoke Alice and grant Bob.</textarea>
+        <div class="actions">
+          <button data-use="alice">Use as Alice</button>
+          <button data-use="bob" class="secondary">Use as Bob</button>
+        </div>
+      </article>
+
+      <article class="card">
+        <span class="step">3</span>
+        <h2>Transfer ownership</h2>
+        <p>A valid transferable capability preserves its identity while the lock changes.</p>
+        <div class="actions">
+          <button id="transfer">Transfer Alice → Bob</button>
+          <button id="reset" class="ghost">Reset demo</button>
+        </div>
+      </article>
+
+      <article class="card terminal-card">
+        <span class="step">4</span>
+        <h2>Verification log</h2>
+        <pre id="log" aria-live="polite">Loading…</pre>
+      </article>
+    </section>
+
+    <section class="acceptance">
+      <h2>What success looks like</h2>
+      <ol>
+        <li>Alice can use the service before transfer.</li>
+        <li>Alice transfers the capability to Bob.</li>
+        <li>Alice is rejected after transfer.</li>
+        <li>Bob can use the same capability.</li>
+      </ol>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

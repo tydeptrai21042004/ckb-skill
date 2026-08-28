@@ -1,0 +1,20 @@
+{
+  "name": "@skillpass/capability-codec",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "import": "./src/index.mjs"
+    },
+    "./service-ids": {
+      "types": "./src/service-ids.d.mts",
+      "import": "./src/service-ids.mjs"
+    },
+    "./node-ids": {
+      "types": "./src/node-ids.d.mts",
+      "import": "./src/node-ids.mjs"
+    }
+  }
+}
