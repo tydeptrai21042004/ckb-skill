@@ -1,6 +1,12 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY . .
+COPY apps/demo-service ./apps/demo-service
+COPY packages/capability-codec ./packages/capability-codec
+COPY packages/protocol-core ./packages/protocol-core
+COPY packages/verifier ./packages/verifier
+COPY packages/x402-fiber ./packages/x402-fiber
+RUN chown -R node:node /app
+USER node
 ENV HOST=0.0.0.0
 ENV PORT=8787
 EXPOSE 8787

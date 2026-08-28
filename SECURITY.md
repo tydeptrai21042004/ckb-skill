@@ -59,3 +59,13 @@ Mainnet is not claimed ready. Complete independent Type Script/service review an
 - The contract pins Rust `1.95.0`, `ckb-std = 1.1.0`, and `ckb-testtool = 1.1.1` exactly.
 - If `contracts/capability-type/Cargo.lock` is absent, `run_all.sh` generates it on the first Rust-enabled run. Commit/preserve that generated lockfile for release artifacts and use the same lockfile in CI/review builds.
 - Review dependency updates deliberately; do not regenerate lockfiles as an incidental deployment step.
+
+
+## Deployment security in v0.4
+
+- `FACILITATOR_AUTH_TOKEN` should be a random secret; `deploy.sh init-testnet` generates one automatically.
+- The testnet Compose stack does not publish the facilitator port externally.
+- The optional self-hosted Fiber profile publishes only FNN P2P port 8228. Its RPC is reachable only on the private Compose network.
+- `fiber-init` refuses to overwrite an existing `.runtime/fiber-node/ckb/key`. It never generates, funds, or spends from a wallet.
+- `.env.testnet`, `.env.live`, `.runtime/`, and `.tooling/` are gitignored and must not be included in release archives.
+- `PAYMENTS_REQUIRED=true` does not make the system mainnet-ready; shared atomic nonce/replay storage and a full settlement/delivery idempotency design remain required before horizontal scaling.

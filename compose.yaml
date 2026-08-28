@@ -1,9 +1,10 @@
+# Backward-compatible shortcut. Preferred: ./deploy.sh demo
 services:
-  skillpass-demo:
-    build: .
+  demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "8787:8787"
-    environment:
-      HOST: 0.0.0.0
-      PORT: 8787
+      - "${SKILLPASS_BIND:-0.0.0.0}:${SKILLPASS_PORT:-8787}:8787"
     restart: unless-stopped
+    init: true

@@ -115,3 +115,38 @@ Do not mark the system externally verified until all are public/reproducible:
 - passing CI;
 - unrelated tester report;
 - measured real network latency/error rates.
+
+## v0.4 deployment verification
+
+Fast reviewer path:
+
+```bash
+./deploy.sh demo
+./deploy.sh status demo
+```
+
+Real CKB testnet configuration:
+
+```bash
+./deploy.sh init-testnet
+./deploy.sh doctor
+./deploy.sh testnet
+```
+
+If the run uses `FIBER_BACKEND=mock`, label the payment portion **staging/mock**. For real Fiber evidence, point `FIBER_BACKEND=fnn` at an independently configured FNN or use:
+
+```bash
+./deploy.sh fiber-init /secure/path/to/ckb-private-key
+./deploy.sh testnet-fiber
+```
+
+Then record at minimum:
+
+- CKB capability deployment transaction hash and code Cell index;
+- current capability out point before/after transfer;
+- Fiber invoice + payment hash for each paid request;
+- server `PAYMENT-RESPONSE` settlement object;
+- old-owner paid denial after transfer;
+- new-owner paid success after transfer;
+- `/readyz` output for SkillPass and facilitator;
+- FNN `fnn-cli info` output/version when using self-hosted Fiber.

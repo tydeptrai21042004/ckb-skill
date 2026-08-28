@@ -1,30 +1,39 @@
 # Changelog
 
+## v0.4.0 — 2026-08-28
+
+### Deployment
+
+- Added `deploy.sh` with `demo`, `init-testnet`, `doctor`, `testnet`, `fiber-init`, `testnet-fiber`, `status`, `logs`, and `stop` commands.
+- Added zero-config Docker demo Compose profile.
+- Added real testnet Compose profile with private facilitator networking and persistent settlement/replay state.
+- Added optional self-hosted official `nervos/fiber:0.9.0` profile.
+- Added safe Fiber Docker initializer: user supplies the existing key explicitly; script does not create/fund wallets or open channels.
+- Added Docker readiness/liveness checks and non-root application containers.
+- Added `.env.testnet.example`; fixed the previous missing `.env.live.example` bootstrap bug.
+- Added automatic random facilitator auth token generation and optional import from `deployments/testnet.json`.
+
+### Live paid path
+
+- Integrated x402/Fiber payment into the real `apps/live-service` `/api/analyze` path.
+- Added pre-billing live-capability/current-owner check to avoid charging obviously invalid requests.
+- Added request-bound payment quotes.
+- Added facilitator verification before CKB signed authorization, followed by a second live-cell check and settlement before protected delivery.
+- Added `PAYMENT-REQUIRED` and `PAYMENT-RESPONSE` handling to the real service.
+- Added facilitator HTTP client with timeout and bearer authentication support.
+- Added facilitator/FNN readiness probes.
+
+### Verification
+
+- Test count increased from 36 to **38**, adding HTTP facilitator/auth and backend-health tests.
+- Existing HTTP, facilitator, and combined paid-transfer smoke flows remain green.
+
+### Boundaries
+
+- Fiber scheme/network registration remains experimental relative to x402 core.
+- Mock Fiber remains staging evidence only.
+- Production multi-replica deployments still need a shared atomic challenge/replay store.
+
 ## v0.3.0 — 2026-08-28
 
-### Added
-
-- `run_all.sh` auto-detecting Linux/macOS/WSL and x64/arm64.
-- portable Node.js 22 fallback and local rustup/RISC-V setup under `.tooling/`.
-- optional local OffCKB and official Fiber FNN installation.
-- experimental x402 v2/Fiber compatibility package and facilitator server.
-- real FNN JSON-RPC adapter for invoice creation/status reads.
-- file-backed single-process payment replay protection.
-- combined paid-access route that requires both payment and current capability ownership.
-- end-to-end smoke proving paid old-owner rejection after A -> B transfer.
-- clickable paid-use path in the local UI.
-- local verifier benchmark + generated report.
-- CI workflow for Node/integration and Rust contract verification.
-- research-gap/funding document correcting the novelty claim relative to upstream Fiber x402 work.
-
-### Changed
-
-- package/repository docs updated from v0.2 to v0.3.
-- project positioning changed from a simple AI access pass to **portable payment-linked service rights**.
-- `verify:full` now includes HTTP, CCC typecheck/frontend build, and contract tests.
-
-### Important boundaries
-
-- x402/Fiber local scheme identifiers remain experimental.
-- real CKB/Fiber transactions are not claimed until independently executed and published.
-- the local facilitator is a compatibility harness; Fiber has upstream x402 facilitator work.
+- Added portable Node/Rust bootstrap, optional OffCKB/FNN installation, x402/Fiber compatibility layer, combined payment + capability tests, benchmark, and CI scaffolding.

@@ -1,6 +1,6 @@
 {
   "name": "ckb-skillpass-mvp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -27,6 +27,11 @@
     "facilitator": "node apps/fiber-facilitator/server.mjs",
     "benchmark": "node scripts/benchmark.mjs",
     "build:web": "npm run build --prefix apps/web",
-    "smoke:paid": "node scripts/smoke-paid-http.mjs"
+    "smoke:paid": "node scripts/smoke-paid-http.mjs",
+    "deploy:demo": "bash deploy.sh demo",
+    "deploy:init": "bash deploy.sh init-testnet",
+    "deploy:doctor": "bash deploy.sh doctor",
+    "deploy:testnet": "bash deploy.sh testnet",
+    "verify:deploy": "bash -n deploy.sh && node --check apps/live-service/server.mjs && node --check apps/fiber-facilitator/server.mjs && node --check packages/x402-fiber/src/http-client.mjs"
   }
 }

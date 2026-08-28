@@ -1,9 +1,9 @@
-# SkillPass v0.3 — Portable CKB Service Rights + Fiber/x402 Payments
+# SkillPass v0.4 — Portable CKB Service Rights + Fiber/x402 Payments
 
 SkillPass is a research/product prototype for **portable digital service rights on CKB**.
 A provider issues a capability as a CKB Cell. The current live Cell owner is authorized to use the protected service. A valid transfer moves that authorization to the new owner without updating a centralized entitlement row.
 
-v0.3 adds a second, independent condition: a service request may also require an **x402-v2-style payment completed over Fiber**. Payment never replaces authorization: the request must satisfy both the payment rule and the current CKB capability rule.
+v0.4 keeps that second condition and makes the real CKB + x402/Fiber path deployable with one command: a service request may also require an **x402-v2-style payment completed over Fiber**. Payment never replaces authorization: the request must satisfy both the payment rule and the current CKB capability rule.
 
 ```text
 user / AI agent
@@ -35,6 +35,33 @@ The **Fiber x402 facilitator itself is not claimed as SkillPass novelty**. Nervo
 > Can a provider-authorized service right remain portable and independently verifiable from CKB state while high-frequency payment is handled by Fiber/x402, without restoring a provider-owned entitlement database?
 
 See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
+
+## Fastest deployment
+
+If you only want a working reviewer/demo instance and already have Docker:
+
+```bash
+chmod +x deploy.sh
+./deploy.sh demo
+```
+
+For real CKB testnet configuration:
+
+```bash
+./deploy.sh init-testnet
+# fill/import real contract deployment metadata
+./deploy.sh doctor
+./deploy.sh testnet
+```
+
+For an optional self-hosted official Fiber node:
+
+```bash
+./deploy.sh fiber-init /secure/path/to/ckb-private-key
+./deploy.sh testnet-fiber
+```
+
+`fiber-init` never funds the key or opens channels. See [`DEPLOY.md`](DEPLOY.md).
 
 ## One-command setup + verification
 
@@ -102,7 +129,7 @@ This is **simulation evidence**, not a claim of a real Fiber payment or CKB test
 
 ## Current automated evidence
 
-The dependency-free Node path currently contains **36 tests** plus three HTTP/integration smoke paths. The local benchmark writes results to `reports/benchmarks/latest.md`.
+The dependency-free Node path currently contains **38 tests** plus three HTTP/integration smoke paths. The local benchmark writes results to `reports/benchmarks/latest.md`.
 
 Run:
 
@@ -124,13 +151,7 @@ npm run verify:full
 
 The live CKB path uses **CCC** for wallet/transaction integration and the Rust CKB Type Script for capability invariants. The Fiber adapter uses FNN JSON-RPC (`new_invoice`, `get_invoice`, etc.).
 
-Start with:
-
-```bash
-npm run bootstrap:live
-# fill .env.live with real deployed contract metadata
-npm run doctor:live
-```
+Start with `./deploy.sh init-testnet`, then `./deploy.sh doctor`. The live service now supports the real paid path directly: it preflights current capability ownership, returns an x402 v2 `402`, verifies Fiber payment through the facilitator, verifies the signed CKB challenge and live Cell again, then settles before returning the protected result.
 
 For a local FNN receiver endpoint:
 
@@ -177,13 +198,15 @@ The transfer keeps capability identity/service/issuer/expiry/flags immutable whi
 apps/demo-service/           local clickable API/UI and combined paid-access demo
 apps/fiber-facilitator/      small x402/Fiber compatibility server (mock or FNN RPC)
 apps/web/                    React + CCC real-CKB frontend
-apps/live-service/           live CKB protected-service backend
+apps/live-service/           live CKB + x402/Fiber protected-service backend
 contracts/capability-type/   CKB Rust Type Script + ckb-testtool tests
 packages/capability-codec/   browser/server 106-byte codec
 packages/protocol-core/      deterministic capability transition rules
 packages/verifier/           ownership + challenge/replay verification model
 packages/ckb-client/         CCC issue/discovery/transfer/live-cell helpers
 packages/x402-fiber/         experimental x402-v2/Fiber compatibility layer
+deploy/                      Docker Compose demo/testnet/Fiber profiles
+deploy.sh                     one-command deployment/doctor/log/status helper
 scripts/                     bootstrap, smoke, benchmark, release, verification
 docs/                        protocol + research documentation
 reports/                     benchmark, limits, verification matrix

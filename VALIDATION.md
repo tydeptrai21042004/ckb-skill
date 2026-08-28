@@ -1,33 +1,47 @@
 # Validation snapshot — 2026-08-28
 
-This file records what was actually verified while preparing the v0.3 corrected bundle.
+This file records what was actually verified while preparing the v0.4 deployment-focused bundle.
 
 ## Passed in the preparation environment
 
 - Node.js: `v22.16.0`
-- `npm run verify`
-  - **36/36 Node tests passed**
+- **38/38 Node tests passed**
   - deterministic ownership/transfer lifecycle
-  - HTTP/UI smoke
-  - experimental x402/Fiber facilitator smoke
-  - combined `402 -> pay -> capability authorization -> settlement` smoke
-  - payment replay rejection
-  - paid-but-no-longer-owner rejection after transfer
-- `bash -n run_all.sh`
-- `./run_all.sh --help`
-- generated browser/demo JavaScript syntax checks
-- latest local in-memory verifier benchmark written to `reports/benchmarks/latest.md`
+  - x402 v2 transport/requirements
+  - facilitator payment/replay behavior
+  - persistent replay-store restart behavior
+  - FNN request-shape/status adapter
+  - facilitator HTTP client/auth behavior
+  - backend readiness probes
+- `npm run smoke:http` passed
+- `npm run smoke:fiber` passed
+- `npm run smoke:paid` passed
+- combined flow still proves: `402 -> pay -> owner access -> replay reject -> transfer -> paid old-owner reject -> new-owner paid access`
+- `bash -n deploy.sh` passed
+- `deploy.sh init-testnet` + `deploy.sh doctor` tested in a temporary fixture with valid deployment metadata
+- Node syntax checks passed for the live service, facilitator, and new facilitator HTTP client
+- latest local verifier benchmark written to `reports/benchmarks/latest.md`
 
-## Environment-limited stages
+## Dependency-heavy stages are environment-limited here
 
-The sandbox used to prepare this archive repeatedly timed out while downloading the dependency-heavy CCC/Vite npm trees. It also did not have a preinstalled Rust/Docker toolchain. Therefore the following were **not falsely marked as passed here**:
+The preparation sandbox again timed out while downloading the CCC/React/Vite npm dependency trees. No `node_modules` directories were left installed. Therefore these are **not falsely marked as passed** in this environment:
 
 - `npm run typecheck:ckb`
 - `npm run build:web`
-- `npm run verify:contract`
+- Docker image builds / Docker Compose runtime health (Docker daemon unavailable in this sandbox)
+- `npm run verify:contract` (Rust toolchain unavailable here)
 
-`run_all.sh` is designed to install the missing local toolchains/dependencies and run those stages on Linux, macOS, or WSL. The GitHub Actions workflow runs the same Node + Rust acceptance layers in CI.
+The typecheck/build commands fail here specifically because their declared npm packages were not downloaded, e.g. `@ckb-ccc/ccc`, React, and connector types are absent. `run_all.sh` and the Dockerfiles install those dependencies on a normal Linux/macOS/WSL/Docker host.
+
+## Deployment changes validated statically
+
+- `.env.testnet.example` and compatibility `.env.live.example` now exist.
+- `bootstrap-live.mjs` no longer references a missing template.
+- `deploy.sh` generates a random facilitator secret without overwriting an existing environment file.
+- real deployment metadata is auto-imported from `deployments/testnet.json` when present.
+- self-hosted Fiber defaults to the official `nervos/fiber:0.9.0` release image.
+- Fiber wallet funding/channel creation is intentionally not automated.
 
 ## Benchmark boundary
 
-The benchmark in `reports/benchmarks/latest.md` measures the in-memory authorization/verifier path only. It intentionally excludes CKB RPC/network latency and must not be presented as end-to-end chain latency.
+The benchmark in `reports/benchmarks/latest.md` measures the in-memory authorization/verifier path only. The latest preparation run was about **86.8k checks/sec**, but it intentionally excludes CKB RPC/network and Fiber latency and must not be presented as end-to-end chain/payment latency.
