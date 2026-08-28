@@ -7,7 +7,7 @@ function command(name, args = ["--version"]) {
 }
 
 function deploymentReady(file) {
-  if (!existsSync(file)) return { ok: false, detail: "missing; run npm run bootstrap" };
+  if (!existsSync(file)) return { ok: false, detail: "missing; run npm run setup" };
   try {
     const value = JSON.parse(readFileSync(file, "utf8"));
     const hash = String(value.codeHash || "");
@@ -28,7 +28,7 @@ const rows = [
   ["Docker (optional)", command("docker")],
   ["OffCKB (optional)", command("offckb")],
   ["Fiber FNN (optional)", command("fnn")],
-  [".env", { ok: existsSync(".env"), detail: existsSync(".env") ? "present" : "missing; npm run bootstrap creates it" }],
+  [".env", { ok: existsSync(".env"), detail: existsSync(".env") ? "present" : "missing; npm run setup creates it" }],
   ["testnet deployment", deploymentReady("deployments/testnet.json")],
 ];
 

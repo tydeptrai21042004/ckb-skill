@@ -29,6 +29,7 @@ console.log(`Node: ${process.version}`);
 console.log(`npm: ${npm.status === 0 ? npm.stdout.trim() : "not found"}`);
 console.log(created.length ? `Created: ${created.join(", ")}` : "Config files already existed; nothing overwritten.");
 console.log("\nNext commands:");
+console.log("  npm run setup       # install JS dependencies (recommended first run)");
 console.log("  npm run doctor      # environment/readiness report");
 console.log("  npm run dev         # interactive local demo");
 console.log("  npm run smoke:http  # automated HTTP/UI smoke test");

@@ -5,6 +5,25 @@ A provider issues a capability as a CKB Cell. The current live Cell owner is aut
 
 v0.4 keeps that second condition and makes the real CKB + x402/Fiber path deployable with one command: a service request may also require an **x402-v2-style payment completed over Fiber**. Payment never replaces authorization: the request must satisfy both the payment rule and the current CKB capability rule.
 
+## Developer quick start
+
+For most contributors, use the stable root commands instead of running files inside `apps/` directly:
+
+```bash
+npm run setup
+npm run dev
+```
+
+Open `http://127.0.0.1:8787/`. Before committing, run `npm run check`.
+
+For the most reproducible handoff, Docker is a second supported entry point:
+
+```bash
+docker compose -f deploy/compose.demo.yaml up --build
+```
+
+See [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ```text
 user / AI agent
      |
