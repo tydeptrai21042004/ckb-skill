@@ -1,6 +1,6 @@
 {
   "name": "@skillpass/web",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@ckb-ccc/ccc": "1.2.7",
-    "@ckb-ccc/connector-react": "1.1.7",
+    "@ckb-ccc/connector-react": "1.1.9",
     "react": "19.0.0",
     "react-dom": "19.0.0"
   },

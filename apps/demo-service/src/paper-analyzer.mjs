@@ -12,10 +12,15 @@ function sentences(text) {
     .filter(Boolean);
 }
 
-export function analyzePaper(input) {
+export function validatePaperInput(input) {
   if (typeof input !== "string") throw new TypeError("paper input must be a string");
-  if (input.length === 0) throw new Error("paper input must not be empty");
+  if (input.trim().length === 0) throw new Error("paper input must not be empty");
   if (input.length > MAX_INPUT_CHARS) throw new Error(`paper input exceeds ${MAX_INPUT_CHARS} characters`);
+  return input;
+}
+
+export function analyzePaper(input) {
+  validatePaperInput(input);
 
   const ws = words(input);
   const ss = sentences(input);

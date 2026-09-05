@@ -12,4 +12,4 @@ The central hypothesis is:
 
 > A provider can retain issuer authority while service entitlement ownership becomes portable and independently verifiable from CKB state, and frequent usage/payment can remain off the CKB L1 state transition path through Fiber.
 
-The key acceptance consequence is still simple: A owns and can use; A transfers; A is rejected; B owns and can use. v0.4 extends this so **a successful payment by the wrong owner must still be rejected**.
+The key acceptance consequence is still simple: A owns and can use; A transfers; A is rejected; B owns and can use. v0.6 extends this so **a successful payment by the wrong owner must still be rejected**.

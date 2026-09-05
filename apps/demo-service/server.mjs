@@ -11,6 +11,14 @@ import { CapabilityVerifier } from "../../packages/verifier/src/verifier.mjs";
 import { ChallengeStore } from "../../packages/verifier/src/challenge-store.mjs";
 import { TestProofVerifier, TestWallet } from "../../packages/verifier/src/mock-wallet.mjs";
 import { SkillPassService } from "./src/service.mjs";
+import { validatePaperInput } from "./src/paper-analyzer.mjs";
+import {
+  assertJsonRequest,
+  baseSecurityHeaders,
+  publicErrorMessage,
+  rejectCrossSiteBrowserRequest,
+  safeRequestUrl,
+} from "../../packages/http-security/src/index.mjs";
 import {
   FIBER_TESTNET,
   FiberFacilitator,
@@ -105,17 +113,31 @@ async function jsonBody(req) {
     chunks.push(chunk);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+  try { return JSON.parse(raw); }
+  catch { throw Object.assign(new Error("request body must be valid JSON"), { status: 400, code: "INVALID_JSON" }); }
 }
+
+const DEMO_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'none'",
+  "manifest-src 'self'",
+  "require-trusted-types-for 'script'",
+  "trusted-types 'none'",
+].join("; ");
 
 function baseHeaders(contentType) {
   return {
-    "content-type": contentType,
+    ...baseSecurityHeaders({ contentType, csp: DEMO_CSP }),
     "cache-control": "no-store",
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
-    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
   };
 }
 
@@ -160,10 +182,25 @@ function useAs(identity, outPoint, text) {
   });
 }
 
+function paymentBinding(requestBody) {
+  return createHash("sha256").update(JSON.stringify({
+    identity: String(requestBody?.identity || ""),
+    outPoint: {
+      txHash: String(requestBody?.outPoint?.txHash || "").toLowerCase(),
+      index: String(requestBody?.outPoint?.index ?? ""),
+    },
+    text: String(requestBody?.text || ""),
+    serviceId: SERVICE_ID,
+  })).digest("hex");
+}
+
 async function newPaymentQuote(req, requestBody) {
-  const origin = `http://${req.headers.host || `127.0.0.1:${PORT}`}`;
+  validatePaperInput(requestBody?.text);
+  // The deterministic demo is intentionally loopback-only; do not let an
+  // arbitrary Host header rewrite the payment resource identifier.
+  const origin = `http://127.0.0.1:${PORT}`;
   const created = await payments.backend.createInvoice({ amount: "100000", currency: "Fibt", description: "SkillPass paid paper analysis" });
-  const requestBinding = createHash("sha256").update(JSON.stringify({ identity: requestBody?.identity, outPoint: requestBody?.outPoint })).digest("hex");
+  const requestBinding = paymentBinding(requestBody);
   const requirement = {
     scheme: "exact",
     network: FIBER_TESTNET,
@@ -187,7 +224,7 @@ async function newPaymentQuote(req, requestBody) {
     tags: ["ckb", "fiber", "research"],
   };
   const required = makePaymentRequired({ resource, requirement });
-  payments.quotes.set(created.paymentHash.toLowerCase(), { requirement, resource, createdAt: Date.now(), identity: requestBody?.identity, outPoint: requestBody?.outPoint });
+  payments.quotes.set(created.paymentHash.toLowerCase(), { requirement, resource, createdAt: Date.now(), binding: requestBinding });
   return { required, requirement, resource, created };
 }
 
@@ -199,7 +236,7 @@ function prunePaymentQuotes() {
 
 const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const url = safeRequestUrl(req);
 
     if (req.method === "GET" && url.pathname === "/") return staticFile(res, "index.html", "text/html; charset=utf-8");
     if (req.method === "GET" && url.pathname === "/app.js") return staticFile(res, "app.js", "text/javascript; charset=utf-8");
@@ -211,7 +248,11 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, demoState());
     }
 
-    if (req.method === "POST") rateLimit(req);
+    if (req.method === "POST") {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      rateLimit(req);
+    }
 
     // Low-level auth endpoints kept for deterministic tests and API study.
     if (req.method === "POST" && url.pathname === "/challenge") {
@@ -252,8 +293,8 @@ const server = http.createServer(async (req, res) => {
       const hash = String(payload?.payload?.paymentHash || "").toLowerCase();
       const quote = payments.quotes.get(hash);
       if (!quote) return send(res, 402, { error: "PAYMENT_QUOTE_UNKNOWN", message: "payment quote is missing or expired; request a fresh 402" });
-      if (quote.identity !== requestBody.identity || JSON.stringify(quote.outPoint) !== JSON.stringify(requestBody.outPoint)) {
-        return send(res, 402, { error: "PAYMENT_REQUEST_BINDING_MISMATCH", message: "payment quote was issued for a different requester/capability" });
+      if (quote.binding !== paymentBinding(requestBody)) {
+        return send(res, 402, { error: "PAYMENT_REQUEST_BINDING_MISMATCH", message: "payment quote was issued for a different requester/capability/request body" });
       }
       const verification = await payments.facilitator.verify({ x402Version: 2, paymentPayload: payload, paymentRequirements: quote.requirement });
       if (!verification.isValid) return send(res, 402, { error: verification.invalidReason, message: "Fiber payment has not been verified" }, { "payment-required": encodeHeaderJson(makePaymentRequired({ resource: quote.resource, requirement: quote.requirement, error: verification.invalidReason })) });
@@ -284,9 +325,14 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: "not_found" });
   } catch (error) {
     const status = error?.status || (error?.name === "AccessDeniedError" ? 403 : error?.name === "AuthenticationError" ? 401 : 400);
-    return send(res, status, { error: error.code || "bad_request", message: error.message });
+    return send(res, status, { error: error.code || "bad_request", message: publicErrorMessage(error) });
   }
 });
+
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 80;
 
 server.listen(PORT, HOST, () => {
   console.log(`SkillPass local demo listening on http://${HOST}:${PORT}`);

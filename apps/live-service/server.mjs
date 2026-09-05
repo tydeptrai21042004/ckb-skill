@@ -20,14 +20,28 @@ import {
   decodeHeaderJson,
   encodeHeaderJson,
   makePaymentRequired,
+  validatePayload,
 } from "@skillpass/x402-fiber";
-import { analyzePaper } from "../demo-service/src/paper-analyzer.mjs";
+import { analyzePaper, validatePaperInput, MAX_INPUT_CHARS } from "../demo-service/src/paper-analyzer.mjs";
+import { LiveServiceState } from "./state.mjs";
+import { buildDiscovery, buildOpenApi } from "./discovery.mjs";
+import {
+  assertJsonRequest,
+  baseSecurityHeaders,
+  publicErrorMessage,
+  rejectCrossSiteBrowserRequest,
+  safeRequestUrl,
+} from "../../packages/http-security/src/index.mjs";
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8787);
 const PUBLIC_DIR = process.env.PUBLIC_DIR || join(dirname(fileURLToPath(import.meta.url)), "public");
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+const TRUST_PROXY = process.env.TRUST_PROXY === "true";
+const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(), ".runtime", "service-state.json");
+const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
+const STARTED_AT = Date.now();
 const MAX_BODY = 40 * 1024;
 const CHALLENGE_TTL_MS = Number(process.env.CHALLENGE_TTL_MS || 60_000);
 const ENABLE_PUBLIC_ISSUE = process.env.ENABLE_PUBLIC_ISSUE === "true";
@@ -37,16 +51,28 @@ const PAYMENT_ASSET = String(process.env.PAYMENT_ASSET || "CKB");
 const PAYMENT_PAY_TO = String(process.env.PAYMENT_PAY_TO || "fiber-invoice-receiver");
 const PAYMENT_CURRENCY = String(process.env.PAYMENT_CURRENCY || "Fibt");
 const PAYMENT_TIMEOUT_SECONDS = Number(process.env.PAYMENT_TIMEOUT_SECONDS || 600);
-const FIBER_NETWORK = process.env.FIBER_NETWORK === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
+const FIBER_NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
+const FIBER_NETWORK = FIBER_NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const FACILITATOR_URL = process.env.FACILITATOR_URL || "http://127.0.0.1:8790";
 const facilitator = PAYMENTS_REQUIRED
   ? new FacilitatorHttpClient({ baseUrl: FACILITATOR_URL, token: process.env.FACILITATOR_AUTH_TOKEN || "" })
   : null;
+const serviceState = new LiveServiceState({ file: SERVICE_STATE_FILE });
 
+if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT must be 1..65535");
+if (!Number.isSafeInteger(CHALLENGE_TTL_MS) || CHALLENGE_TTL_MS < 5_000 || CHALLENGE_TTL_MS > 10 * 60_000) throw new Error("CHALLENGE_TTL_MS must be 5000..600000");
+if (!Number.isSafeInteger(SERVICE_RECEIPT_TTL_SECONDS) || SERVICE_RECEIPT_TTL_SECONDS < 60 || SERVICE_RECEIPT_TTL_SECONDS > 30 * 24 * 3600) {
+  throw new Error("SERVICE_RECEIPT_TTL_SECONDS must be 60..2592000");
+}
+if (PUBLIC_BASE_URL && !/^https?:\/\//i.test(PUBLIC_BASE_URL)) throw new Error("PUBLIC_BASE_URL must start with http:// or https://");
 if (!/^[1-9][0-9]*$/.test(PAYMENT_AMOUNT)) throw new Error("PAYMENT_AMOUNT must be a positive atomic-unit integer string");
 if (!Number.isSafeInteger(PAYMENT_TIMEOUT_SECONDS) || PAYMENT_TIMEOUT_SECONDS < 1 || PAYMENT_TIMEOUT_SECONDS > 3600) {
   throw new Error("PAYMENT_TIMEOUT_SECONDS must be 1..3600");
 }
+if (FIBER_NETWORK_NAME !== "testnet") throw new Error("This CKB-testnet service requires FIBER_NETWORK=testnet");
+if (!PAYMENT_ASSET.trim()) throw new Error("PAYMENT_ASSET must not be empty");
+if (!PAYMENT_PAY_TO.trim()) throw new Error("PAYMENT_PAY_TO must not be empty");
+if (!PAYMENT_CURRENCY.trim()) throw new Error("PAYMENT_CURRENCY must not be empty");
 
 function requireHex32(name, value) {
   try { return normalizeHex32(value, name); }
@@ -67,8 +93,13 @@ const client = process.env.CKB_RPC_URL
   ? new ccc.ClientPublicTestnet(process.env.CKB_RPC_URL)
   : new ccc.ClientPublicTestnet();
 
+function publicPaymentConfig() {
+  return PAYMENTS_REQUIRED
+    ? { required: true, amount: PAYMENT_AMOUNT, asset: PAYMENT_ASSET, network: FIBER_NETWORK, x402Version: 2, proofMode: process.env.FIBER_PAYMENT_PROOF || "invoice-status" }
+    : { required: false };
+}
+
 const challenges = new Map();
-const paymentQuotes = new Map();
 const rate = new Map();
 
 function outPointFromJson(value) {
@@ -96,12 +127,6 @@ function pruneChallenges() {
     if (now > item.expiresAt + CHALLENGE_TTL_MS) challenges.delete(nonce);
   }
   while (challenges.size > 10_000) challenges.delete(challenges.keys().next().value);
-}
-
-function prunePaymentQuotes() {
-  const now = Date.now();
-  for (const [hash, item] of paymentQuotes) if (now >= item.expiresAt) paymentQuotes.delete(hash);
-  while (paymentQuotes.size > 10_000) paymentQuotes.delete(paymentQuotes.keys().next().value);
 }
 
 async function issueChallenge(address) {
@@ -159,12 +184,21 @@ function paymentBinding({ address, outPoint, text }) {
 
 function resourceUrl(req) {
   if (PUBLIC_BASE_URL) return `${PUBLIC_BASE_URL}/api/analyze`;
-  const proto = String(req.headers["x-forwarded-proto"] || "http").split(",")[0].trim();
-  return `${proto}://${req.headers.host || `127.0.0.1:${PORT}`}/api/analyze`;
+  if (!TRUST_PROXY) return `http://127.0.0.1:${PORT}/api/analyze`;
+  const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
+  if (!/^(https?)$/.test(proto) || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) throw new Error("invalid proxy host/protocol headers");
+  return `${proto}://${host}/api/analyze`;
+}
+
+async function prunePaymentState() {
+  await serviceState.pruneExpiredQuotes();
+  await serviceState.pruneExpiredReceipts(SERVICE_RECEIPT_TTL_SECONDS * 1000);
 }
 
 async function createPaymentQuote(req, body) {
-  prunePaymentQuotes();
+  validatePaperInput(body.text);
+  await prunePaymentState();
   // Reject obvious stale/non-owner requests before asking the user to pay.
   await verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address });
   const invoice = await facilitator.invoice({
@@ -195,7 +229,7 @@ async function createPaymentQuote(req, body) {
     tags: ["ckb", "fiber", "portable-rights", "ai"],
   };
   const required = makePaymentRequired({ resource, requirement });
-  paymentQuotes.set(String(invoice.paymentHash).toLowerCase(), {
+  await serviceState.setQuote(String(invoice.paymentHash).toLowerCase(), {
     requirement,
     resource,
     binding: paymentBinding(body),
@@ -207,34 +241,61 @@ async function createPaymentQuote(req, body) {
 async function verifyPaymentHeader(req, body) {
   const header = req.headers["payment-signature"];
   if (!header) return null;
-  prunePaymentQuotes();
+  await prunePaymentState();
   const paymentPayload = decodeHeaderJson(String(header), "PAYMENT-SIGNATURE");
   const hash = String(paymentPayload?.payload?.paymentHash || "").toLowerCase();
-  const quote = paymentQuotes.get(hash);
-  if (!quote || Date.now() >= quote.expiresAt) {
+  const binding = paymentBinding(body);
+
+  // If the server settled this exact semantic request but the HTTP response was
+  // lost, return the persisted receipt after fresh wallet/capability auth.
+  const receipt = await serviceState.getReceipt(hash);
+  if (receipt && receipt.binding === binding) {
+    validatePayload(paymentPayload, receipt.requirement);
+    return { hash, paymentPayload, alreadySettled: true, receipt };
+  }
+
+  const quote = await serviceState.getQuote(hash);
+  if (!quote || Date.now() >= Number(quote.expiresAt || 0)) {
     throw Object.assign(new Error("payment quote is missing or expired; request a fresh 402"), { status: 402, code: "PAYMENT_QUOTE_UNKNOWN" });
   }
-  if (quote.binding !== paymentBinding(body)) {
+  if (quote.binding !== binding) {
     throw Object.assign(new Error("payment quote belongs to a different capability/request"), { status: 402, code: "PAYMENT_REQUEST_BINDING_MISMATCH" });
   }
   const verification = await facilitator.verify({ x402Version: 2, paymentPayload, paymentRequirements: quote.requirement });
   if (!verification?.isValid) {
+    // A persisted quote plus facilitator replay evidence means settlement may
+    // have completed immediately before a service crash. The protected paper
+    // analyzer is side-effect free, so we can recompute the result and call the
+    // idempotent settle endpoint to recover delivery without charging again.
+    if (verification?.invalidReason === "payment_already_consumed") {
+      return { hash, quote, paymentPayload, verification, binding, recoverConsumedSettlement: true };
+    }
     throw Object.assign(new Error(verification?.invalidReason || "Fiber payment could not be verified"), { status: 402, code: verification?.invalidReason || "PAYMENT_NOT_VERIFIED", paymentRequired: makePaymentRequired({ resource: quote.resource, requirement: quote.requirement, error: verification?.invalidReason || "payment not verified" }) });
   }
-  return { hash, quote, paymentPayload, verification };
+  return { hash, quote, paymentPayload, verification, binding, recoverConsumedSettlement: false };
 }
 
-async function settlePayment(payment) {
+async function settlePayment(payment, result) {
   if (!payment) return null;
+  if (payment.alreadySettled) return payment.receipt.settlement;
   const settlement = await facilitator.settle({ x402Version: 2, paymentPayload: payment.paymentPayload, paymentRequirements: payment.quote.requirement });
   if (!settlement?.success) {
     throw Object.assign(new Error(settlement?.errorReason || "Fiber payment settlement failed"), { status: 402, code: settlement?.errorReason || "PAYMENT_SETTLEMENT_FAILED" });
   }
-  paymentQuotes.delete(payment.hash);
+  // Persist the delivery receipt before replying. A client can safely retry the
+  // same paid request after a dropped connection/server restart.
+  await serviceState.setReceipt(payment.hash, { binding: payment.binding, requirement: payment.quote.requirement, settlement, result });
+  await serviceState.deleteQuote(payment.hash);
   return settlement;
 }
 
-function requestKey(req) { return req.socket.remoteAddress || "unknown"; }
+function requestKey(req) {
+  if (TRUST_PROXY) {
+    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    if (forwarded) return forwarded.slice(0, 128);
+  }
+  return req.socket.remoteAddress || "unknown";
+}
 function rateLimit(req, limit = 90, windowMs = 60_000) {
   const key = requestKey(req); const now = Date.now(); const current = rate.get(key);
   if (!current || now >= current.resetAt) { rate.set(key, { count: 1, resetAt: now + windowMs }); return; }
@@ -250,18 +311,34 @@ async function jsonBody(req) {
     chunks.push(chunk);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? JSON.parse(raw) : {};
+  if (!raw) return {};
+  try { return JSON.parse(raw); }
+  catch { throw Object.assign(new Error("request body must be valid JSON"), { status: 400, code: "INVALID_JSON" }); }
 }
 
+const LIVE_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "connect-src 'self' https://*.ckb.dev https://*.ckbapp.dev wss://*.ckb.dev wss://*.ckbapp.dev",
+  "img-src 'self' data:",
+  "font-src 'self' data:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "manifest-src 'self'",
+].join("; ");
+
 function securityHeaders(contentType) {
-  return {
-    "content-type": contentType,
-    "x-content-type-options": "nosniff",
-    "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
-    "permissions-policy": "camera=(), microphone=(), geolocation=()",
-    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' https://*.ckb.dev https://*.ckbapp.dev wss://*.ckb.dev wss://*.ckbapp.dev; img-src 'self' data: https:; font-src 'self' data:; base-uri 'none'; frame-ancestors 'none'",
-  };
+  return baseSecurityHeaders({
+    contentType,
+    csp: LIVE_CSP,
+    // CCC/wallet UI is a third-party browser surface. Report Trusted Types
+    // violations first; once the deployed wallet matrix is browser-tested, this
+    // can be promoted to the enforced CSP without breaking compatible wallets.
+    trustedTypesReportOnly: true,
+  });
 }
 function sendJson(res, status, body, extraHeaders = {}) {
   res.writeHead(status, { ...securityHeaders("application/json; charset=utf-8"), "cache-control": "no-store", ...extraHeaders });
@@ -293,21 +370,62 @@ async function sendStatic(res, pathname) {
 }
 
 async function readiness() {
-  const detail = { ckb: false, facilitator: !PAYMENTS_REQUIRED };
-  const tip = await client.getTip();
-  detail.ckb = true;
-  if (PAYMENTS_REQUIRED) {
-    await facilitator.ready();
-    detail.facilitator = true;
+  const dependencies = {
+    ckb: { ok: false },
+    facilitator: { ok: !PAYMENTS_REQUIRED, skipped: !PAYMENTS_REQUIRED },
+  };
+  let tip = null;
+
+  try {
+    tip = (await client.getTip()).toString();
+    dependencies.ckb = { ok: true };
+  } catch (error) {
+    dependencies.ckb = { ok: false, error: String(error?.message || "CKB RPC unavailable").slice(0, 180) };
   }
-  return { ok: true, mode: "ckb-testnet", tip: tip.toString(), service: "paper-analyzer-v1", paymentsRequired: PAYMENTS_REQUIRED, dependencies: detail };
+
+  if (PAYMENTS_REQUIRED) {
+    try {
+      const upstream = await facilitator.ready();
+      dependencies.facilitator = {
+        ok: Boolean(upstream?.ok),
+        mode: upstream?.mode,
+        paymentProof: upstream?.paymentProof,
+        upstream: upstream?.upstream ? { ok: Boolean(upstream.upstream.ok), backend: upstream.upstream.backend, version: upstream.upstream.version } : undefined,
+      };
+    } catch (error) {
+      dependencies.facilitator = { ok: false, error: String(error?.message || "facilitator unavailable").slice(0, 180) };
+    }
+  }
+
+  const ok = dependencies.ckb.ok && dependencies.facilitator.ok;
+  return {
+    ok,
+    mode: "ckb-testnet",
+    network: "testnet",
+    tip,
+    service: "paper-analyzer-v1",
+    paymentsRequired: PAYMENTS_REQUIRED,
+    paymentProof: PAYMENTS_REQUIRED ? (process.env.FIBER_PAYMENT_PROOF || "invoice-status") : "disabled",
+    dependencies,
+    uptimeSeconds: Math.floor((Date.now() - STARTED_AT) / 1000),
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    const url = safeRequestUrl(req);
     if (url.pathname === "/livez") return sendJson(res, 200, { ok: true, service: "skillpass-live" });
-    if (url.pathname === "/readyz" || url.pathname === "/health") return sendJson(res, 200, await readiness());
+    if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
+      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }));
+    }
+    if (req.method === "GET" && url.pathname === "/api/openapi.json") {
+      return sendJson(res, 200, buildOpenApi({ paymentsRequired: PAYMENTS_REQUIRED, maxInputChars: MAX_INPUT_CHARS }));
+    }
+    if (url.pathname === "/readyz" || url.pathname === "/health" || url.pathname === "/api/status") {
+      const report = await readiness();
+      return sendJson(res, report.ok ? 200 : 503, report);
+    }
     if (url.pathname === "/api/config") {
       return sendJson(res, 200, {
         network: "testnet",
@@ -315,10 +433,15 @@ const server = http.createServer(async (req, res) => {
         serviceId: SERVICE_ID,
         service: "paper-analyzer-v1",
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
-        payments: PAYMENTS_REQUIRED ? { required: true, amount: PAYMENT_AMOUNT, asset: PAYMENT_ASSET, network: FIBER_NETWORK, x402Version: 2 } : { required: false },
+        limits: { maxInputChars: MAX_INPUT_CHARS },
+        payments: publicPaymentConfig(),
       });
     }
-    if (req.method === "POST") rateLimit(req);
+    if (req.method === "POST") {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      rateLimit(req);
+    }
     if (req.method === "POST" && url.pathname === "/api/challenge") {
       const { address } = await jsonBody(req);
       return sendJson(res, 200, await issueChallenge(address));
@@ -344,10 +467,11 @@ const server = http.createServer(async (req, res) => {
       if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
       const verified = await verifyLiveCapability({ outPoint: outPointFromJson(outPoint), requesterAddress: address });
 
-      // Settle only after both payment verification and CKB ownership authorization succeed.
-      // This prevents charging requests that fail normal ownership/signature checks.
-      const settlement = await settlePayment(payment);
-      const result = analyzePaper(text);
+      // x402 authorization flow: verify -> resource -> settle -> respond.
+      // Compute/validate the protected result before settlement so a handler
+      // failure cannot consume the payment without producing deliverable work.
+      const result = payment?.alreadySettled ? payment.receipt.result : analyzePaper(text);
+      const settlement = await settlePayment(payment, result);
       const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
       return sendJson(res, 200, { ok: true, capabilityId: verified.capability.capabilityId, result, payment: settlement }, headers);
     }
@@ -359,14 +483,21 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const status = error?.status || (error?.name === "FacilitatorHttpError" ? 503 : 400);
     const extraHeaders = error?.paymentRequired ? { "PAYMENT-REQUIRED": encodeHeaderJson(error.paymentRequired) } : {};
-    return sendJson(res, status, { error: error?.code || "bad_request", message: error?.message || "request failed" }, extraHeaders);
+    return sendJson(res, status, { error: error?.code || "bad_request", message: publicErrorMessage(error) }, extraHeaders);
   }
 });
+
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 5_000;
+server.maxHeadersCount = 80;
 
 server.listen(PORT, HOST, () => {
   console.log(`SkillPass live service on http://${HOST}:${PORT}`);
   console.log(`CKB network: testnet; RPC: ${client.url}`);
   console.log(`Capability code hash: ${deployment.codeHash}`);
   console.log(`x402/Fiber payments: ${PAYMENTS_REQUIRED ? `enabled via ${FACILITATOR_URL}` : "disabled"}`);
+  console.log(`Persistent service state: ${SERVICE_STATE_FILE}`);
+  console.log(`Delivery receipt retention: ${SERVICE_RECEIPT_TTL_SECONDS}s`);
   console.log("No user private key is loaded by this service.");
 });

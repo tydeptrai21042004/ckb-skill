@@ -15,6 +15,13 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   skillpass:
     build:
@@ -26,13 +33,24 @@ services:
       HOST: 0.0.0.0
       PORT: 8787
       FACILITATOR_URL: http://facilitator:8790
+      SERVICE_STATE_FILE: /state/service-state.json
     depends_on:
       facilitator:
         condition: service_healthy
+    volumes:
+      - testnet_skillpass_state:/state
     ports:
-      - "${SKILLPASS_BIND:-0.0.0.0}:${SKILLPASS_PORT:-8787}:8787"
+      - "${SKILLPASS_BIND:-127.0.0.1}:${SKILLPASS_PORT:-8787}:8787"
     restart: unless-stopped
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
   testnet_facilitator_state:
+  testnet_skillpass_state:

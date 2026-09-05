@@ -1,92 +1,86 @@
-# Local development and handoff
+# Local development — ZIP/folder workflow
 
-## Choose one path
+SkillPass does **not** require a GitHub checkout. Work directly from the project folder you received.
 
-### Path A — native Node.js (best for contributors)
-
-Prerequisite: Node.js 22+.
+## 1. Extract and enter the folder
 
 ```bash
-git clone <repo-url>
-cd ckb-skill
+unzip ckb-skill-main.zip
+cd ckb-skill-main
+```
+
+If the folder is already extracted, just open a terminal in it.
+
+## 2. Check Node
+
+```bash
+node --version
+npm --version
+```
+
+Use Node.js 22 or newer. The repository includes `.nvmrc` with `22` for version managers that support it.
+
+## 3. One-time setup
+
+```bash
 npm run setup
+```
+
+This creates local configuration from the included templates and installs the JavaScript dependencies from npm. It does not clone or push source code anywhere.
+
+## 4. Run the deterministic demo
+
+```bash
 npm run dev
 ```
 
-Open <http://127.0.0.1:8787>.
+Open `http://127.0.0.1:8787`.
 
-`npm run setup` is idempotent: it creates missing config files and installs dependencies, but it does not overwrite an existing `.env` or deployment file.
+The deterministic demo requires no wallet, no testnet CKB, and no real Fiber funds. It is intended for fast feature verification.
 
-### Path B — Docker only (best for reviewers and reproducibility)
-
-Prerequisite: Docker Desktop/Engine with Compose v2.
+## 5. Run quality checks
 
 ```bash
-git clone <repo-url>
-cd ckb-skill
-docker compose -f deploy/compose.demo.yaml up --build
+npm run check
 ```
 
-Open <http://127.0.0.1:8787>.
+This runs the environment report, Node tests, CKB client type checking, and a production frontend build.
 
-This path does not require a host Node/Rust install.
+## 6. Docker-only demo
 
-## Development modes
-
-| Goal | Command | Notes |
-|---|---|---|
-| Clickable deterministic demo | `npm run dev` | No real chain or funds |
-| React/CCC frontend | `npm run dev:web` | Vite on port 5173 |
-| Fiber compatibility service | `npm run dev:facilitator` | Mock by default |
-| Live CKB service | `npm run dev:live` | Needs real deployment metadata |
-| Full Docker demo | `npm run docker:demo` | Most reproducible |
-| Readiness report | `npm run doctor` | Never mutates keys/funds |
-| Contributor gate | `npm run check` | Tests + typecheck + web build |
-
-## Real CKB testnet
+If you prefer not to install npm dependencies on the host:
 
 ```bash
-./deploy.sh init-testnet
-# edit .env.testnet and/or deployments/testnet.json
-./deploy.sh doctor
-./deploy.sh testnet
+./deploy.sh demo
 ```
 
-The checked-in `.env.testnet.example` is documentation, not a real secret file. `init-testnet` creates `.env.testnet` and generates the facilitator authentication token when needed.
+The published HTTP port binds to `127.0.0.1` by default.
 
-## Real Fiber
+## 7. Live CKB testnet development
 
-Real Fiber is intentionally separate from the zero-risk developer bootstrap because it may involve a wallet, funding, and channels.
+For live verification, copy real testnet deployment metadata into `deployments/testnet.json` or `.env.testnet`, then follow `DEPLOY_STEP_BY_STEP.md`.
+
+Important: the live service verifies the **current live Capability Cell** and a fresh wallet challenge. Never add a server-side user private key to make testing easier.
+
+## Common commands
+
+| Command | Purpose |
+|---|---|
+| `npm run setup` | Create safe local config and install dependencies |
+| `npm run dev` | Deterministic local demo |
+| `npm test` | Node test suite |
+| `npm run check` | Tests + type checks + production web build |
+| `npm run dev:web` | Vite/CCC frontend development |
+| `npm run dev:facilitator` | Standalone local facilitator |
+| `./deploy.sh demo` | Docker demo |
+| `./deploy.sh init-testnet` | Create private testnet config |
+| `./deploy.sh doctor` | Validate testnet config |
+| `./deploy.sh testnet` | Start CKB testnet profile |
+
+## Cleanup
 
 ```bash
-./deploy.sh fiber-init /secure/path/to/ckb-private-key
-./deploy.sh testnet-fiber
+npm run clean
 ```
 
-The setup command does not fund a wallet or open channels automatically.
-
-## Handoff checklist
-
-A release/ZIP intended for another developer should contain:
-
-- source code;
-- `package.json`;
-- `.nvmrc`;
-- `.env.example` and `.env.testnet.example`;
-- Dockerfiles and Compose files;
-- `CONTRIBUTING.md`;
-- this local-development guide;
-- tests and CI configuration;
-- example deployment metadata only.
-
-It should not contain:
-
-- `.env`, `.env.testnet`, private keys, tokens, or wallet files;
-- `.runtime/` Fiber state;
-- `.tooling/` downloaded compilers/runtimes;
-- `node_modules/`;
-- generated frontend `dist/` output unless making a separate binary/static release artifact.
-
-## Maintenance rule
-
-If adding a new service or package changes how developers start or validate the project, update the root `npm` commands first. Internal paths may change; contributor commands should remain stable.
+This removes installed JavaScript dependencies and generated frontend output. It deliberately preserves local configuration and runtime state.
