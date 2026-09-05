@@ -1,12 +1,19 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { FiberRpcClient, isFiberInvoicePaid } from "./fiber-rpc.mjs";
+
+function hashPreimage(preimage) {
+  const hex = String(preimage || "").replace(/^0x/, "");
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error("payment preimage must be 32-byte hex");
+  return `0x${createHash("sha256").update(Buffer.from(hex, "hex")).digest("hex")}`;
+}
 
 export class MockFiberBackend {
   #invoices = new Map();
   async createInvoice({ amount, currency = "Fibt", description = "SkillPass API call", expiry = 3600 }) {
-    const paymentHash = `0x${randomBytes(32).toString("hex")}`;
+    const paymentPreimage = `0x${randomBytes(32).toString("hex")}`;
+    const paymentHash = hashPreimage(paymentPreimage);
     const invoice = `${currency.toLowerCase()}-mock-${paymentHash.slice(2)}`;
-    this.#invoices.set(paymentHash.toLowerCase(), { paymentHash, invoice, amount: String(amount), currency, status: "open", description, expiry });
+    this.#invoices.set(paymentHash.toLowerCase(), { paymentHash, paymentPreimage, invoice, amount: String(amount), currency, status: "open", description, expiry });
     return { invoice, paymentHash, amount: String(amount), currency };
   }
   async getInvoice(paymentHash) { return this.#invoices.get(String(paymentHash).toLowerCase()) ?? null; }
@@ -42,3 +49,5 @@ export class FnnFiberBackend {
   async isPaid(paymentHash) { return isFiberInvoicePaid(await this.getInvoice(paymentHash)); }
   async health() { const info = await this.client.nodeInfo(); return { ok: true, backend: "fnn", node: info }; }
 }
+
+export { hashPreimage };

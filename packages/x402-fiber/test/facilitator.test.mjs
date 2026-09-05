@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -14,7 +14,7 @@ import {
   makePaymentRequired,
 } from "../src/index.mjs";
 
-async function fixture({ persistent = false } = {}) {
+async function fixture({ persistent = false, proofMode = "invoice-status" } = {}) {
   const backend = new MockFiberBackend();
   const created = await backend.createInvoice({ amount: "100000", currency: "Fibt" });
   const requirement = {
@@ -25,7 +25,7 @@ async function fixture({ persistent = false } = {}) {
   let dir = null;
   if (persistent) dir = await mkdtemp(join(tmpdir(), "skillpass-replay-"));
   const replayStore = new ReplayStore({ file: dir ? join(dir, "settled.json") : "" });
-  const facilitator = new FiberFacilitator({ backend, replayStore });
+  const facilitator = new FiberFacilitator({ backend, replayStore, proofMode });
   const resource = { url: "https://example.invalid/api/research", description: "research API", mimeType: "application/json" };
   const payload = makePaymentPayload({ resource, requirement, payer: "agent-A" });
   return { backend, created, requirement, resource, payload, facilitator, dir };
@@ -50,6 +50,39 @@ test("facilitator rejects unpaid invoice, accepts paid invoice, then prevents re
   assert.equal((await f.facilitator.verify(request)).invalidReason, "payment_already_consumed");
 });
 
+test("settle is idempotent after payment consumption while verify remains replay-strict", async () => {
+  const f = await fixture();
+  const request = { x402Version: 2, paymentPayload: f.payload, paymentRequirements: f.requirement };
+  await f.backend.markPaid(f.created.paymentHash, "agent-A");
+  const first = await f.facilitator.settle(request);
+  const second = await f.facilitator.settle(request);
+  assert.equal(first.success, true);
+  assert.equal(first.extensions["io.nervos.skillpass"].idempotent, false);
+  assert.equal(second.success, true);
+  assert.equal(second.transaction, first.transaction);
+  assert.equal(second.extensions["io.nervos.skillpass"].idempotent, true);
+  assert.equal((await f.facilitator.verify(request)).invalidReason, "payment_already_consumed");
+});
+
+test("idempotent settlement cannot be reused with a different requirement or payer", async () => {
+  const f = await fixture();
+  const request = { x402Version: 2, paymentPayload: f.payload, paymentRequirements: f.requirement };
+  await f.backend.markPaid(f.created.paymentHash, "agent-A");
+  assert.equal((await f.facilitator.settle(request)).success, true);
+
+  const changedRequirement = structuredClone(f.requirement);
+  changedRequirement.amount = "100001";
+  const changedPayload = makePaymentPayload({ resource: f.resource, requirement: changedRequirement, payer: "agent-A" });
+  const changed = await f.facilitator.settle({ x402Version: 2, paymentPayload: changedPayload, paymentRequirements: changedRequirement });
+  assert.equal(changed.success, false);
+  assert.equal(changed.errorReason, "payment_already_consumed");
+
+  const changedPayerPayload = makePaymentPayload({ resource: f.resource, requirement: f.requirement, payer: "agent-B" });
+  const changedPayer = await f.facilitator.settle({ x402Version: 2, paymentPayload: changedPayerPayload, paymentRequirements: f.requirement });
+  assert.equal(changedPayer.success, false);
+  assert.equal(changedPayer.errorReason, "payment_already_consumed");
+});
+
 test("persistent replay store survives facilitator restart", async () => {
   const f = await fixture({ persistent: true });
   try {
@@ -60,6 +93,45 @@ test("persistent replay store survives facilitator restart", async () => {
     assert.equal((await restarted.verify(request)).invalidReason, "payment_already_consumed");
   } finally {
     await rm(f.dir, { recursive: true, force: true });
+  }
+});
+
+
+test("preimage proof mode requires and validates the paid invoice preimage", async () => {
+  const f = await fixture({ proofMode: "preimage" });
+  const paid = await f.backend.markPaid(f.created.paymentHash, "agent-A");
+  const withoutProof = { x402Version: 2, paymentPayload: f.payload, paymentRequirements: f.requirement };
+  assert.equal((await f.facilitator.verify(withoutProof)).invalidReason, "payment_preimage_required");
+
+  const wrong = makePaymentPayload({
+    resource: f.resource,
+    requirement: f.requirement,
+    payer: "agent-A",
+    paymentPreimage: "0x" + "11".repeat(32),
+  });
+  assert.equal((await f.facilitator.verify({ ...withoutProof, paymentPayload: wrong })).invalidReason, "payment_preimage_mismatch");
+
+  const correct = makePaymentPayload({
+    resource: f.resource,
+    requirement: f.requirement,
+    payer: "agent-A",
+    paymentPreimage: paid.paymentPreimage,
+  });
+  assert.equal((await f.facilitator.verify({ ...withoutProof, paymentPayload: correct })).isValid, true);
+});
+
+test("concurrent first access waits for persisted replay state to load", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "skillpass-replay-load-"));
+  const file = join(dir, "settled.json");
+  const hash = "0x" + "77".repeat(32);
+  try {
+    await writeFile(file, JSON.stringify([{ key: hash.toLowerCase(), consumedAt: Date.now() }]), "utf8");
+    const store = new ReplayStore({ file });
+    const [exists, consumed] = await Promise.all([store.has(hash), store.consume(hash)]);
+    assert.equal(exists, true);
+    assert.equal(consumed, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });
 

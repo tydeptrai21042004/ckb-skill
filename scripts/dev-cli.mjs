@@ -108,7 +108,7 @@ async function dockerDemo() {
 }
 
 function help() {
-  console.log(`SkillPass developer CLI\n\nUsage:\n  node scripts/dev-cli.mjs <command>\n\nCommands:\n  setup        create safe local config + install JS dependencies\n  demo         run deterministic local demo on http://127.0.0.1:8787\n  web          run React/CCC Vite frontend on http://127.0.0.1:5173\n  facilitator  run local Fiber/x402 facilitator\n  live         run live CKB service (requires valid env/deployment metadata)\n  doctor       print environment/readiness report\n  test         run Node tests\n  check        doctor + tests + typecheck + web production build\n  docker-demo  reproducible demo using Docker only\n  clean        remove JS dependencies/build output; preserve config/state\n  help         show this message\n\nRecommended first run:\n  npm run setup\n  npm run dev\n\nDocker-only first run:\n  docker compose -f deploy/compose.demo.yaml up --build\n`);
+  console.log(`SkillPass developer CLI\n\nUsage:\n  node scripts/dev-cli.mjs <command>\n\nCommands:\n  setup        create safe local config + install JS dependencies\n  demo         run deterministic local demo on http://127.0.0.1:8787\n  web          run live API + React/CCC Vite frontend on http://127.0.0.1:5173\n  facilitator  run local Fiber/x402 facilitator\n  live         run live CKB service (requires valid env/deployment metadata)\n  doctor       print environment/readiness report\n  test         run Node tests\n  check        doctor + tests + typecheck + web production build\n  docker-demo  reproducible demo using Docker only\n  clean        remove JS dependencies/build output; preserve config/state\n  help         show this message\n\nRecommended first run:\n  npm run setup\n  npm run dev\n\nDocker-only first run:\n  docker compose -f deploy/compose.demo.yaml up --build\n`);
 }
 
 const command = process.argv[2] || "help";
@@ -116,7 +116,7 @@ try {
   switch (command) {
     case "setup": await setup(); break;
     case "demo": await run("node", ["apps/demo-service/server.mjs"]); break;
-    case "web": await run("npm", ["run", "dev", "--prefix", "apps/web"]); break;
+    case "web": await run("node", ["scripts/dev-product.mjs"]); break;
     case "facilitator": await run("node", ["apps/fiber-facilitator/server.mjs"]); break;
     case "live": await run("node", ["apps/live-service/server.mjs"]); break;
     case "doctor": await run("node", ["scripts/doctor.mjs"]); break;

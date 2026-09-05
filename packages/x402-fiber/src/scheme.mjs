@@ -1,5 +1,6 @@
 const HEX32 = /^0x[0-9a-fA-F]{64}$/;
 const POSITIVE_INTEGER = /^(0|[1-9][0-9]*)$/;
+const HEX_PREIMAGE = /^0x[0-9a-fA-F]{64}$/;
 
 export const X402_VERSION = 2;
 export const FIBER_SCHEME = "exact";
@@ -52,6 +53,7 @@ export function validatePayload(payload, requirements) {
   if (String(p.paymentHash).toLowerCase() !== String(requirements.extra.paymentHash).toLowerCase()) throw new Error("payload payment hash mismatch");
   if (p.invoice !== requirements.extra.invoice) throw new Error("payload invoice mismatch");
   if (p.payer != null && (typeof p.payer !== "string" || p.payer.length > 256)) throw new Error("payload.payer is invalid");
+  if (p.paymentPreimage != null && !HEX_PREIMAGE.test(String(p.paymentPreimage))) throw new Error("payload.paymentPreimage must be 32-byte hex");
   return payload;
 }
 
@@ -75,7 +77,7 @@ export function makePaymentRequired({ resource, requirement, error = "PAYMENT-SI
   };
 }
 
-export function makePaymentPayload({ resource, requirement, payer = "fiber-payer" }) {
+export function makePaymentPayload({ resource, requirement, payer = "fiber-payer", paymentPreimage } = {}) {
   validateRequirements(requirement);
   return {
     x402Version: X402_VERSION,
@@ -84,7 +86,8 @@ export function makePaymentPayload({ resource, requirement, payer = "fiber-payer
     payload: {
       invoice: requirement.extra.invoice,
       paymentHash: requirement.extra.paymentHash,
-      payer
+      payer,
+      ...(paymentPreimage ? { paymentPreimage } : {})
     },
     extensions: {}
   };

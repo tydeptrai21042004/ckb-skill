@@ -1,7 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export class ReplayStore {
+/**
+ * Small single-process JSON record store.
+ *
+ * It is intentionally simple for reproducible testnet deployments. Writes are
+ * serialized and persisted with an atomic rename. It is NOT a distributed lock
+ * and must be replaced by an atomic shared store before horizontal scaling.
+ */
+export class JsonRecordStore {
   #entries = new Map();
   #loadPromise = null;
   #write = Promise.resolve();
@@ -12,9 +19,6 @@ export class ReplayStore {
   }
 
   async #load() {
-    // Important: share the same in-flight load promise. Setting a simple
-    // "loaded" boolean before readFile completed allowed a second first-use
-    // request to observe an empty map and bypass persisted replay state.
     if (this.#loadPromise) return this.#loadPromise;
     this.#loadPromise = (async () => {
       if (!this.file) return;
@@ -32,20 +36,44 @@ export class ReplayStore {
 
   async get(key) {
     await this.#load();
-    return this.#entries.get(String(key).toLowerCase()) ?? null;
+    return this.#entries.get(String(key)) ?? null;
   }
 
   async has(key) {
     return (await this.get(key)) !== null;
   }
 
-  async consume(key, metadata = {}) {
+  async set(key, value = {}) {
     await this.#load();
-    const normalized = String(key).toLowerCase();
-    if (this.#entries.has(normalized)) return false;
-    this.#entries.set(normalized, { key: normalized, consumedAt: this.now(), ...metadata });
+    const normalized = String(key);
+    this.#entries.set(normalized, { key: normalized, updatedAt: this.now(), ...value });
     await this.#persist();
-    return true;
+    return this.#entries.get(normalized);
+  }
+
+  async delete(key) {
+    await this.#load();
+    const removed = this.#entries.delete(String(key));
+    if (removed) await this.#persist();
+    return removed;
+  }
+
+  async prune(predicate) {
+    await this.#load();
+    let removed = 0;
+    for (const [key, value] of this.#entries) {
+      if (predicate(value, key)) {
+        this.#entries.delete(key);
+        removed += 1;
+      }
+    }
+    if (removed) await this.#persist();
+    return removed;
+  }
+
+  async size() {
+    await this.#load();
+    return this.#entries.size;
   }
 
   async #persist() {

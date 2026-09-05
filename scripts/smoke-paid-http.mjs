@@ -31,6 +31,18 @@ try {
   const unpaid = await post("/api/demo/paid-use", body, { "payment-signature": encodeHeaderJson(paymentPayload) });
   if (unpaid.status !== 402) throw new Error(`unpaid request should remain 402, got ${unpaid.status}`);
   await post("/api/demo/pay", { paymentHash, payer: "alice-agent" });
+
+  // A paid quote is bound to the semantic request, not just the wallet/cell.
+  // Changing the protected input must require a new quote rather than reusing
+  // the same invoice for different work.
+  const changedBody = { ...body, text: body.text + " Changed after quote." };
+  const changed = await post("/api/demo/paid-use", changedBody, { "payment-signature": encodeHeaderJson(paymentPayload) });
+  if (changed.status !== 402) throw new Error(`changed request must reject quote reuse, got ${changed.status}`);
+  const changedJson = await changed.json();
+  if (changedJson.error !== "PAYMENT_REQUEST_BINDING_MISMATCH") {
+    throw new Error(`expected PAYMENT_REQUEST_BINDING_MISMATCH, got ${JSON.stringify(changedJson)}`);
+  }
+
   const paid = await post("/api/demo/paid-use", body, { "payment-signature": encodeHeaderJson(paymentPayload) });
   if (paid.status !== 200) throw new Error(`paid owner request failed ${paid.status}: ${await paid.text()}`);
   if (!paid.headers.get("payment-response")) throw new Error("PAYMENT-RESPONSE header missing");
@@ -57,7 +69,7 @@ try {
   await post("/api/demo/pay", { paymentHash: bobHash, payer: "bob-agent" });
   const bob = await post("/api/demo/paid-use", bobBody, { "payment-signature": encodeHeaderJson(bobPayload) });
   if (bob.status !== 200) throw new Error(`new owner paid request failed ${bob.status}: ${await bob.text()}`);
-  console.log("Combined SkillPass + x402/Fiber smoke passed: 402 -> pay -> owner access -> replay reject -> transfer -> old owner reject -> new owner paid access");
+  console.log("Combined SkillPass + x402/Fiber smoke passed: 402 -> pay -> request-binding reject -> owner access -> replay reject -> transfer -> old owner reject -> new owner paid access");
 } finally {
   child.kill("SIGTERM");
   await Promise.race([once(child, "exit"), new Promise(r=>setTimeout(r,500))]);
