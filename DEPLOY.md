@@ -1,6 +1,6 @@
-# SkillPass v0.4 deployment
+# SkillPass v0.6 deployment
 
-The v0.4 deployment goal is simple: **Docker for deployment, `run_all.sh` for development/verification**.
+The v0.6 deployment goal is simple: **Docker for deployment, `run_all.sh` for development/verification**.
 
 ## 1. Fastest path — zero-config demo
 
@@ -26,6 +26,18 @@ Useful operations:
 ./deploy.sh logs demo
 ./deploy.sh stop demo
 ```
+
+
+Windows has a native wrapper with the same command names:
+
+```bat
+deploy.cmd demo
+deploy.cmd init-testnet
+deploy.cmd doctor
+deploy.cmd testnet
+```
+
+See [`HUONG_DAN_TRIEN_KHAI.md`](HUONG_DAN_TRIEN_KHAI.md) for the Vietnamese deployment guide.
 
 ## 2. Real CKB testnet + staging payment
 
@@ -73,7 +85,7 @@ Then:
 ./deploy.sh testnet
 ```
 
-The facilitator is kept private inside the Compose network. Only SkillPass port 8787 is published by default.
+The facilitator is kept private inside the Compose network. Only SkillPass port 8787 is published, and it binds to `127.0.0.1` by default.
 
 ## 4. Self-host the official Fiber container
 
@@ -126,11 +138,13 @@ request
   -> facilitator verifies payment
   -> wallet challenge/signature verified
   -> live CKB capability checked again
+  -> protected result is computed
   -> facilitator settles/consumes payment
+  -> settlement + result receipt is persisted
   -> protected result + PAYMENT-RESPONSE
 ```
 
-The pre-billing ownership check prevents obviously invalid owners from being asked to pay. The second ownership check protects the transfer race between quote creation and settlement.
+The pre-billing ownership check prevents obviously invalid owners from being asked to pay. The second ownership check protects the transfer race between quote creation and settlement. Payment quotes and successful result receipts are persisted so a service restart or lost HTTP response does not automatically require a second payment. Facilitator settlement is idempotent for crash recovery, and delivery receipts are pruned after `SERVICE_RECEIPT_TTL_SECONDS` (24 hours by default).
 
 ## 6. Health endpoints
 
@@ -140,6 +154,7 @@ Live service:
 GET /livez     process is alive
 GET /readyz    CKB RPC + facilitator dependencies are usable
 GET /health    alias of readiness
+GET /api/status sanitized readiness data used by the web UI
 ```
 
 Facilitator:
@@ -156,11 +171,25 @@ Docker health checks use readiness so a broken upstream dependency is visible im
 
 The deployment is much easier, but mainnet/multi-replica production still requires:
 
-- external/shared nonce and replay state rather than process/file-local state;
+- external/shared nonce, replay, quote, and receipt state rather than process/file-local state when running multiple replicas;
 - HTTPS/reverse proxy and request-size/rate policies appropriate to your deployment;
 - FNN backup/restore procedures before upgrades;
 - security review of the CKB Type Script and service;
 - independent testnet soak/load testing;
-- explicit crash/idempotency policy around payment settlement and service delivery.
+- a shared transactional/idempotency policy around payment settlement and service delivery when scaling beyond one replica.
 
 Do not expose FNN RPC directly to the public internet. Fiber's official Docker documentation notes that its bundled configs bind RPC to localhost by default; SkillPass changes that only for the private Compose network in the self-hosted profile.
+
+
+For a complete local-ZIP walkthrough, proxy/TLS guidance, payment-proof modes, state backup, and troubleshooting, see [`DEPLOY_STEP_BY_STEP.md`](DEPLOY_STEP_BY_STEP.md).
+
+## 8. Application state backup and support bundle
+
+Before deleting volumes or moving hosts:
+
+```bash
+./deploy.sh backup-state testnet
+npm run support
+```
+
+Windows uses `deploy.cmd backup-state testnet`. The state backup excludes `.env.testnet`, private keys, and live Fiber channel storage. The support bundle is redacted and is intended for bug/community handoff.

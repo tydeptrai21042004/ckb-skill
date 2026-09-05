@@ -28,7 +28,7 @@ run all Node tests/smokes/typechecks/web build/benchmark, and verify the Rust CK
 Options:
   --no-rust       skip Rust/CKB contract toolchain and contract tests
   --with-offckb   install OffCKB into .tooling/npm-global (does not start a chain)
-  --with-fiber    install the official Fiber FNN release into .tooling/fiber (does not open/fund channels)
+  --with-fiber    pull/check the official Fiber Docker image (does not import keys/open/fund channels)
   --serve         start the local SkillPass demo after verification
   --skip-install  do not run npm dependency installation
 HELP
@@ -192,24 +192,14 @@ if [[ "$WITH_OFFCKB" == 1 ]]; then
 fi
 
 if [[ "$WITH_FIBER" == 1 ]]; then
-  if command -v fnn >/dev/null 2>&1; then
-    log "Using existing Fiber FNN: $(fnn --version 2>/dev/null | head -n1 || echo installed)"
-  elif [[ -x "$TOOLING/fiber/fnn" ]]; then
-    export PATH="$TOOLING/fiber:$PATH"
-    log "Using previously installed local Fiber FNN"
-  else
-    [[ "$OS" == linux ]] || warn "Fiber's official installer is best tested on Linux; attempting on $OS."
-    fiber_version="${SKILLPASS_FIBER_VERSION:-0.9.0}"
-    log "Installing official Fiber FNN v${fiber_version} into .tooling/fiber (testnet; no channels or funds are created)"
-    local_installer="$TOOLING/fiber-install.sh"
-    fetch "https://raw.githubusercontent.com/nervosnetwork/fiber/v${fiber_version}/tools/install/install.sh" "$local_installer"
-    chmod +x "$local_installer"
-    INSTALL_DIR="$TOOLING/fiber" FNN_VERSION="$fiber_version" NETWORK=testnet bash "$local_installer"
-    rm -f "$local_installer"
-    [[ -x "$TOOLING/fiber/fnn" ]] && export PATH="$TOOLING/fiber:$PATH"
+  fiber_version="${SKILLPASS_FIBER_VERSION:-0.9.0}"
+  if ! command -v docker >/dev/null 2>&1; then
+    die "--with-fiber now uses the official Docker image and requires Docker. This avoids downloading/executing a remote installer script."
   fi
+  docker info >/dev/null 2>&1 || die "Docker is installed but the daemon is not reachable"
+  log "Pulling official nervos/fiber:${fiber_version} image only; no wallet key, funds, peers, or channels are configured"
+  docker pull "nervos/fiber:${fiber_version}"
 fi
-
 log "Bootstrapping safe local config"
 npm run bootstrap
 

@@ -1,152 +1,177 @@
-# HOW TO VERIFY — SkillPass v0.3
+# HOW TO VERIFY — SkillPass v0.6
 
-## A. One-command verification
+All verification can start from the extracted local project folder. None of these steps require connecting this project to GitHub.
 
-```bash
-chmod +x run_all.sh
-./run_all.sh
-```
-
-For the local JS path only:
-
-```bash
-./run_all.sh --no-rust
-```
-
-The script installs missing developer tooling locally under `.tooling/`; it does not require global Node/Rust installation.
-
-## B. Deterministic protocol tests
+## A. Fast dependency-free verification
 
 ```bash
 npm test
 npm run smoke:http
 npm run smoke:fiber
 npm run smoke:paid
+npm run benchmark
+npm run verify:deploy
 ```
 
-The combined paid smoke must prove:
+Expected Node result for this bundle: **50 tests, 50 passed**.
 
-1. resource returns HTTP 402 without payment;
-2. unpaid quote is rejected;
-3. paid quote + current owner succeeds;
-4. replaying the consumed payment is rejected;
-5. capability transfers A -> B;
-6. A creates/pays a fresh quote but is rejected as `NOT_OWNER`;
-7. B creates/pays a fresh quote and succeeds.
+The paid smoke proves:
 
-## C. Human-clickable local demo
+1. protected resource returns HTTP 402 before payment;
+2. unpaid payment proof is rejected;
+3. after payment, changing the protected request cannot reuse the original quote;
+4. paid current owner succeeds;
+5. ordinary verification rejects the consumed payment replay;
+6. capability transfers Alice -> Bob;
+7. Alice can pay a new invoice but is still rejected after ownership moved;
+8. Bob pays a fresh quote and succeeds.
+
+## B. One-command development verification
+
+On Linux, macOS, or WSL:
+
+```bash
+chmod +x run_all.sh
+./run_all.sh
+```
+
+Useful variants:
+
+```bash
+./run_all.sh --no-rust
+./run_all.sh --skip-install
+./run_all.sh --with-offckb
+./run_all.sh --with-fiber
+```
+
+`--with-fiber` pulls/checks the official Fiber Docker image. It does not import wallet keys, fund wallets, open channels, or spend assets.
+
+## C. Human-clickable deterministic demo
+
+Native:
 
 ```bash
 npm run dev
 ```
 
-Open `http://127.0.0.1:8787/` and exercise both ordinary and **Paid use** buttons.
+or Docker:
 
-This is simulation evidence only.
+```bash
+./deploy.sh demo
+```
 
-## D. CKB contract verification
+Open `http://127.0.0.1:8787/`.
+
+For Docker mode:
+
+```bash
+./deploy.sh status demo
+./deploy.sh smoke demo
+./deploy.sh stop demo
+```
+
+Windows equivalent:
+
+```bat
+deploy.cmd demo
+deploy.cmd status demo
+deploy.cmd smoke demo
+deploy.cmd stop demo
+```
+
+This is deterministic simulation evidence only.
+
+## D. CCC client and React frontend
+
+Install the declared dependencies, then type-check/build:
+
+```bash
+npm run setup
+npm run typecheck:ckb
+npm run build:web
+```
+
+The real browser path uses CCC. `@ckb-ccc/connector-react` is pinned to `1.1.9` in this bundle.
+
+## E. CKB Type Script
+
+With the required Rust/CKB RISC-V toolchain:
 
 ```bash
 npm run verify:contract
 ```
 
-or:
+or with Docker available:
 
 ```bash
 npm run verify:contract:docker
 ```
 
-Required cases include valid creation/transfer and rejection of malformed data, unsupported version/flags, forged creation ID, changed immutable fields, non-transferable owner change, unauthorized issue, and burn.
+Required cases include valid creation/transfer and rejection of malformed data, unsupported version/flags, forged creation identity, changed immutable fields, non-transferable owner changes, unauthorized issuance, and burn.
 
-## E. CCC client/frontend
-
-```bash
-npm install --prefix packages/ckb-client
-npm install --prefix apps/web
-npm run typecheck:ckb
-npm run build:web
-```
-
-CCC remains the wallet/transaction SDK used by the real CKB path.
-
-## F. Real CKB testnet
-
-```bash
-npm run bootstrap:live
-# edit .env.live using real deployment metadata
-npm run doctor:live
-docker compose -f compose.live.yaml up --build
-```
-
-Record real deployment, issue, and transfer transaction hashes.
-
-## G. Real Fiber adapter
-
-Install FNN using the project's wrapper around the official installer:
-
-```bash
-./run_all.sh --no-rust --with-fiber
-```
-
-Then point the facilitator at a receiver FNN RPC endpoint:
-
-```bash
-FIBER_BACKEND=fnn \
-FIBER_RPC_URL=http://127.0.0.1:8227 \
-FACILITATOR_STATE_FILE=.runtime/fiber-settled.json \
-npm run facilitator
-```
-
-A real payment test additionally needs a funded payer node/channel and should record the payment hash, status, and (where supported by the FNN version) successful payment preimage/receipt evidence.
-
-## H. Funding-ready evidence checklist
-
-Do not mark the system externally verified until all are public/reproducible:
-
-- CKB deployment tx hash;
-- issue tx hash;
-- transfer tx hash;
-- owner succeeds before transfer;
-- old owner rejected after transfer;
-- new owner succeeds;
-- real Fiber payment evidence;
-- payment replay rejection;
-- public URL;
-- passing CI;
-- unrelated tester report;
-- measured real network latency/error rates.
-
-## v0.4 deployment verification
-
-Fast reviewer path:
-
-```bash
-./deploy.sh demo
-./deploy.sh status demo
-```
-
-Real CKB testnet configuration:
+## F. Real CKB testnet configuration
 
 ```bash
 ./deploy.sh init-testnet
+# enter/import the real Capability Type Script deployment metadata
 ./deploy.sh doctor
 ./deploy.sh testnet
 ```
 
-If the run uses `FIBER_BACKEND=mock`, label the payment portion **staging/mock**. For real Fiber evidence, point `FIBER_BACKEND=fnn` at an independently configured FNN or use:
+Use `FIBER_BACKEND=mock` only for staging payment behavior. For real payment evidence use a real FNN receiver endpoint.
+
+The complete local-folder procedure is in `DEPLOY_STEP_BY_STEP.md`. Vietnamese deployment instructions are in `HUONG_DAN_TRIEN_KHAI.md`. Windows can use `deploy.cmd`/`deploy.ps1` with the same command names.
+
+## G. Real Fiber backend
+
+For an existing trusted FNN receiver, configure `.env.testnet`:
+
+```dotenv
+FIBER_BACKEND=fnn
+FIBER_NETWORK=testnet
+FIBER_RPC_URL=http://host.docker.internal:8227
+FIBER_PAYMENT_PROOF=invoice-status
+```
+
+Then:
+
+```bash
+./deploy.sh doctor
+./deploy.sh testnet
+```
+
+For the bundled official Fiber container profile:
 
 ```bash
 ./deploy.sh fiber-init /secure/path/to/ckb-private-key
 ./deploy.sh testnet-fiber
 ```
 
-Then record at minimum:
+`fiber-init` is deliberately explicit about the operator key. It never funds the key or opens channels.
 
-- CKB capability deployment transaction hash and code Cell index;
-- current capability out point before/after transfer;
-- Fiber invoice + payment hash for each paid request;
-- server `PAYMENT-RESPONSE` settlement object;
-- old-owner paid denial after transfer;
-- new-owner paid success after transfer;
-- `/readyz` output for SkillPass and facilitator;
-- FNN `fnn-cli info` output/version when using self-hosted Fiber.
+## H. Recovery checks worth running before public use
+
+Test at least these operational cases on your deployment:
+
+- restart SkillPass after a quote is issued and confirm the quote survives;
+- settle a paid request, retry the exact semantic request, and confirm no second payment is required within receipt retention;
+- verify a consumed payment is rejected by ordinary `/verify`;
+- confirm idempotent `/settle` returns the existing settlement for the same validated payment;
+- confirm changing text/capability/request identity rejects quote reuse;
+- back up and restore the SkillPass/facilitator state volumes;
+- for self-hosted Fiber, exercise the backup/restore process for the exact Fiber release you deploy.
+
+## I. Evidence required before stronger public claims
+
+Do not mark the system externally verified/mainnet-ready until you have real reproducible evidence for:
+
+- Capability Type Script deployment transaction and code Cell index;
+- real issue and transfer transactions;
+- owner success before transfer and old-owner denial after transfer;
+- new-owner success after transfer;
+- real Fiber invoice/payment/settlement evidence;
+- payment/request replay rejection;
+- public HTTPS endpoint;
+- production frontend build and contract tests;
+- independent tester reproduction;
+- measured real network latency/error rates and a soak period.

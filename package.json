@@ -1,6 +1,6 @@
 {
   "name": "ckb-skillpass-mvp",
-  "version": "0.4.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "dev": "node scripts/dev-cli.mjs demo",
     "dev:demo": "node scripts/dev-cli.mjs demo",
     "dev:web": "node scripts/dev-cli.mjs web",
+    "dev:frontend-only": "npm run dev --prefix apps/web",
     "dev:facilitator": "node scripts/dev-cli.mjs facilitator",
     "dev:live": "node scripts/dev-cli.mjs live",
     "check": "node scripts/dev-cli.mjs check",
@@ -41,6 +42,11 @@
     "deploy:init": "bash deploy.sh init-testnet",
     "deploy:doctor": "bash deploy.sh doctor",
     "deploy:testnet": "bash deploy.sh testnet",
-    "verify:deploy": "bash -n deploy.sh && node --check apps/live-service/server.mjs && node --check apps/fiber-facilitator/server.mjs && node --check packages/x402-fiber/src/http-client.mjs"
+    "verify:deploy": "bash -n deploy.sh && node --check apps/live-service/server.mjs && node --check apps/live-service/discovery.mjs && node --check scripts/dev-product.mjs && node --check apps/fiber-facilitator/server.mjs && node --check packages/x402-fiber/src/http-client.mjs",
+    "support": "node scripts/support-bundle.mjs",
+    "deploy:help": "node -e \"console.log(process.platform === 'win32' ? 'Run: deploy.cmd help' : 'Run: ./deploy.sh help')\"",
+    "test:security": "node --test packages/http-security/test/security.test.mjs tests/security-xss.test.mjs",
+    "smoke:security-browser": "node scripts/browser-security-smoke.mjs",
+    "verify:security": "npm run test:security && npm run smoke:security-browser"
   }
 }

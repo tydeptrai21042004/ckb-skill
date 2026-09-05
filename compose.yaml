@@ -5,6 +5,10 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "${SKILLPASS_BIND:-0.0.0.0}:${SKILLPASS_PORT:-8787}:8787"
+      - "${SKILLPASS_BIND:-127.0.0.1}:${SKILLPASS_PORT:-8787}:8787"
     restart: unless-stopped
     init: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
