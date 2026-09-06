@@ -7,7 +7,7 @@ import {
   normalizeHex32,
   hasFlag,
   FLAG_TRANSFERABLE,
-} from "../../capability-codec/src/index.mjs";
+} from "@skillpass/capability-codec";
 
 export type Deployment = {
   network: "devnet" | "testnet";

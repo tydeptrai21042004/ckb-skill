@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@ckb-ccc/ccc": "1.2.7"
+    "@ckb-ccc/ccc": "1.2.7",
+    "@skillpass/capability-codec": "0.7.0"
   },
   "devDependencies": {
     "tsx": "4.20.5",
@@ -11,5 +12,11 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "version": "1.0.0",
+  "exports": {
+    ".": "./src/live.ts",
+    "./live": "./src/live.ts",
+    "./challenge": "./src/challenge.ts"
   }
 }

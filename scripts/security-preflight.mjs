@@ -18,8 +18,8 @@ function mustNotMatch(path, regex, message) {
 }
 
 const vercel = json("vercel.json");
-if ((vercel.services?.api?.maxDuration ?? 9999) > 15) bad("vercel.json: api maxDuration must stay <=15s");
-if ((vercel.services?.facilitator?.maxDuration ?? 9999) > 12) bad("vercel.json: facilitator maxDuration must stay <=12s");
+if (Object.prototype.hasOwnProperty.call(vercel.services?.api ?? {}, "maxDuration")) bad("vercel.json: services.api.maxDuration is invalid in the current Vercel Services schema; configure duration in Vercel settings instead");
+if (Object.prototype.hasOwnProperty.call(vercel.services?.facilitator ?? {}, "maxDuration")) bad("vercel.json: services.facilitator.maxDuration is invalid in the current Vercel Services schema; configure duration in Vercel settings instead");
 const headers = JSON.stringify(vercel.headers || []);
 for (const required of [
   "Content-Security-Policy", "X-Content-Type-Options", "X-Frame-Options",
