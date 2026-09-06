@@ -30,6 +30,29 @@ const MIGRATIONS = [
         ON skillpass_payment_consumptions (consumed_at);
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS skillpass_challenges (
+        nonce TEXT PRIMARY KEY,
+        identity TEXT NOT NULL,
+        message TEXT NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX IF NOT EXISTS skillpass_challenges_expiry_idx
+        ON skillpass_challenges (expires_at);
+
+      CREATE TABLE IF NOT EXISTS skillpass_rate_limits (
+        rate_key TEXT PRIMARY KEY,
+        count INTEGER NOT NULL,
+        reset_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX IF NOT EXISTS skillpass_rate_limits_reset_idx
+        ON skillpass_rate_limits (reset_at);
+    `,
+  },
 ];
 
 export function createPostgresPool(env = process.env) {

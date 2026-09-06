@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   assertJsonRequest,
+  assertRequestEnvelope,
   baseSecurityHeaders,
   cleanPlainText,
   publicErrorMessage,
@@ -61,4 +62,17 @@ test("baseSecurityHeaders emits browser-hardening headers", () => {
   assert.equal(headers["cross-origin-resource-policy"], "same-origin");
   assert.match(headers["content-security-policy"], /object-src 'none'/);
   assert.match(headers["content-security-policy-report-only"], /require-trusted-types-for 'script'/);
+});
+
+
+test("assertRequestEnvelope rejects oversized URL and headers before route work", () => {
+  assert.throws(
+    () => assertRequestEnvelope({ url: `/${"x".repeat(3000)}`, headers: {} }, { maxUrlLength: 2048 }),
+    (error) => error.status === 414 && error.code === "URI_TOO_LONG",
+  );
+  assert.throws(
+    () => assertRequestEnvelope({ url: "/api/analyze", headers: { "x-big": "a".repeat(13000) } }, { maxSingleHeaderBytes: 12000 }),
+    (error) => error.status === 431 && error.code === "HEADER_TOO_LARGE",
+  );
+  assert.doesNotThrow(() => assertRequestEnvelope({ url: "/api/config", headers: { accept: "application/json" } }));
 });

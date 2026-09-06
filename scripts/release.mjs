@@ -10,6 +10,7 @@ rmSync(out, { force: true });
 // made a clean ZIP impossible to deploy. Only private/local config is excluded.
 const excludePatterns = [
   ".git/*", "*/.git/*",
+  ".vercel/*", "*/.vercel/*",
   ".env", "./.env",
   ".env.testnet", "./.env.testnet",
   ".env.live", "./.env.live",

@@ -43,6 +43,32 @@ export function rejectCrossSiteBrowserRequest(req) {
   }
 }
 
+export function assertRequestEnvelope(req, {
+  maxUrlLength = 2048,
+  maxHeaderBytes = 24 * 1024,
+  maxSingleHeaderBytes = 12 * 1024,
+} = {}) {
+  const rawUrl = String(req.url || "/");
+  if (rawUrl.length > maxUrlLength) {
+    throw Object.assign(new Error("request URL is too long"), { status: 414, code: "URI_TOO_LONG" });
+  }
+
+  let total = 0;
+  for (const [name, rawValue] of Object.entries(req.headers || {})) {
+    const values = Array.isArray(rawValue) ? rawValue : [rawValue ?? ""];
+    for (const value of values) {
+      const bytes = Buffer.byteLength(String(name)) + Buffer.byteLength(String(value)) + 4;
+      if (bytes > maxSingleHeaderBytes) {
+        throw Object.assign(new Error("request header is too large"), { status: 431, code: "HEADER_TOO_LARGE" });
+      }
+      total += bytes;
+    }
+  }
+  if (total > maxHeaderBytes) {
+    throw Object.assign(new Error("request headers are too large"), { status: 431, code: "HEADERS_TOO_LARGE" });
+  }
+}
+
 export function safeRequestUrl(req) {
   // Route parsing must never trust Host/X-Forwarded-Host. Public absolute URLs
   // are constructed separately, only from validated deployment/proxy config.

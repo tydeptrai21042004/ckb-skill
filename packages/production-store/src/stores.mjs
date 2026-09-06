@@ -114,6 +114,102 @@ export class PostgresReplayStore {
   }
 }
 
+
+export class PostgresChallengeStore {
+  constructor({ pool, ttlMs = 60_000, now = () => Date.now() } = {}) {
+    if (!pool) throw new Error("PostgresChallengeStore requires pool");
+    this.pool = pool;
+    this.ttlMs = ttlMs;
+    this.now = now;
+  }
+
+  async issue(identity, buildMessage) {
+    if (typeof identity !== "string" || identity.length === 0) throw new Error("identity must be non-empty");
+    if (typeof buildMessage !== "function") throw new Error("buildMessage is required");
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const nonce = randomBytes(24).toString("hex");
+      const expiresAt = this.now() + this.ttlMs;
+      const message = buildMessage({ nonce, identity, expiresAt });
+      const result = await this.pool.query(
+        `INSERT INTO skillpass_challenges(nonce, identity, message, expires_at)
+         VALUES ($1, $2, $3, to_timestamp($4::double precision / 1000.0))
+         ON CONFLICT (nonce) DO NOTHING`,
+        [nonce, identity, message, expiresAt],
+      );
+      if (result.rowCount === 1) return Object.freeze({ nonce, message, expiresAt });
+    }
+    throw new Error("could not allocate a unique challenge nonce");
+  }
+
+  async consume({ nonce, identity }) {
+    const normalized = String(nonce || "");
+    const { rows } = await this.pool.query(
+      `DELETE FROM skillpass_challenges
+        WHERE nonce = $1
+        RETURNING identity, message, extract(epoch from expires_at) * 1000 AS expires_ms`,
+      [normalized],
+    );
+    if (!rows.length) {
+      throw Object.assign(new Error("challenge nonce not found or already used"), { status: 401, code: "UNKNOWN_OR_REPLAYED_NONCE" });
+    }
+    const entry = rows[0];
+    if (this.now() >= Number(entry.expires_ms || 0)) {
+      throw Object.assign(new Error("challenge expired"), { status: 401, code: "EXPIRED_NONCE" });
+    }
+    if (entry.identity !== identity) {
+      throw Object.assign(new Error("challenge address mismatch"), { status: 401, code: "ADDRESS_MISMATCH" });
+    }
+    return Object.freeze({ message: entry.message, expiresAt: Math.trunc(Number(entry.expires_ms)) });
+  }
+}
+
+export class PostgresRateLimiter {
+  constructor({ pool, now = () => Date.now() } = {}) {
+    if (!pool) throw new Error("PostgresRateLimiter requires pool");
+    this.pool = pool;
+    this.now = now;
+    this.cleanupCounter = 0;
+  }
+
+  async consume(subject, { limit = 90, windowMs = 60_000 } = {}) {
+    if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("rate limit must be a positive integer");
+    if (!Number.isSafeInteger(windowMs) || windowMs < 100) throw new Error("rate window must be >=100ms");
+    const now = this.now();
+    const window = Math.floor(now / windowMs);
+    const hash = createHash("sha256").update(String(subject || "unknown")).digest("hex").slice(0, 32);
+    const key = `${windowMs}:${window}:${hash}`;
+    const resetAt = (window + 1) * windowMs;
+    const { rows } = await this.pool.query(
+      `INSERT INTO skillpass_rate_limits(rate_key, count, reset_at, updated_at)
+       VALUES ($1, 1, to_timestamp($2::double precision / 1000.0), clock_timestamp())
+       ON CONFLICT (rate_key) DO UPDATE
+       SET count = skillpass_rate_limits.count + 1, updated_at = clock_timestamp()
+       RETURNING count, extract(epoch from reset_at) * 1000 AS reset_ms`,
+      [key, resetAt],
+    );
+
+    this.cleanupCounter += 1;
+    if (this.cleanupCounter >= 100) {
+      this.cleanupCounter = 0;
+      void this.pool.query(
+        "DELETE FROM skillpass_rate_limits WHERE reset_at < clock_timestamp() - interval '10 minutes'",
+      ).catch(() => {});
+      void this.pool.query(
+        "DELETE FROM skillpass_challenges WHERE expires_at < clock_timestamp() - interval '10 minutes'",
+      ).catch(() => {});
+    }
+
+    const count = Number(rows[0]?.count || 0);
+    const storedResetAt = Number(rows[0]?.reset_ms || resetAt);
+    return {
+      allowed: count <= limit,
+      count,
+      limit,
+      retryAfterSeconds: Math.max(1, Math.ceil((storedResetAt - now) / 1000)),
+    };
+  }
+}
+
 export class RedisChallengeStore {
   constructor({ client, ttlMs = 60_000, prefix = "skillpass:challenge:", now = () => Date.now() } = {}) {
     if (!client) throw new Error("RedisChallengeStore requires client");

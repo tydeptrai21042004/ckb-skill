@@ -27,8 +27,8 @@ export class MockFiberBackend {
 }
 
 export class FnnFiberBackend {
-  constructor({ rpcUrl, token = "", client = null } = {}) {
-    this.client = client ?? new FiberRpcClient({ url: rpcUrl, token });
+  constructor({ rpcUrl, token = "", timeoutMs = 15_000, client = null } = {}) {
+    this.client = client ?? new FiberRpcClient({ url: rpcUrl, token, timeoutMs });
   }
   async createInvoice({ amount, currency = "Fibt", description = "SkillPass API call", expiry = 3600 }) {
     const paymentPreimage = `0x${randomBytes(32).toString("hex")}`;
