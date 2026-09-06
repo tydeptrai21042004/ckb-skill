@@ -1,4 +1,4 @@
-import { ccc } from "@ckb-ccc/ccc";
+import { ccc } from "@ckb-ccc/connector-react";
 import {
   decodeCapability,
   encodeCapabilityHex,

@@ -4,7 +4,8 @@
   "type": "module",
   "dependencies": {
     "@ckb-ccc/ccc": "1.2.7",
-    "@skillpass/capability-codec": "0.7.0"
+    "@skillpass/capability-codec": "0.7.0",
+    "@ckb-ccc/connector-react": "1.1.9"
   },
   "devDependencies": {
     "tsx": "4.20.5",

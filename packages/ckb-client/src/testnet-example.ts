@@ -2,7 +2,7 @@
  * Copy this into a wallet-connected CCC environment (CCC Playground or React)
  * and supply the signer + SkillPass deployment. No private key is accepted.
  */
-import { ccc } from "@ckb-ccc/ccc";
+import { ccc } from "@ckb-ccc/connector-react";
 import { FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
 import { PAPER_ANALYZER_V1_SERVICE_ID } from "@skillpass/capability-codec/service-ids";
 import { buildIssueCapabilityTx, sendAndWait, type Deployment } from "./live.js";
