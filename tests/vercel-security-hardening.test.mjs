@@ -24,10 +24,10 @@ test("public status is shallow and deep readiness is opt-in/token guarded", asyn
   assert.doesNotMatch(status, /await readiness\(\)/);
 });
 
-test("Vercel functions and database pool are bounded for cost safety", async () => {
+test("Vercel Services schema stays valid and database pool is bounded for cost safety", async () => {
   const vercel = JSON.parse(await readFile(join(ROOT, "vercel.json"), "utf8"));
-  assert.ok(vercel.services.api.maxDuration <= 15);
-  assert.ok(vercel.services.facilitator.maxDuration <= 12);
+  assert.equal(Object.prototype.hasOwnProperty.call(vercel.services.api, "maxDuration"), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(vercel.services.facilitator, "maxDuration"), false);
   const config = await readFile(join(ROOT, "packages/production-store/src/config.mjs"), "utf8");
   assert.match(config, /env\.VERCEL \? 2 : 20/);
   assert.match(config, /statement_timeout:\s*8_000/);

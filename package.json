@@ -64,5 +64,9 @@
     "security:preflight": "node scripts/security-preflight.mjs",
     "verify:vercel:secure": "bash -n setup-vercel.sh && bash -n setup-vercel-firewall.sh && node scripts/security-preflight.mjs && node --test tests/vercel-config.test.mjs tests/vercel-easy-deploy.test.mjs tests/vercel-security-hardening.test.mjs packages/http-security/test/security.test.mjs",
     "vercel:env:gui": "bash collect-vercel-env.sh"
-  }
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }

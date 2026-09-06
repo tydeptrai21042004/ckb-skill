@@ -5,7 +5,6 @@
       "root": "apps/web/",
       "framework": "vite"
     },
-
     "api": {
       "root": "apps/live-service/",
       "entrypoint": "server.ts",
@@ -18,13 +17,58 @@
         }
       ]
     },
-
     "facilitator": {
       "root": "apps/fiber-facilitator/",
       "entrypoint": "server.ts"
     }
   },
-
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        },
+        {
+          "key": "X-Permitted-Cross-Domain-Policies",
+          "value": "none"
+        },
+        {
+          "key": "Cross-Origin-Resource-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=31536000"
+        },
+        {
+          "key": "X-DNS-Prefetch-Control",
+          "value": "off"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; manifest-src 'self'"
+        },
+        {
+          "key": "Content-Security-Policy-Report-Only",
+          "value": "require-trusted-types-for 'script'; trusted-types 'none'"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/:path*",

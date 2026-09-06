@@ -89,11 +89,12 @@ else
   ok "Using $(offckb --version)"
 
   info "Reading the OffCKB Testnet deployer account"
-  ACCOUNTS_JSON="$(offckb --json accounts 2>"$ROOT_DIR/.offckb-accounts.log")" || {
-    cat "$ROOT_DIR/.offckb-accounts.log" >&2 || true
-    die "Could not read OffCKB accounts."
-  }
-  DEPLOYER_ADDRESS="$(printf '%s' "$ACCOUNTS_JSON" | node -e '
+  if offckb --help 2>&1 | grep -q -- "--json"; then
+    ACCOUNTS_JSON="$(offckb --json accounts 2>"$ROOT_DIR/.offckb-accounts.log")" || {
+      cat "$ROOT_DIR/.offckb-accounts.log" >&2 || true
+      die "Could not read OffCKB accounts."
+    }
+    DEPLOYER_ADDRESS="$(printf '%s' "$ACCOUNTS_JSON" | node -e '
 let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{
   const j=JSON.parse(s); const a=Array.isArray(j)?j:(j.accounts||j.result?.accounts||[]);
   if(!Array.isArray(a)||!a.length) process.exit(2);
@@ -102,18 +103,36 @@ let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{
   if(!/^ckt1[a-z0-9]+$/i.test(address)) process.exit(3);
   process.stdout.write(address);
 });')" || die "Could not determine the Testnet deployer address from OffCKB JSON output."
+  else
+    ACCOUNTS_TEXT="$(offckb accounts 2>"$ROOT_DIR/.offckb-accounts.log")" || {
+      cat "$ROOT_DIR/.offckb-accounts.log" >&2 || true
+      die "Could not read OffCKB accounts."
+    }
+    DEPLOYER_ADDRESS="$(printf '%s\n' "$ACCOUNTS_TEXT" | grep -Eo 'ckt1[0-9a-z]+' | tail -n 1)"
+    [[ -n "$DEPLOYER_ADDRESS" ]] || die "Could not determine the Testnet deployer address from OffCKB text output."
+  fi
   printf 'Testnet deployer address: %s\n' "$DEPLOYER_ADDRESS"
 
   info "Checking Testnet CKB balance"
-  BALANCE_JSON="$(offckb --json balance "$DEPLOYER_ADDRESS" --network testnet --no-udt 2>"$ROOT_DIR/.offckb-balance.log")" || {
-    cat "$ROOT_DIR/.offckb-balance.log" >&2 || true
-    die "Could not query the Testnet balance."
-  }
-  BALANCE_CKB="$(printf '%s' "$BALANCE_JSON" | node -e '
+  if offckb --help 2>&1 | grep -q -- "--json"; then
+    BALANCE_JSON="$(offckb --json balance "$DEPLOYER_ADDRESS" --network testnet --no-udt 2>"$ROOT_DIR/.offckb-balance.log")" || {
+      cat "$ROOT_DIR/.offckb-balance.log" >&2 || true
+      die "Could not query the Testnet balance."
+    }
+    BALANCE_CKB="$(printf '%s' "$BALANCE_JSON" | node -e '
 let s=""; process.stdin.on("data",c=>s+=c); process.stdin.on("end",()=>{
-  const j=JSON.parse(s); const v=Number(j.ckb ?? j.result?.ckb ?? 0);
+  const j=JSON.parse(s); const v=Number(j.ckb ?? j.result?.ckb ?? j.balance ?? 0);
   if(!Number.isFinite(v)) process.exit(2); process.stdout.write(String(v));
 });')" || die "Could not parse OffCKB balance output."
+  else
+    BALANCE_TEXT="$(offckb balance "$DEPLOYER_ADDRESS" --network testnet 2>"$ROOT_DIR/.offckb-balance.log")" || {
+      cat "$ROOT_DIR/.offckb-balance.log" >&2 || true
+      die "Could not query the Testnet balance."
+    }
+    BALANCE_CKB="$(printf '%s\n' "$BALANCE_TEXT" | sed -nE 's/.*Balance:[[:space:]]*([0-9]+([.][0-9]+)?)[[:space:]]*CKB.*/\1/p' | head -n 1)"
+    [[ -n "$BALANCE_CKB" ]] || BALANCE_CKB="$(printf '%s\n' "$BALANCE_TEXT" | grep -Eo '[0-9]+([.][0-9]+)?[[:space:]]*CKB' | head -n 1 | grep -Eo '[0-9]+([.][0-9]+)?')"
+    [[ -n "$BALANCE_CKB" ]] || die "Could not parse OffCKB text balance output."
+  fi
   printf 'Current Testnet balance: %s CKB\n' "$BALANCE_CKB"
 
   NEED_FUNDS="$(node -e "process.stdout.write(Number(process.argv[1]) < Number(process.argv[2]) ? '1' : '0')" "$BALANCE_CKB" "$MIN_BALANCE_CKB")"
