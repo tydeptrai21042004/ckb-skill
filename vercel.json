@@ -8,7 +8,11 @@
     "api": {
       "root": "apps/live-service/",
       "entrypoint": "server.ts",
-      "maxDuration": 15,
+      "functions": {
+        "server.ts": {
+          "maxDuration": 15
+        }
+      },
       "bindings": [
         {
           "type": "service",
@@ -21,21 +25,49 @@
     "facilitator": {
       "root": "apps/fiber-facilitator/",
       "entrypoint": "server.ts",
-      "maxDuration": 12
+      "functions": {
+        "server.ts": {
+          "maxDuration": 12
+        }
+      }
     }
   },
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "no-referrer" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()" },
-        { "key": "X-Permitted-Cross-Domain-Policies", "value": "none" },
-        { "key": "Cross-Origin-Resource-Policy", "value": "same-origin" },
-        { "key": "Strict-Transport-Security", "value": "max-age=31536000" },
-        { "key": "X-DNS-Prefetch-Control", "value": "off" },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        },
+        {
+          "key": "X-Permitted-Cross-Domain-Policies",
+          "value": "none"
+        },
+        {
+          "key": "Cross-Origin-Resource-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=31536000"
+        },
+        {
+          "key": "X-DNS-Prefetch-Control",
+          "value": "off"
+        },
         {
           "key": "Content-Security-Policy",
           "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; img-src 'self' data: blob: https:; font-src 'self' data:; frame-src https:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; manifest-src 'self'"
@@ -50,27 +82,39 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": { "service": "api" }
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/.well-known/:path*",
-      "destination": { "service": "api" }
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/health",
-      "destination": { "service": "api" }
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/readyz",
-      "destination": { "service": "api" }
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/livez",
-      "destination": { "service": "api" }
+      "destination": {
+        "service": "api"
+      }
     },
     {
       "source": "/(.*)",
-      "destination": { "service": "web" }
+      "destination": {
+        "service": "web"
+      }
     }
   ]
 }
