@@ -9,7 +9,6 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
-    "@ckb-ccc/ccc": "1.2.7",
     "@ckb-ccc/connector-react": "1.1.9",
     "react": "19.0.0",
     "react-dom": "19.0.0",
