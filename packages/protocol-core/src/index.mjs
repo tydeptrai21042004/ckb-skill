@@ -50,7 +50,7 @@ export function validateTransition({ inputData, outputData, inputLockHash, outpu
     ["expiry", "expiry"],
   ]) {
     if (before[field] !== after[field]) {
-      throw new ProtocolError("IMMUTABLE_FIELD_CHANGED", `${label} is immutable in MVP transitions`);
+      throw new ProtocolError("IMMUTABLE_FIELD_CHANGED", `${label} is immutable in capability v1 transitions`);
     }
   }
 
@@ -70,7 +70,7 @@ export function validateGroupShape({ inputCount, outputCount }) {
   if (inputCount === 0 && outputCount === 1) return "ISSUE";
   if (inputCount === 1 && outputCount === 1) return "TRANSITION";
   if (inputCount === 1 && outputCount === 0) {
-    throw new ProtocolError("BURN_FORBIDDEN", "capability destruction is not enabled in MVP");
+    throw new ProtocolError("BURN_FORBIDDEN", "capability destruction is not enabled in capability v1");
   }
   throw new ProtocolError("INVALID_GROUP_SHAPE", `expected 0->1 or 1->1, got ${inputCount}->${outputCount}`);
 }

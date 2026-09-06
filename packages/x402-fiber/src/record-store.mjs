@@ -2,11 +2,11 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /**
- * Small single-process JSON record store.
+ * Small single-process JSON record store for local development and deterministic tests.
  *
- * It is intentionally simple for reproducible testnet deployments. Writes are
- * serialized and persisted with an atomic rename. It is NOT a distributed lock
- * and must be replaced by an atomic shared store before horizontal scaling.
+ * Writes are serialized and persisted with an atomic rename. Production uses
+ * packages/production-store (PostgreSQL + Redis); this class intentionally does
+ * not pretend to be a distributed lock.
  */
 export class JsonRecordStore {
   #entries = new Map();
@@ -69,6 +69,14 @@ export class JsonRecordStore {
     }
     if (removed) await this.#persist();
     return removed;
+  }
+
+  async pruneExpiredByExpiresAt(prefix, nowMs = this.now()) {
+    return this.prune((row, key) => key.startsWith(String(prefix)) && Number(row.expiresAt || 0) > 0 && Number(row.expiresAt) <= Number(nowMs));
+  }
+
+  async pruneUpdatedBefore(prefix, beforeMs) {
+    return this.prune((row, key) => key.startsWith(String(prefix)) && Number(row.updatedAt || 0) <= Number(beforeMs));
   }
 
   async size() {

@@ -31,7 +31,7 @@ If the input and output lock hashes differ, `transferable` must be true. If the 
 
 ## Destruction
 
-MVP destruction is rejected: a group input with no group output fails. Explicit revocation/burn semantics are deferred to Phase 2.
+Capability v1 destruction is rejected: a group input with no group output fails. Explicit revocation/burn semantics are deferred to Phase 2.
 
 ## Service authorization
 

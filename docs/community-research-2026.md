@@ -116,6 +116,8 @@ A transferable Capability Cell represents the durable right. Short-lived agent s
 
 ### D. Shared atomic state before horizontal scaling
 
+> **Implemented in v1.0:** the production profile now uses PostgreSQL for durable replay/quote/receipt state and Redis for one-time challenges/rate limits. The paragraph below records the earlier gap that motivated that change.
+
 The current JSON persistence is an appropriate simple deployment improvement, but it is single-process. Multiple SkillPass/facilitator replicas require an atomic shared datastore so the same payment cannot race across replicas.
 
 ### E. Operational observability

@@ -59,7 +59,7 @@ paid && current capability owner      => ALLOW
 - Fiber payment does not prove SkillPass ownership.
 - SkillPass ownership does not prove payment.
 - mock payment endpoints are local-test only.
-- file-backed replay state is single-process only.
+- local/test file-backed replay state is single-process only; the production profile uses PostgreSQL atomic replay consumption.
 - real FNN RPC requires least-privilege authentication and network isolation.
 - service delivery vs payment-consumption persistence needs production idempotency/crash recovery.
 
