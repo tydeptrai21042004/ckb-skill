@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
-  "dependencies": {
-    "@skillpass/production-store": "file:../../packages/production-store"
+  "engines": {
+    "node": ">=22"
   },
-  "scripts": { "start": "node server.mjs" }
+  "dependencies": {
+    "@skillpass/production-store": "1.0.0"
+  },
+  "scripts": {
+    "start": "node server.mjs"
+  }
 }

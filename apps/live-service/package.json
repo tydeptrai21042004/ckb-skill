@@ -8,9 +8,9 @@
   },
   "dependencies": {
     "@ckb-ccc/ccc": "1.2.7",
-    "@skillpass/capability-codec": "file:../../packages/capability-codec",
-    "@skillpass/x402-fiber": "file:../../packages/x402-fiber",
-    "@skillpass/production-store": "file:../../packages/production-store"
+    "@skillpass/capability-codec": "0.7.0",
+    "@skillpass/x402-fiber": "0.7.0",
+    "@skillpass/production-store": "1.0.0"
   },
   "scripts": {
     "start": "node server.mjs"

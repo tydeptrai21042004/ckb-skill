@@ -7,8 +7,8 @@ import {
   discoverOwnedCapabilities,
   sendAndWait,
   type Deployment,
-} from "../../../packages/ckb-client/src/live";
-import { FLAG_TRANSFERABLE } from "../../../packages/capability-codec/src/index.mjs";
+} from "@skillpass/ckb-client/live";
+import { FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
 
 type RuntimeConfig = {
   network: "testnet";

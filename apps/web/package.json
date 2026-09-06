@@ -13,7 +13,9 @@
     "@ckb-ccc/connector-react": "1.1.9",
     "react": "19.0.0",
     "react-dom": "19.0.0",
-    "react-qr-code": "2.2.0"
+    "react-qr-code": "2.2.0",
+    "@skillpass/ckb-client": "1.0.0",
+    "@skillpass/capability-codec": "0.7.0"
   },
   "devDependencies": {
     "@types/react": "19.0.0",
