@@ -4,6 +4,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import {
   assertJsonRequest,
+  assertRequestEnvelope,
   baseSecurityHeaders,
   publicErrorMessage,
   rejectCrossSiteBrowserRequest,
@@ -42,27 +43,43 @@ const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
 const ALLOW_DEV_PAYMENT = MODE === "mock" && process.env.ALLOW_DEV_PAYMENT === "true";
 const AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
 const FIBER_RPC_TOKEN = readSecret("FIBER_RPC_TOKEN");
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true";
+const MAX_BODY_BYTES = Number(process.env.FACILITATOR_MAX_REQUEST_BODY_BYTES || 32 * 1024);
+const FIBER_RPC_TIMEOUT_MS = Number(process.env.FIBER_RPC_TIMEOUT_MS || 8_000);
 
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("FACILITATOR_PORT must be 1..65535");
+if (!Number.isSafeInteger(MAX_BODY_BYTES) || MAX_BODY_BYTES < 4096 || MAX_BODY_BYTES > 64 * 1024) throw new Error("FACILITATOR_MAX_REQUEST_BODY_BYTES must be 4096..65536");
+if (!Number.isSafeInteger(FIBER_RPC_TIMEOUT_MS) || FIBER_RPC_TIMEOUT_MS < 1000 || FIBER_RPC_TIMEOUT_MS > 15_000) throw new Error("FIBER_RPC_TIMEOUT_MS must be 1000..15000");
 if (!["mock", "fnn"].includes(MODE)) throw new Error("FIBER_BACKEND must be mock or fnn");
 if (!["testnet", "mainnet"].includes(NETWORK_NAME)) throw new Error("FIBER_NETWORK must be testnet or mainnet");
 if (!["invoice-status", "preimage"].includes(PROOF_MODE)) throw new Error("FIBER_PAYMENT_PROOF must be invoice-status or preimage");
 if (MODE === "fnn" && !AUTH_TOKEN) throw new Error("FACILITATOR_AUTH_TOKEN is required when FIBER_BACKEND=fnn");
+if (IS_PUBLIC_PRODUCTION && AUTH_TOKEN.length < 32) throw new Error("FACILITATOR_AUTH_TOKEN must be at least 32 characters in public production");
+if (IS_PUBLIC_PRODUCTION && ALLOW_DEV_PAYMENT) throw new Error("ALLOW_DEV_PAYMENT=true is forbidden in public production");
+if (IS_PUBLIC_PRODUCTION && STATE_BACKEND === "local") throw new Error("STATE_BACKEND=local is forbidden in public production; use postgres");
+
+if (MODE === "fnn") {
+  const rpc = new URL(process.env.FIBER_RPC_URL || "http://127.0.0.1:8227");
+  if (!["http:", "https:"].includes(rpc.protocol)) throw new Error("FIBER_RPC_URL must use http:// or https://");
+  if (IS_PUBLIC_PRODUCTION && rpc.protocol !== "https:") throw new Error("FIBER_RPC_URL must use https:// in public production");
+  if (IS_VERCEL && /^(localhost|127\.0\.0\.1|::1)$/i.test(rpc.hostname)) throw new Error("FIBER_RPC_URL cannot point to localhost from Vercel");
+}
 
 const backend = MODE === "fnn"
-  ? new FnnFiberBackend({ rpcUrl: process.env.FIBER_RPC_URL || "http://127.0.0.1:8227", token: FIBER_RPC_TOKEN })
+  ? new FnnFiberBackend({ rpcUrl: process.env.FIBER_RPC_URL, token: FIBER_RPC_TOKEN, timeoutMs: FIBER_RPC_TIMEOUT_MS })
   : new MockFiberBackend();
 
 let postgresPool = null;
 let replayStore;
 if (STATE_BACKEND === "local") {
   replayStore = new ReplayStore({ file: STATE_FILE });
-} else if (STATE_BACKEND === "postgres-redis") {
+} else if (STATE_BACKEND === "postgres" || STATE_BACKEND === "postgres-redis") {
   postgresPool = createPostgresPool();
   await migratePostgres(postgresPool);
   replayStore = new PostgresReplayStore({ pool: postgresPool });
 } else {
-  throw new Error("STATE_BACKEND must be local or postgres-redis");
+  throw new Error("STATE_BACKEND must be local, postgres, or postgres-redis");
 }
 
 const facilitator = new FiberFacilitator({
@@ -87,7 +104,7 @@ async function body(req) {
   const chunks = []; let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 64 * 1024) throw Object.assign(new Error("body too large"), { status: 413, code: "BODY_TOO_LARGE" });
+    if (size > MAX_BODY_BYTES) throw Object.assign(new Error("body too large"), { status: 413, code: "BODY_TOO_LARGE" });
     chunks.push(chunk);
   }
   if (!chunks.length) return {};
@@ -111,9 +128,19 @@ function requireAuth(req) {
 const server = http.createServer(async (req, res) => {
   res.__skillpassRequestId = randomUUID();
   try {
+    assertRequestEnvelope(req);
     const url = safeRequestUrl(req);
+
     if (req.method === "GET" && url.pathname === "/livez") return send(res, 200, { ok: true, service: "skillpass-facilitator" });
-    if (req.method === "GET" && (url.pathname === "/readyz" || url.pathname === "/health")) {
+    if (req.method === "GET" && url.pathname === "/health") {
+      // Public health is deliberately shallow: it must not let an attacker turn
+      // health polling into FNN or database work.
+      return send(res, 200, { ok: true, service: "skillpass-facilitator", mode: MODE, network: NETWORK });
+    }
+    if (req.method === "GET" && url.pathname === "/supported") return send(res, 200, facilitator.supported());
+
+    if (req.method === "GET" && url.pathname === "/readyz") {
+      requireAuth(req);
       const upstream = await backend.health();
       const version = upstream?.node?.version ?? upstream?.version;
       const state = postgresPool ? await postgresHealth(postgresPool) : { ok: true, skipped: true };
@@ -127,25 +154,28 @@ const server = http.createServer(async (req, res) => {
         upstream: { ok: Boolean(upstream?.ok), backend: upstream?.backend || MODE, ...(version ? { version: String(version).slice(0, 80) } : {}) },
       });
     }
-    // Capabilities are intentionally discoverable; mutating/verification APIs
-    // remain protected when a facilitator token is configured.
-    if (req.method === "GET" && url.pathname === "/supported") return send(res, 200, facilitator.supported());
 
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "")) {
+    const mutating = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method || "");
+    if (mutating) {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
     }
+
+    // Unknown routes are rejected before JSON parsing or Fiber/database work.
+    const allowedPost = new Set(["/invoice", "/verify", "/settle", "/dev/pay"]);
+    if (req.method === "POST" && !allowedPost.has(url.pathname)) return send(res, 404, { error: "not_found" });
+
     requireAuth(req);
     if (req.method === "POST" && url.pathname === "/invoice") {
       const input = await body(req);
       const amount = String(input.amount || "100000");
-      if (!/^[1-9][0-9]*$/.test(amount)) throw Object.assign(new Error("amount must be positive atomic-unit integer string"), { code: "INVALID_AMOUNT" });
+      if (!/^[1-9][0-9]{0,31}$/.test(amount)) throw Object.assign(new Error("amount must be a positive atomic-unit integer string with at most 32 digits"), { code: "INVALID_AMOUNT" });
       const expiry = Number(input.expiry ?? 3600);
       if (!Number.isSafeInteger(expiry) || expiry < 1 || expiry > 3600) throw Object.assign(new Error("expiry must be 1..3600 seconds"), { code: "INVALID_EXPIRY" });
       const currency = String(input.currency || (NETWORK === FIBER_MAINNET ? "Fibb" : "Fibt")).trim();
       const description = String(input.description || "SkillPass paid API").trim();
       if (!currency || currency.length > 32) throw Object.assign(new Error("currency must be 1..32 characters"), { code: "INVALID_CURRENCY" });
-      if (!description || description.length > 512) throw Object.assign(new Error("description must be 1..512 characters"), { code: "INVALID_DESCRIPTION" });
+      if (!description || description.length > 256) throw Object.assign(new Error("description must be 1..256 characters"), { code: "INVALID_DESCRIPTION" });
       const created = await backend.createInvoice({ amount, currency, description, expiry });
       return send(res, 201, created);
     }
@@ -153,7 +183,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/settle") return send(res, 200, await facilitator.settle(await body(req)));
     if (req.method === "POST" && url.pathname === "/dev/pay" && ALLOW_DEV_PAYMENT) {
       const input = await body(req);
-      const invoice = await backend.markPaid(input.paymentHash, input.payer || "mock-payer");
+      if (typeof input.paymentHash !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(input.paymentHash)) {
+        throw Object.assign(new Error("paymentHash must be 32-byte hex"), { code: "INVALID_PAYMENT_HASH" });
+      }
+      const invoice = await backend.markPaid(input.paymentHash, String(input.payer || "mock-payer").slice(0, 128));
       return send(res, 200, {
         ok: true,
         invoice: {
@@ -174,8 +207,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.requestTimeout = 30_000;
-server.headersTimeout = 15_000;
+server.requestTimeout = 12_000;
+server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 80;
 

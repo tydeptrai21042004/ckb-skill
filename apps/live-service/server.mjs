@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
@@ -28,6 +28,7 @@ import { createLiveRuntimeState } from "./runtime-state.mjs";
 import { buildDiscovery, buildOpenApi } from "./discovery.mjs";
 import {
   assertJsonRequest,
+  assertRequestEnvelope,
   baseSecurityHeaders,
   publicErrorMessage,
   rejectCrossSiteBrowserRequest,
@@ -51,7 +52,17 @@ const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
 const STARTED_AT = Date.now();
-const MAX_BODY = 40 * 1024;
+const IS_VERCEL = Boolean(process.env.VERCEL);
+const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true";
+const MAX_BODY = Number(process.env.MAX_REQUEST_BODY_BYTES || 36 * 1024);
+const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 12 * 1024);
+const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
+const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
+const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
+const GLOBAL_CHALLENGE_RATE_LIMIT = Number(process.env.GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE || 240);
+const GLOBAL_ANALYZE_RATE_LIMIT = Number(process.env.GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE || 120);
+const ENABLE_DEEP_HEALTH = process.env.ENABLE_DEEP_HEALTH === "true";
+const DEEP_HEALTH_TOKEN = readSecret("DEEP_HEALTH_TOKEN");
 const CHALLENGE_TTL_MS = Number(process.env.CHALLENGE_TTL_MS || 60_000);
 const ENABLE_PUBLIC_ISSUE = process.env.ENABLE_PUBLIC_ISSUE === "true";
 const PAYMENTS_REQUIRED = process.env.PAYMENTS_REQUIRED === "true";
@@ -67,15 +78,31 @@ const FIBER_NETWORK = FIBER_NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_T
 const FACILITATOR_URL = process.env.FACILITATOR_URL || "http://127.0.0.1:8790";
 const FACILITATOR_AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
 const facilitator = PAYMENTS_REQUIRED
-  ? new FacilitatorHttpClient({ baseUrl: FACILITATOR_URL, token: FACILITATOR_AUTH_TOKEN })
+  ? new FacilitatorHttpClient({ baseUrl: FACILITATOR_URL, token: FACILITATOR_AUTH_TOKEN, timeoutMs: UPSTREAM_TIMEOUT_MS })
   : null;
 
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT must be 1..65535");
+if (!Number.isSafeInteger(MAX_BODY) || MAX_BODY < 8 * 1024 || MAX_BODY > 64 * 1024) throw new Error("MAX_REQUEST_BODY_BYTES must be 8192..65536");
+if (!Number.isSafeInteger(PAYMENT_HEADER_MAX_BYTES) || PAYMENT_HEADER_MAX_BYTES < 1024 || PAYMENT_HEADER_MAX_BYTES > 16 * 1024) throw new Error("PAYMENT_HEADER_MAX_BYTES must be 1024..16384");
+if (!Number.isSafeInteger(UPSTREAM_TIMEOUT_MS) || UPSTREAM_TIMEOUT_MS < 1000 || UPSTREAM_TIMEOUT_MS > 15_000) throw new Error("UPSTREAM_TIMEOUT_MS must be 1000..15000");
+for (const [name, value, max] of [
+  ["CHALLENGE_RATE_LIMIT_PER_MINUTE", CHALLENGE_RATE_LIMIT, 120],
+  ["ANALYZE_RATE_LIMIT_PER_MINUTE", ANALYZE_RATE_LIMIT, 60],
+  ["GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE", GLOBAL_CHALLENGE_RATE_LIMIT, 5000],
+  ["GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE", GLOBAL_ANALYZE_RATE_LIMIT, 2000],
+]) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${name} must be 1..${max}`);
+}
 if (!Number.isSafeInteger(CHALLENGE_TTL_MS) || CHALLENGE_TTL_MS < 5_000 || CHALLENGE_TTL_MS > 10 * 60_000) throw new Error("CHALLENGE_TTL_MS must be 5000..600000");
 if (!Number.isSafeInteger(SERVICE_RECEIPT_TTL_SECONDS) || SERVICE_RECEIPT_TTL_SECONDS < 60 || SERVICE_RECEIPT_TTL_SECONDS > 30 * 24 * 3600) {
   throw new Error("SERVICE_RECEIPT_TTL_SECONDS must be 60..2592000");
 }
 if (PUBLIC_BASE_URL && !/^https?:\/\//i.test(PUBLIC_BASE_URL)) throw new Error("PUBLIC_BASE_URL must start with http:// or https://");
+if (IS_PUBLIC_PRODUCTION && PUBLIC_BASE_URL && !PUBLIC_BASE_URL.startsWith("https://")) throw new Error("PUBLIC_BASE_URL must use https:// in public production");
+if (IS_PUBLIC_PRODUCTION && ENABLE_PUBLIC_ISSUE) throw new Error("ENABLE_PUBLIC_ISSUE=true is forbidden in the hardened public production profile");
+if (IS_PUBLIC_PRODUCTION && process.env.ALLOW_DEV_PAYMENT === "true") throw new Error("ALLOW_DEV_PAYMENT=true is forbidden in public production");
+if (IS_PUBLIC_PRODUCTION && STATE_BACKEND === "local") throw new Error("STATE_BACKEND=local is forbidden in public production; use postgres");
+if (ENABLE_DEEP_HEALTH && IS_PUBLIC_PRODUCTION && DEEP_HEALTH_TOKEN.length < 32) throw new Error("DEEP_HEALTH_TOKEN must be at least 32 characters when deep health is enabled in public production");
 if (!/^[1-9][0-9]*$/.test(PAYMENT_AMOUNT)) throw new Error("PAYMENT_AMOUNT must be a positive atomic-unit integer string");
 if (!Number.isSafeInteger(PAYMENT_TIMEOUT_SECONDS) || PAYMENT_TIMEOUT_SECONDS < 1 || PAYMENT_TIMEOUT_SECONDS > 3600) {
   throw new Error("PAYMENT_TIMEOUT_SECONDS must be 1..3600");
@@ -95,12 +122,19 @@ function requireHex32(name, value) {
 const deployment = Object.freeze({
   network: "testnet",
   codeHash: requireHex32("CAPABILITY_CODE_HASH", process.env.CAPABILITY_CODE_HASH),
-  hashType: process.env.CAPABILITY_HASH_TYPE || "data1",
+  hashType: String(process.env.CAPABILITY_HASH_TYPE || "").trim(),
   depTxHash: requireHex32("CAPABILITY_DEP_TX_HASH", process.env.CAPABILITY_DEP_TX_HASH),
   depIndex: Number(process.env.CAPABILITY_DEP_INDEX || 0),
 });
-if (!["data", "data1", "data2", "type"].includes(deployment.hashType)) throw new Error("CAPABILITY_HASH_TYPE is invalid");
+if (!["data", "data1", "data2", "type"].includes(deployment.hashType)) throw new Error("CAPABILITY_HASH_TYPE is required and must be data, data1, data2, or type");
 if (!Number.isSafeInteger(deployment.depIndex) || deployment.depIndex < 0) throw new Error("CAPABILITY_DEP_INDEX is invalid");
+
+if (process.env.CKB_RPC_URL) {
+  const rpc = new URL(process.env.CKB_RPC_URL);
+  if (!['http:', 'https:'].includes(rpc.protocol)) throw new Error("CKB_RPC_URL must use http:// or https://");
+  if (IS_PUBLIC_PRODUCTION && rpc.protocol !== 'https:') throw new Error("CKB_RPC_URL must use https:// in public production");
+  if (IS_VERCEL && /^(localhost|127\.0\.0\.1|::1)$/i.test(rpc.hostname)) throw new Error("CKB_RPC_URL cannot point to localhost from Vercel");
+}
 
 const client = process.env.CKB_RPC_URL
   ? new ccc.ClientPublicTestnet(process.env.CKB_RPC_URL)
@@ -120,7 +154,7 @@ const runtimeState = await createLiveRuntimeState({
 const serviceState = runtimeState.serviceState;
 const challenges = runtimeState.challenges;
 const rateLimiter = runtimeState.rateLimiter;
-const READINESS_CACHE_MS = 5_000;
+const READINESS_CACHE_MS = 30_000;
 let readinessCache = null;
 let readinessInFlight = null;
 
@@ -154,8 +188,23 @@ async function consumeChallenge(nonce, address) {
   return challenges.consume({ nonce, identity: address });
 }
 
+async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out`), { status: 503, code: "UPSTREAM_TIMEOUT" })), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function verifyLiveCapability({ outPoint, requesterAddress }) {
-  const cell = await client.getCellLive(outPoint, true, true);
+  const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
   const type = cell.cellOutput.type;
   if (!type || type.codeHash !== deployment.codeHash || type.hashType !== deployment.hashType) {
@@ -189,6 +238,14 @@ function paymentBinding({ address, outPoint, text }) {
 
 function resourceUrl(req) {
   if (PUBLIC_BASE_URL) return `${PUBLIC_BASE_URL}/api/analyze`;
+  // On Vercel prefer the platform-owned canonical host instead of any
+  // request-supplied Host/X-Forwarded-Host value. This prevents host-header
+  // injection from changing the resource URL bound into a payment request.
+  if (IS_VERCEL) {
+    const vercelHost = String(process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || "").trim();
+    if (/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(vercelHost)) return `https://${vercelHost}/api/analyze`;
+    throw Object.assign(new Error("Vercel canonical production URL is unavailable"), { status: 503, code: "PUBLIC_URL_UNAVAILABLE" });
+  }
   if (!TRUST_PROXY) return `http://127.0.0.1:${PORT}/api/analyze`;
   const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
@@ -204,14 +261,13 @@ async function prunePaymentState() {
 async function createPaymentQuote(req, body) {
   validatePaperInput(body.text);
   await prunePaymentState();
-  // Reject obvious stale/non-owner requests before asking the user to pay.
-  await verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address });
-  const invoice = await facilitator.invoice({
+  // Caller ownership has already been verified before this function is called.
+  const invoice = await withTimeout(facilitator.invoice({
     amount: PAYMENT_AMOUNT,
     currency: PAYMENT_CURRENCY,
     description: "SkillPass paper-analyzer-v1",
     expiry: PAYMENT_TIMEOUT_SECONDS,
-  });
+  }), "facilitator invoice");
   const requirement = {
     scheme: "exact",
     network: FIBER_NETWORK,
@@ -246,6 +302,9 @@ async function createPaymentQuote(req, body) {
 async function verifyPaymentHeader(req, body) {
   const header = req.headers["payment-signature"];
   if (!header) return null;
+  if (Buffer.byteLength(String(header)) > PAYMENT_HEADER_MAX_BYTES) {
+    throw Object.assign(new Error("payment signature header is too large"), { status: 431, code: "PAYMENT_HEADER_TOO_LARGE" });
+  }
   await prunePaymentState();
   const paymentPayload = decodeHeaderJson(String(header), "PAYMENT-SIGNATURE");
   const hash = String(paymentPayload?.payload?.paymentHash || "").toLowerCase();
@@ -266,7 +325,7 @@ async function verifyPaymentHeader(req, body) {
   if (quote.binding !== binding) {
     throw Object.assign(new Error("payment quote belongs to a different capability/request"), { status: 402, code: "PAYMENT_REQUEST_BINDING_MISMATCH" });
   }
-  const verification = await facilitator.verify({ x402Version: 2, paymentPayload, paymentRequirements: quote.requirement });
+  const verification = await withTimeout(facilitator.verify({ x402Version: 2, paymentPayload, paymentRequirements: quote.requirement }), "facilitator verify");
   if (!verification?.isValid) {
     // A persisted quote plus facilitator replay evidence means settlement may
     // have completed immediately before a service crash. The protected paper
@@ -283,7 +342,7 @@ async function verifyPaymentHeader(req, body) {
 async function settlePayment(payment, result) {
   if (!payment) return null;
   if (payment.alreadySettled) return payment.receipt.settlement;
-  const settlement = await facilitator.settle({ x402Version: 2, paymentPayload: payment.paymentPayload, paymentRequirements: payment.quote.requirement });
+  const settlement = await withTimeout(facilitator.settle({ x402Version: 2, paymentPayload: payment.paymentPayload, paymentRequirements: payment.quote.requirement }), "facilitator settle");
   if (!settlement?.success) {
     throw Object.assign(new Error(settlement?.errorReason || "Fiber payment settlement failed"), { status: 402, code: settlement?.errorReason || "PAYMENT_SETTLEMENT_FAILED" });
   }
@@ -295,21 +354,58 @@ async function settlePayment(payment, result) {
 }
 
 function requestKey(req) {
-  if (TRUST_PROXY) {
+  if (IS_VERCEL) {
+    const forwarded = String(req.headers["x-vercel-forwarded-for"] || req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    if (forwarded) return forwarded.slice(0, 128);
+  } else if (TRUST_PROXY) {
     const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
     if (forwarded) return forwarded.slice(0, 128);
   }
   return req.socket.remoteAddress || "unknown";
 }
 
-async function rateLimit(req, limit = 90, windowMs = 60_000) {
-  const result = await rateLimiter.consume(requestKey(req), { limit, windowMs });
-  if (!result.allowed) {
-    throw Object.assign(new Error("rate limit exceeded"), {
+const localBurst = new Map();
+const globalBlockedUntil = new Map();
+function localPreLimit(subject, route, limit, windowMs = 60_000) {
+  const now = Date.now();
+  const key = `${route}:${subject}`;
+  let item = localBurst.get(key);
+  if (!item || now >= item.resetAt) item = { count: 0, resetAt: now + windowMs };
+  item.count += 1;
+  localBurst.set(key, item);
+  if (localBurst.size > 5000) {
+    for (const [k, v] of localBurst) if (now >= v.resetAt) localBurst.delete(k);
+    while (localBurst.size > 5000) localBurst.delete(localBurst.keys().next().value);
+  }
+  if (item.count > limit) {
+    throw Object.assign(new Error("rate limit exceeded"), { status: 429, code: "RATE_LIMITED", retryAfterSeconds: Math.max(1, Math.ceil((item.resetAt - now) / 1000)) });
+  }
+}
+
+async function rateLimit(req, route, perIpLimit, globalLimit, windowMs = 60_000) {
+  const subject = requestKey(req);
+  const blockedUntil = globalBlockedUntil.get(route) || 0;
+  if (Date.now() < blockedUntil) {
+    throw Object.assign(new Error("service capacity guard reached"), {
       status: 429,
-      code: "RATE_LIMITED",
-      retryAfterSeconds: result.retryAfterSeconds,
+      code: "GLOBAL_RATE_LIMITED",
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntil - Date.now()) / 1000)),
     });
+  }
+  // Cheap per-instance burst gate prevents a single hot instance from turning
+  // every abusive request into a database query. PostgreSQL remains the shared
+  // limiter across Vercel instances.
+  localPreLimit(subject, route, Math.max(2, Math.ceil(perIpLimit * 1.5)), windowMs);
+
+  const perIp = await rateLimiter.consume(`${route}:ip:${subject}`, { limit: perIpLimit, windowMs });
+  if (!perIp.allowed) {
+    throw Object.assign(new Error("rate limit exceeded"), { status: 429, code: "RATE_LIMITED", retryAfterSeconds: perIp.retryAfterSeconds });
+  }
+
+  const global = await rateLimiter.consume(`${route}:global`, { limit: globalLimit, windowMs });
+  if (!global.allowed) {
+    globalBlockedUntil.set(route, Date.now() + Math.max(1000, global.retryAfterSeconds * 1000));
+    throw Object.assign(new Error("service capacity guard reached"), { status: 429, code: "GLOBAL_RATE_LIMITED", retryAfterSeconds: global.retryAfterSeconds });
   }
 }
 
@@ -324,6 +420,34 @@ async function jsonBody(req) {
   if (!raw) return {};
   try { return JSON.parse(raw); }
   catch { throw Object.assign(new Error("request body must be valid JSON"), { status: 400, code: "INVALID_JSON" }); }
+}
+
+function validateProtectedShape(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw Object.assign(new Error("request body must be a JSON object"), { status: 400, code: "INVALID_BODY" });
+  if (typeof body.address !== "string" || body.address.length < 8 || body.address.length > 256) throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
+  if (typeof body.nonce !== "string" || !/^[0-9a-f]{48}$/i.test(body.nonce)) throw Object.assign(new Error("nonce is invalid"), { status: 400, code: "INVALID_NONCE" });
+  if (!body.signature || typeof body.signature !== "object" || body.signature.identity !== body.address) {
+    throw Object.assign(new Error("SkillPass requires a CKB-native wallet signature bound to the connected CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
+  }
+  validatePaperInput(body.text);
+  outPointFromJson(body.outPoint);
+}
+
+async function authenticateProtectedRequest(body) {
+  validateProtectedShape(body);
+  const challenge = await consumeChallenge(body.nonce, body.address);
+  const valid = await ccc.Signer.verifyMessage(challenge.message, body.signature);
+  if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
+  return verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address });
+}
+
+function bearerMatches(req, expected) {
+  if (!expected) return false;
+  const header = String(req.headers.authorization || "");
+  const value = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const left = Buffer.from(value);
+  const right = Buffer.from(expected);
+  return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
 }
 
 const LIVE_CSP = [
@@ -389,7 +513,7 @@ async function computeReadiness() {
   let tip = null;
 
   try {
-    tip = (await client.getTip()).toString();
+    tip = (await withTimeout(client.getTip(), "CKB tip")).toString();
     dependencies.ckb = { ok: true };
   } catch (error) {
     dependencies.ckb = { ok: false, error: "CKB RPC unavailable" };
@@ -397,7 +521,7 @@ async function computeReadiness() {
 
   if (PAYMENTS_REQUIRED) {
     try {
-      const upstream = await facilitator.ready();
+      const upstream = await withTimeout(facilitator.ready(), "facilitator readiness");
       dependencies.facilitator = {
         ok: Boolean(upstream?.ok),
         mode: upstream?.mode,
@@ -449,19 +573,35 @@ async function readiness() {
 const server = http.createServer(async (req, res) => {
   res.__skillpassRequestId = randomUUID();
   try {
+    assertRequestEnvelope(req);
     const url = safeRequestUrl(req);
-    if (url.pathname === "/livez") return sendJson(res, 200, { ok: true, service: "skillpass-live" });
+
+    // Cheap, cacheable/public endpoints must never hit CKB, Fiber, or PostgreSQL.
+    if (req.method === "GET" && url.pathname === "/livez") {
+      return sendJson(res, 200, { ok: true, service: "skillpass-live" }, {
+        "cache-control": "public, max-age=30",
+        "vercel-cdn-cache-control": "max-age=60",
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/health") {
+      return sendJson(res, 200, { ok: true, service: "skillpass-live", mode: "ckb-testnet" }, {
+        "cache-control": "public, max-age=30",
+        "vercel-cdn-cache-control": "max-age=60",
+      });
+    }
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
-      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }));
+      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
+        "cache-control": "public, max-age=60",
+        "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
+      });
     }
     if (req.method === "GET" && url.pathname === "/api/openapi.json") {
-      return sendJson(res, 200, buildOpenApi({ paymentsRequired: PAYMENTS_REQUIRED, maxInputChars: MAX_INPUT_CHARS }));
+      return sendJson(res, 200, buildOpenApi({ paymentsRequired: PAYMENTS_REQUIRED, maxInputChars: MAX_INPUT_CHARS }), {
+        "cache-control": "public, max-age=300",
+        "vercel-cdn-cache-control": "max-age=3600, stale-while-revalidate=86400",
+      });
     }
-    if (url.pathname === "/readyz" || url.pathname === "/health" || url.pathname === "/api/status") {
-      const report = await readiness();
-      return sendJson(res, report.ok ? 200 : 503, report);
-    }
-    if (url.pathname === "/api/config") {
+    if (req.method === "GET" && url.pathname === "/api/config") {
       return sendJson(res, 200, {
         network: "testnet",
         deployment,
@@ -470,47 +610,87 @@ const server = http.createServer(async (req, res) => {
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
         limits: { maxInputChars: MAX_INPUT_CHARS },
         payments: publicPaymentConfig(),
+      }, {
+        "cache-control": "public, max-age=60",
+        "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
     }
-    if (req.method === "POST") {
+
+    // Public status is intentionally shallow. It avoids a 30-second browser poll
+    // becoming an unlimited CKB/DB/Fiber bill. Protected requests still verify
+    // CKB ownership against live chain state on every use.
+    if (req.method === "GET" && url.pathname === "/api/status") {
+      return sendJson(res, 200, {
+        ok: true,
+        mode: "ckb-testnet",
+        network: "testnet",
+        service: "paper-analyzer-v1",
+        paymentsRequired: PAYMENTS_REQUIRED,
+        paymentProof: PAYMENTS_REQUIRED ? (process.env.FIBER_PAYMENT_PROOF || "invoice-status") : "disabled",
+        dependencies: {
+          ckb: { ok: true, checked: "on-protected-request" },
+          facilitator: { ok: true, skipped: !PAYMENTS_REQUIRED, checked: PAYMENTS_REQUIRED ? "on-payment-request" : "disabled" },
+          state: { ok: true, backend: STATE_BACKEND, checked: "on-protected-request" },
+        },
+      }, {
+        "cache-control": "public, max-age=30",
+        "vercel-cdn-cache-control": "max-age=60, stale-while-revalidate=120",
+      });
+    }
+
+    if (req.method === "GET" && url.pathname === "/readyz") {
+      if (!ENABLE_DEEP_HEALTH) return sendJson(res, 404, { error: "not_found" });
+      if (IS_PUBLIC_PRODUCTION && !bearerMatches(req, DEEP_HEALTH_TOKEN)) {
+        return sendJson(res, 401, { error: "auth_required", message: "deep health authentication required" });
+      }
+      const report = await readiness();
+      return sendJson(res, report.ok ? 200 : 503, report);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/challenge") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      await rateLimit(req);
-    }
-    if (req.method === "POST" && url.pathname === "/api/challenge") {
       const { address } = await jsonBody(req);
+      if (typeof address !== "string" || address.length < 8 || address.length > 256) {
+        throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
+      }
+      // Validate the address before spending a PostgreSQL rate-limit write.
+      await ccc.Address.fromString(address, client);
+      await rateLimit(req, "challenge", CHALLENGE_RATE_LIMIT, GLOBAL_CHALLENGE_RATE_LIMIT);
       return sendJson(res, 200, await issueChallenge(address));
     }
+
     if (req.method === "POST" && url.pathname === "/api/analyze") {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
       const requestBody = await jsonBody(req);
-      const { address, nonce, signature, outPoint, text } = requestBody;
+      validateProtectedShape(requestBody);
+      await rateLimit(req, "analyze", ANALYZE_RATE_LIMIT, GLOBAL_ANALYZE_RATE_LIMIT);
+
+      // Authentication + live CKB ownership happen BEFORE any Fiber invoice or
+      // payment verification. An unauthenticated caller cannot make the service
+      // spend money on facilitator/FNN work.
+      const verified = await authenticateProtectedRequest(requestBody);
 
       let payment = null;
       if (PAYMENTS_REQUIRED) {
         if (!req.headers["payment-signature"]) {
           const required = await createPaymentQuote(req, requestBody);
-          return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
+          return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with a fresh wallet challenge and PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
         }
         payment = await verifyPaymentHeader(req, requestBody);
       }
 
-      const challenge = await consumeChallenge(nonce, address);
-      if (!signature || signature.identity !== address) {
-        throw Object.assign(new Error("SkillPass requires a CKB-native wallet whose signature identity equals the CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
-      }
-      const valid = await ccc.Signer.verifyMessage(challenge.message, signature);
-      if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
-      const verified = await verifyLiveCapability({ outPoint: outPointFromJson(outPoint), requesterAddress: address });
-
-      // x402 authorization flow: verify -> resource -> settle -> respond.
-      // Compute/validate the protected result before settlement so a handler
-      // failure cannot consume the payment without producing deliverable work.
-      const result = payment?.alreadySettled ? payment.receipt.result : analyzePaper(text);
+      const result = payment?.alreadySettled ? payment.receipt.result : analyzePaper(requestBody.text);
       const settlement = await settlePayment(payment, result);
       const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
       return sendJson(res, 200, { ok: true, capabilityId: verified.capability.capabilityId, result, payment: settlement }, headers);
     }
-    if (req.method === "GET" && url.pathname.startsWith("/api/")) return sendJson(res, 404, { error: "not_found" });
+
+    if (url.pathname.startsWith("/api/")) {
+      if (!["GET", "HEAD"].includes(req.method || "")) return sendJson(res, 405, { error: "method_not_allowed" }, { allow: "GET, HEAD, POST" });
+      return sendJson(res, 404, { error: "not_found" });
+    }
     if (req.method === "GET" || req.method === "HEAD") {
       if (await sendStatic(res, url.pathname)) return;
     }
@@ -524,8 +704,8 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.requestTimeout = 30_000;
-server.headersTimeout = 15_000;
+server.requestTimeout = 12_000;
+server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 80;
 

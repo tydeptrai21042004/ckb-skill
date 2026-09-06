@@ -5,6 +5,8 @@ import {
   migratePostgres,
   postgresHealth,
   PostgresRecordStore,
+  PostgresChallengeStore,
+  PostgresRateLimiter,
   RedisChallengeStore,
   RedisRateLimiter,
   redisHealth,
@@ -66,13 +68,29 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
       async close() {},
     };
   }
-  if (backend !== "postgres-redis") throw new Error("STATE_BACKEND must be local or postgres-redis");
+  if (!["postgres", "postgres-redis"].includes(backend)) {
+    throw new Error("STATE_BACKEND must be local, postgres, or postgres-redis");
+  }
 
   const pool = createPostgresPool(env);
   await migratePostgres(pool);
-  const redis = await createRedisClientFromEnv(env);
   const recordStore = new PostgresRecordStore({ pool, namespace: "live-service" });
 
+  if (backend === "postgres") {
+    return {
+      backend,
+      serviceState: new LiveServiceState({ store: recordStore }),
+      challenges: new PostgresChallengeStore({ pool, ttlMs: challengeTtlMs }),
+      rateLimiter: new PostgresRateLimiter({ pool }),
+      async health() {
+        const postgres = await postgresHealth(pool);
+        return { ok: postgres.ok, backend, postgres, redis: { ok: true, skipped: true } };
+      },
+      async close() { await pool.end(); },
+    };
+  }
+
+  const redis = await createRedisClientFromEnv(env);
   return {
     backend,
     serviceState: new LiveServiceState({ store: recordStore }),

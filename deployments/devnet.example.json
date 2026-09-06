@@ -1,7 +1,7 @@
 {
   "network": "devnet",
   "codeHash": "0xREPLACE_AFTER_REAL_DEPLOYMENT",
-  "hashType": "data1",
+  "hashType": "data2",
   "depTxHash": "0xREPLACE_AFTER_REAL_DEPLOYMENT",
   "depIndex": 0
 }
