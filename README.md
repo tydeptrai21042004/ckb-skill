@@ -6,33 +6,31 @@ The production profile combines that authorization rule with Fiber/x402-style pa
 
 > **Production deploy:** start with [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md), then run `./deploy-production.sh init`, `doctor`, and `up`.
 
-> **Easy Vercel deploy:** open Git Bash/WSL in the repository root and run `bash setup-vercel.sh`. The script can fund/deploy the CKB Testnet contract when needed, extract the exact OffCKB metadata, generate Vercel ENV, connect Neon, upload ENV, and run `vercel --prod`. See [`VERCEL_DEPLOY_VI.md`](VERCEL_DEPLOY_VI.md). Redis is not required for this path.
+> **Recommended Vercel GUI deploy:** run `bash collect-vercel-env.sh` locally to deploy/reuse the CKB Testnet contract and generate `.env.vercel.gui`, then do the rest from the Vercel Dashboard. The script never logs in to Vercel and never uploads secrets. See [`HUONG_DAN_VERCEL_GUI_VI.md`](HUONG_DAN_VERCEL_GUI_VI.md). Neon supplies `DATABASE_URL`; Redis is not required.
+
+> **Optional CLI deploy:** `bash setup-vercel.sh` remains available for users who explicitly want Vercel CLI automation.
 
 > **Before publishing the URL:** run `npm run security:preflight`, configure `bash setup-vercel-firewall.sh`, and follow [`HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md`](HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md). The hardened Vercel profile keeps real Fiber payments off initially, uses a 2-connection Postgres pool per instance, bounded request/upstream timeouts, and cheap public health/status endpoints.
 
 
-## One-command Vercel quick start
+## Vercel GUI quick start
 
-Prerequisites: Node.js 22, Rust/Cargo, and Git Bash or WSL on Windows. No local PostgreSQL, Redis, Docker, or CKB node is required.
+Prerequisites for the first CKB contract deployment: Node.js 22, Rust/Cargo, and Git Bash or WSL on Windows. No local PostgreSQL, Redis, Docker, CKB node, or Vercel CLI is required.
 
 ```bash
-bash setup-vercel.sh
+bash collect-vercel-env.sh
 ```
 
-If a valid `deployments/testnet.json` already exists, the script reuses it and does **not** deploy the contract again. On a fresh setup it uses OffCKB Testnet tooling, calls the public faucet only when the deployer balance is low, deploys `capability-type`, reads OffCKB's `scripts.json`, and creates both:
+The script creates:
 
 ```text
 deployments/testnet.json
-.env.vercel.generated
+.env.vercel.gui
 ```
 
-It then links Vercel, starts the Neon integration when `DATABASE_URL` is missing, uploads the generated SkillPass variables, validates the configuration, and deploys production. After deployment your PC can be turned off.
+Then use only the Vercel Dashboard: import the repository, paste `.env.vercel.gui` into Project Settings -> Environment Variables, connect Neon from Storage/Marketplace so `DATABASE_URL` is injected automatically, and Deploy/Redeploy. See [`HUONG_DAN_VERCEL_GUI_VI.md`](HUONG_DAN_VERCEL_GUI_VI.md).
 
-To stop after generating CKB metadata + Vercel ENV:
-
-```bash
-SKILLPASS_SKIP_VERCEL=1 bash setup-vercel.sh
-```
+If a valid `deployments/testnet.json` already exists, `collect-vercel-env.sh` reuses it and does not spend Testnet CKB again.
 
 ## What v1.0 changes
 
