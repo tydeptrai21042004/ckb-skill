@@ -3,15 +3,12 @@
 
 use ckb_std::{
     ckb_constants::Source,
-    ckb_hash::new_blake2b,
-    ckb_types::{bytes::Bytes, packed::Uint64, prelude::*},
+    ckb_types::{bytes::Bytes, prelude::*},
     default_alloc,
     entry,
     error::SysError,
-    high_level::{
-        load_cell_data, load_cell_lock_hash, load_cell_type_hash, load_input, load_script,
-        load_script_hash, QueryIter,
-    },
+    high_level::{load_cell_data, load_cell_lock_hash, load_script, QueryIter},
+    type_id::validate_type_id,
 };
 
 default_alloc!();
@@ -115,32 +112,11 @@ fn enforce_identity(
     Ok(())
 }
 
-/// Reproduces the Type-ID creation rule for the *capability_id* half of args:
-/// CKB hash(serialized tx.inputs[0] || packed u64 output_index).
-///
-/// Binding a capability's identifier to a consumed input makes fresh issuance
-/// unique: the same out point cannot be consumed again in another valid tx.
+/// Validates the capability_id half of args using ckb-std's official
+/// Type-ID creation rule. Keeping this delegated to ckb-std avoids duplicating
+/// the consensus-facing hash construction in this contract.
 fn verify_creation_id(capability_arg: &[u8; 32]) -> Result<(), Error> {
-    let first_input = load_input(0, Source::Input)?;
-    let current_script_hash = load_script_hash()?;
-
-    // GroupOutput index 0 is not necessarily transaction output index 0, so
-    // locate the matching Type Script in the full output list.
-    let output_index = QueryIter::new(load_cell_type_hash, Source::Output)
-        .position(|type_hash| type_hash == Some(current_script_hash))
-        .ok_or(Error::InvalidCreationId)?;
-
-    let packed_index: Uint64 = (output_index as u64).pack();
-    let mut hasher = new_blake2b();
-    hasher.update(first_input.as_slice());
-    hasher.update(packed_index.as_slice());
-    let mut expected = [0u8; 32];
-    hasher.finalize(&mut expected);
-
-    if &expected != capability_arg {
-        return Err(Error::InvalidCreationId);
-    }
-    Ok(())
+    validate_type_id(capability_arg).map_err(|_| Error::InvalidCreationId)
 }
 
 fn verify_issue(
