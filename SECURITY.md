@@ -1,97 +1,125 @@
-# Security Notes — v0.6
+# SkillPass Security Model — v1.0
 
-## Key custody
+## Scope
 
-- The live API never needs or accepts a user's wallet private key or seed phrase.
-- CKB issue/transfer transactions are signed through the connected CCC wallet.
-- The local `TestWallet` is deterministic test code only.
-- `run_all.sh --with-fiber` pulls/checks the official Fiber Docker image but does not import keys, create/fund channels, or move assets.
+SkillPass v1.0 is designed for a public multi-user **CKB testnet** service. The production profile supports multiple application replicas with shared PostgreSQL/Redis state. This is not a claim that the Capability Type Script or Fiber integration has received an independent mainnet security audit.
 
-## Authorization rule
+## Trust boundaries
 
-A protected paid request is authorized only when **all** required predicates hold:
+### User wallet
+
+The user's CKB private key stays in the wallet. SkillPass receives only address, challenge signature and transaction/outpoint data needed for verification. The web/backend must never request, upload, log or persist a user's seed phrase/private key.
+
+### CKB RPC
+
+The live service treats the configured CKB RPC as an availability/data dependency and re-checks the live Cell when protected access is attempted. Production should use a dedicated/self-hosted RPC rather than treating a community endpoint as an SLA-backed dependency.
+
+### Fiber/FNN
+
+The facilitator talks to a private FNN RPC. FNN node/operator credentials are infrastructure secrets and are separate from user wallet keys. FNN RPC must not be exposed publicly just because the web service is public.
+
+### Facilitator
+
+The facilitator is private to the Docker/backend network and authenticated with a bearer secret. Production refuses the mock payment backend.
+
+## Distributed production state
+
+Production requires:
 
 ```text
-payment valid (or an exact persisted crash-recovery settlement)
-AND wallet challenge valid
-AND referenced Capability Cell is live
-AND Capability Type/identity matches
-AND service + expiry policy matches
-AND current Cell owner matches requester
+STATE_BACKEND=postgres-redis
 ```
 
-Payment alone never grants capability access.
+PostgreSQL stores durable quote/receipt/payment-consumption state. `payment_hash` is a primary key and first consumption uses `INSERT ... ON CONFLICT DO NOTHING`, which provides one winner under concurrent replicas.
 
-## Replay protection
+Redis stores short-lived wallet challenge state and distributed IP rate-limit counters. Challenge consumption uses Redis `GETDEL`, so a nonce is removed atomically when consumed. Rate limiting uses an atomic Lua `INCR`/`PEXPIRE` operation.
 
-- wallet challenge nonces are single-use and expiring;
-- local x402/Fiber verification rejects consumed settlement hashes; `/settle` itself is idempotent and returns the existing receipt for the same validated payment;
-- file-backed payment replay state uses atomic temp-file rename for a single process;
-- payment quotes are request-bound, file-backed in the live profile, and expire from persistent service state;
-- successful paid delivery receipts are persisted so a dropped HTTP response can be retried without consuming a second payment, and old receipts are pruned after the configured retention window;
-- the persisted replay loader shares one in-flight load promise so concurrent first-use requests cannot bypass state loaded from disk.
+The JSON record/replay stores remain only as local deterministic development fallbacks and are not used by `deploy/compose.production.yaml`.
 
-The file-backed replay store is **not a distributed lock**. Before running multiple replicas, use a shared store with atomic compare-and-set/unique-key semantics.
+## Authentication and authorization
 
-## Fiber/x402 compatibility boundary
+A protected request requires all applicable checks:
 
-`packages/x402-fiber` is explicitly experimental. The project does not claim its custom `ckb:fiber-*` scheme/network pair is an upstream registered x402 scheme. Track the official Fiber/x402 work and replace/adapt this harness when the upstream interface stabilizes.
+1. a fresh wallet challenge;
+2. one-time challenge consume;
+3. valid CCC CKB-native wallet signature;
+4. requester address matches the signature identity;
+5. referenced Cell is still live;
+6. Cell Type Script matches the configured deployment;
+7. capability data/type args are internally consistent;
+8. service ID matches the protected service;
+9. capability is not expired;
+10. current live Cell lock equals the requester lock;
+11. if payments are enabled, x402/Fiber payment verification succeeds.
 
-## Crash/settlement boundary
+Authorization is therefore tied to current CKB state, not a provider-owned entitlement database.
 
-The live paid path follows verify → resource execution → settle → persist receipt → respond. The protected result is computed before payment consumption. Settlement is idempotent, and the service retains the request-bound quote until the successful delivery receipt is persisted; for this side-effect-free analyzer, a restart in the narrow post-settlement/pre-receipt window can recompute the result and recover the already-consumed settlement without charging again.
+## Payment replay and crash recovery
 
-Delivery receipts default to 24-hour retention (`SERVICE_RECEIPT_TTL_SECONDS`) because they contain protected results. Secure the state volume and tune retention deliberately.
+A payment quote is bound to the semantic protected request (requester, capability outpoint, input and service). Reusing it for a changed request is rejected.
 
-The remaining boundary is multi-process/distributed atomicity: the included JSON stores serialize writes only inside one process. Multiple replicas require a shared atomic store and explicit idempotency keys.
+The facilitator's durable payment-consumption record prevents replay across processes/restarts. Settlement is idempotent for the exact same requirement/payer. SkillPass stores the protected delivery receipt before returning the successful HTTP response so a client can retry safely after a dropped connection.
 
-## FNN RPC
+A narrow crash after facilitator consumption but before receipt persistence is recovered by the idempotent settlement path. The current protected paper analyzer is side-effect free, so recomputing the same bound result during recovery is safe.
 
-For real FNN:
+## Browser and HTTP hardening
 
-- bind RPC privately where possible;
-- use the narrowest supported Biscuit/Bearer capability;
-- never expose dev/admin RPC scopes to the public internet;
-- treat payment/channel state as valuable operational state and back it up according to the active FNN release.
+The repo includes:
 
-## Mainnet
+- restrictive security headers and CSP;
+- no intentional raw-HTML rendering sink in the application UI;
+- adversarial XSS tests;
+- JSON-only state-changing browser requests;
+- cross-site request rejection using Fetch Metadata where available;
+- body-size limits at edge and app;
+- request/header/keepalive timeouts;
+- bounded headers;
+- generic 5xx public messages;
+- request IDs;
+- explicit removal of the application-specific `PAYMENT-SIGNATURE` header from Caddy access logs;
+- no raw CKB/Fiber/database error strings in public readiness output;
+- readiness caching so health polling does not continuously amplify CKB/Fiber RPC calls.
 
-Mainnet is not claimed ready. Complete independent Type Script/service review and real testnet acceptance first.
+See `BAO_MAT_XSS_VI.md` for the browser-focused checklist.
 
-## Dependency reproducibility
+## Infrastructure hardening
 
-- JavaScript dependency versions in the manifests are pinned exactly; once `npm install` succeeds, keep the generated `package-lock.json` files and use `npm ci` on subsequent runs.
-- The contract pins Rust `1.95.0`, `ckb-std = 1.1.0`, and `ckb-testtool = 1.1.1` exactly.
-- If `contracts/capability-type/Cargo.lock` is absent, `run_all.sh` generates it on the first Rust-enabled run. Commit/preserve that generated lockfile for release artifacts and use the same lockfile in CI/review builds.
-- Review dependency updates deliberately; do not regenerate lockfiles as an incidental deployment step.
+The production Compose profile exposes only Caddy on 80/443. SkillPass, facilitator, PostgreSQL and Redis have no host-published ports. The data backend network is marked internal; application/facilitator services also have a separate egress-capable network for CKB/Fiber dependencies.
 
+Application containers use non-root Node, read-only root filesystems, `no-new-privileges`, dropped Linux capabilities, PID limits and memory limits. Secrets are mounted as Docker Compose secret files and excluded from Git/Docker build context.
 
-## Deployment security in v0.6
+Caddy terminates HTTPS, sets HSTS and security headers, enforces an edge request-body limit and dynamically discovers scaled SkillPass replicas.
 
-- `FACILITATOR_AUTH_TOKEN` should be a random secret; `deploy.sh init-testnet` generates one automatically.
-- The testnet Compose stack does not publish the facilitator port externally and publishes SkillPass to loopback by default.
-- The optional self-hosted Fiber profile publishes only FNN P2P port 8228. Its RPC is reachable only on the private Compose network.
-- `fiber-init` refuses to overwrite an existing `.runtime/fiber-node/ckb/key`. It never generates, funds, or spends from a wallet.
-- `.env.testnet`, `.env.live`, `.runtime/`, and `.tooling/` are gitignored and must not be included in release archives.
-- `PAYMENTS_REQUIRED=true` does not make the system mainnet-ready; shared atomic nonce/replay storage and a full settlement/delivery idempotency design remain required before horizontal scaling.
+## Secret handling
 
+Do not commit or copy into a support bundle:
 
-## Payment proof modes
+- `.env.production`;
+- `.secrets/*`;
+- wallet private keys/seed phrases;
+- Fiber node private keys;
+- payment preimages;
+- bearer tokens;
+- database/Redis passwords.
 
-- `invoice-status` is the compatibility default: the trusted receiver-side Fiber node reports that the invoice is paid.
-- `preimage` additionally requires a 32-byte payment preimage whose SHA-256 hash matches the invoice payment hash, and still checks receiver-side paid status.
-- Payment preimages are sensitive operational proof material. Do not log them, store them in analytics, or expose them in error messages.
-- The preimage mode is optional because upstream Fiber/x402 integration is still evolving.
+`deploy-production.sh init` generates service secrets locally. File permissions are tightened where supported.
 
-## v0.8 web/XSS hardening
+## Privacy
 
-SkillPass v0.8 adds a shared HTTP-security layer and dedicated adversarial tests. Both frontends continue to avoid raw HTML sinks; the local demo additionally enforces Trusted Types. The live CCC frontend sends Trusted Types in report-only mode until the supported wallet matrix can be browser-tested. State-changing browser requests are JSON-only and reject `Sec-Fetch-Site: cross-site`. Route parsing no longer trusts the Host header, and public error strings are stripped of control/bidi characters and capped before response.
+Delivery receipts can contain protected results. They are retained for bounded retry/recovery (`SERVICE_RECEIPT_TTL_SECONDS`, default 24h). Operators should choose retention appropriate to the data, encrypt disks/backups as needed, restrict DB access, and avoid logging protected results.
 
-Run:
+## Availability and abuse resistance
 
-```bash
-npm run test:security
-npm run smoke:security-browser
-```
+The production stack has health checks, restart policies, distributed rate limiting, resource limits and multiple app replicas. Those controls do not replace upstream DDoS protection. A high-traffic public deployment should additionally use network/provider DDoS controls, external monitoring, disk/DB alerts and capacity/load testing.
 
-See `BAO_MAT_XSS_VI.md` for the Vietnamese security/deployment checklist and tested XSS payload families.
+## Backup and restore
+
+`./deploy-production.sh backup` creates a PostgreSQL application-state dump. It deliberately does not back up Fiber node/channel state. Fiber/FNN must be backed up with the version-appropriate official mechanism. Test restore before relying on a backup policy.
+
+## Mainnet boundary
+
+The v1.0 live profile intentionally requires testnet. Before mainnet, obtain an independent contract/security review and validate at minimum: reproducible contract deployment, payment economics, Fiber version/migrations, incident response, secret rotation, HA/failover, backup restore, abuse protection, privacy retention and real load/chaos behavior.
+
+## Reporting security issues
+
+Do not include real private keys, bearer tokens, payment preimages or production database dumps in an issue. Provide minimal reproduction steps using testnet/mock credentials where possible.

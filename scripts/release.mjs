@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 
-const name = process.argv[2] || "skillpass-v0.8.0-security-hardened";
+const name = process.argv[2] || "skillpass-v1.0.0-production";
 const out = `${name}.zip`;
 rmSync(out, { force: true });
 
@@ -13,6 +13,8 @@ const excludePatterns = [
   ".env", "./.env",
   ".env.testnet", "./.env.testnet",
   ".env.live", "./.env.live",
+  ".env.production", "./.env.production",
+  ".secrets/*", "*/.secrets/*",
   ".runtime/*", "*/.runtime/*",
   "deployments/testnet.json", "deployments/devnet.json",
   ".tooling/*", "*/.tooling/*",

@@ -31,6 +31,6 @@ if ((values.ENABLE_PUBLIC_ISSUE || "false") === "true") {
 } else {
   console.log("[OK]   Public issue UI disabled");
 }
-console.log("[INFO] Live service stores one-time nonces in process memory; deploy one instance for the MVP.");
+console.log(`[INFO] State backend: ${process.env.STATE_BACKEND || "local"}. Public multi-replica deployment requires STATE_BACKEND=postgres-redis.`);
 if (!ok) process.exit(1);
 console.log("Live configuration looks deployable.");

@@ -131,7 +131,7 @@ Các service app dùng:
 - read-only root filesystem;
 - `no-new-privileges`;
 - drop Linux capabilities;
-- writable state qua volume riêng;
+- production state qua PostgreSQL; Redis chỉ giữ short-lived nonce/rate-limit;
 - tmpfs cho `/tmp`;
 - health check;
 - restart policy.
@@ -142,11 +142,11 @@ Các service app dùng:
 
 ## 8. Giới hạn hiện tại
 
-### Single-process state
+### Shared production state
 
-JSON state hiện phù hợp MVP/single replica.
+Production v1.0 dùng PostgreSQL cho quote/receipt/payment replay và Redis cho one-time challenge/rate limit. Vì vậy nhiều SkillPass replica trên cùng production stack không còn phụ thuộc process memory hay JSON state. JSON chỉ còn là fallback local/test.
 
-Nếu chạy nhiều replica, phải chuyển nonce/replay/quote/receipt sang shared store có atomicity, ví dụ database/Redis với unique constraints/compare-and-set phù hợp.
+`payment_hash` là primary key và được consume bằng atomic insert; challenge được consume một lần bằng Redis `GETDEL`. Stack mặc định vẫn là single-host failure domain; HA nhiều host cần PostgreSQL/Redis/LB có failover riêng.
 
 ### Testnet only
 

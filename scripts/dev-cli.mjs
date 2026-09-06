@@ -61,7 +61,7 @@ async function bootstrapConfig() {
 }
 
 async function install() {
-  const dirs = ["packages/ckb-client", "apps/web", "apps/live-service"];
+  const dirs = ["packages/ckb-client", "apps/web", "apps/live-service", "apps/fiber-facilitator"];
   for (const dir of dirs) {
     log(`Installing ${dir}`);
     const hasLock = existsSync(resolve(ROOT, dir, "package-lock.json"));
@@ -96,6 +96,7 @@ async function clean() {
     "apps/web/node_modules",
     "apps/web/dist",
     "apps/live-service/node_modules",
+    "apps/fiber-facilitator/node_modules",
     "packages/ckb-client/node_modules",
   ];
   for (const target of targets) await rm(resolve(ROOT, target), { recursive: true, force: true });

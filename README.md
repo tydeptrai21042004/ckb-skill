@@ -1,236 +1,257 @@
-# SkillPass v0.7 — Portable CKB Service Rights + Fiber/x402 Payments
+# SkillPass v1.0 — Portable CKB Service Rights + Fiber/x402 Payments
 
-SkillPass is a research/product prototype for **portable digital service rights on CKB**.
-A provider issues a capability as a CKB Cell. The current live Cell owner is authorized to use the protected service. A valid transfer moves that authorization to the new owner without updating a centralized entitlement row.
+SkillPass is a **multi-user CKB testnet service-right implementation**: a provider issues a capability as a CKB Cell, the current live Cell owner can use a protected service, and transfer moves that right to the next owner without a provider-owned entitlement table.
 
-v0.7 keeps that second condition and adds a production-oriented frontend for both the local simulator and real CCC/testnet workflow. The CKB + x402/Fiber path remains cross-platform across Windows/Linux/macOS: a service request may also require an **x402-v2-style payment completed over Fiber**. Payment never replaces authorization: the request must satisfy both the payment rule and the current CKB capability rule.
+The production profile combines that authorization rule with Fiber/x402-style payment while keeping user signing in the user's wallet.
 
-## Tài liệu tiếng Việt
+> **Production deploy:** start with [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md), then run `./deploy-production.sh init`, `doctor`, and `up`.
 
-- [`TRIEN_KHAI_NHANH_VI.md`](TRIEN_KHAI_NHANH_VI.md) — triển khai nhanh trực tiếp từ ZIP.
+## What v1.0 changes
 
-- **Triển khai từng bước:** [`HUONG_DAN_TRIEN_KHAI.md`](HUONG_DAN_TRIEN_KHAI.md)
-- **Cách dùng ứng dụng:** [`HUONG_DAN_SU_DUNG.md`](HUONG_DAN_SU_DUNG.md)
-- **Kiến trúc + bảo mật:** [`KIEN_TRUC_VA_BAO_MAT_VI.md`](KIEN_TRUC_VA_BAO_MAT_VI.md)
-- **Xử lý lỗi:** [`XU_LY_LOI_VI.md`](XU_LY_LOI_VI.md)
-- **Ghi chú cộng đồng CKB/Fiber:** [`docs/CONG_DONG_CKB_FIBER_VI.md`](docs/CONG_DONG_CKB_FIBER_VI.md)
-- **Tóm tắt thay đổi v0.6:** [`THAY_DOI_V0.6.md`](THAY_DOI_V0.6.md)
-- **Giao diện v0.7:** [`GIAO_DIEN_V0.7.md`](GIAO_DIEN_V0.7.md) — phân biệt local simulator và CCC/testnet frontend.
+The public deployment path no longer relies on single-process JSON/Map state:
 
-## Developer quick start
+- **PostgreSQL 17** — durable quotes, receipts and payment replay/consumption state;
+- **Redis 8** — one-time wallet challenges and distributed rate limits;
+- **Caddy** — automatic HTTPS and load balancing across SkillPass replicas;
+- **N SkillPass replicas** — scale with `./deploy-production.sh scale N`;
+- **private facilitator** — no public facilitator port;
+- **Docker secrets** — facilitator/DB/Redis/Fiber RPC credentials are file-mounted;
+- **backup/restore/upgrade** — production operator commands are included;
+- **correct Fiber amount UX** — atomic integer amount stays exact while UI shows human-readable CKB;
+- **Fiber invoice QR** — users can scan/copy the invoice instead of manually handling a raw string.
 
-For most contributors, use the stable root commands instead of running files inside `apps/` directly:
+The server still does **not** need users' CKB private keys.
+
+## Production architecture
+
+```text
+Internet
+   |
+ HTTPS
+   v
+ Caddy
+   |
+   +----------+----------+
+   |          |          |
+SkillPass  SkillPass  SkillPass
+   \          |          /
+    \         |         /
+     PostgreSQL + Redis
+            |
+       Facilitator
+            |
+       private FNN RPC
+
+SkillPass replicas -> dedicated/self-hosted CKB RPC
+```
+
+PostgreSQL's `payment_hash` primary key plus atomic conflict handling prevents two replicas from consuming the same payment as a first use. Redis challenge consumption is one-time and shared across replicas, so Caddy does not need sticky sessions.
+
+## Deploy for real concurrent users
+
+Requirements:
+
+- Linux VPS/server with Docker Engine + Compose v2;
+- a real domain pointing to the server;
+- a deployed Capability Type Script on CKB testnet;
+- dedicated/self-hosted CKB testnet RPC recommended;
+- an operator-managed Fiber/FNN receiver RPC;
+- ports 80/443 open; database/app/facilitator/FNN RPC ports kept private.
+
+Initialize:
+
+```bash
+chmod +x deploy-production.sh
+./deploy-production.sh init
+```
+
+Edit `.env.production`, especially:
+
+```dotenv
+PUBLIC_DOMAIN=skillpass.example.com
+ACME_EMAIL=admin@example.com
+SKILLPASS_REPLICAS=2
+
+CKB_RPC_URL=https://YOUR_DEDICATED_TESTNET_RPC
+CAPABILITY_CODE_HASH=0x...
+CAPABILITY_HASH_TYPE=data1
+CAPABILITY_DEP_TX_HASH=0x...
+CAPABILITY_DEP_INDEX=0
+
+STATE_BACKEND=postgres-redis
+PAYMENTS_REQUIRED=true
+FIBER_BACKEND=fnn
+FIBER_NETWORK=testnet
+FIBER_RPC_URL=http://host.docker.internal:8227
+```
+
+Then:
+
+```bash
+./deploy-production.sh doctor
+./deploy-production.sh up
+./deploy-production.sh health
+```
+
+Scale application replicas:
+
+```bash
+./deploy-production.sh scale 4
+```
+
+Backup before upgrades:
+
+```bash
+./deploy-production.sh backup
+./deploy-production.sh upgrade
+```
+
+Restore with an explicit confirmation flag:
+
+```bash
+./deploy-production.sh restore backups/production-.../skillpass.sql.gz --yes
+```
+
+Full Vietnamese runbook: [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md).
+
+## Security boundary
+
+A successful protected request requires the relevant combination of:
+
+1. fresh one-time challenge;
+2. valid CKB-native wallet signature;
+3. address/signature identity match;
+4. live CKB Cell lookup;
+5. correct Capability deployment/type args/service ID;
+6. non-expired capability;
+7. current Cell lock controlled by requester;
+8. valid Fiber/x402 payment when payments are enabled;
+9. payment not reused for a different semantic request.
+
+Production additionally uses:
+
+- CSP and XSS-oriented headers/tests;
+- JSON-only mutation requests and Fetch-Metadata cross-site rejection;
+- bounded body/header/request timeouts;
+- generic server error responses + request IDs;
+- distributed rate limiting;
+- private backend/data networks;
+- non-root/read-only app containers;
+- dropped Linux capabilities;
+- `no-new-privileges`;
+- memory/PID limits;
+- readiness/liveness checks;
+- bounded delivery-receipt retention.
+
+See [`SECURITY.md`](SECURITY.md) and [`BAO_MAT_XSS_VI.md`](BAO_MAT_XSS_VI.md).
+
+## Payment semantics
+
+`PAYMENT_AMOUNT` is an **atomic-unit integer**, not a floating-point value. For CKB, production defaults to:
+
+```dotenv
+PAYMENT_DECIMALS=8
+PAYMENT_ATOMIC_UNIT=shannon
+```
+
+The browser converts that integer for display only. The protocol payload keeps the exact integer amount.
+
+The paid request flow is:
+
+```text
+request
+  -> 402 + Fiber invoice
+  -> user pays invoice
+  -> retry with PAYMENT-SIGNATURE
+  -> facilitator verifies payment
+  -> wallet challenge is consumed + signature verified
+  -> live Capability Cell is verified again
+  -> protected work is computed
+  -> settlement is idempotently recorded
+  -> delivery receipt is persisted
+  -> HTTP response
+```
+
+Payment does **not** replace capability ownership authorization.
+
+## Local development
+
+For contributors:
 
 ```bash
 npm run setup
 npm run dev
 ```
 
-Open `http://127.0.0.1:8787/`. Before committing, run `npm run check`.
+Open `http://127.0.0.1:8787/`.
 
-For the most reproducible handoff, Docker is a second supported entry point:
+The local/demo profiles intentionally keep simple JSON/in-memory fallbacks for deterministic development. Do not confuse those with the production `STATE_BACKEND=postgres-redis` profile.
 
-```bash
-docker compose -f deploy/compose.demo.yaml up --build
-```
-
-See [`docs/LOCAL_DEVELOPMENT.md`](docs/LOCAL_DEVELOPMENT.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-```text
-user / AI agent
-     |
-     | HTTP request
-     v
-x402-style 402 challenge ----> Fiber invoice/payment
-     |                              |
-     | PAYMENT-SIGNATURE            v
-     +------------------------> payment verification
-                                    |
-                                    v
-                            SkillPass verifier
-                               |          |
-                               |          +--> payment not replayed
-                               v
-                       current CKB live Cell
-                               |
-                         current owner?
-                               |
-                               v
-                         protected service
-```
-
-## Important research positioning
-
-The **Fiber x402 facilitator itself is not claimed as SkillPass novelty**. Nervos/Fiber has an official agent-payment design and an x402 facilitator MVP draft/PR. SkillPass uses a small compatibility harness so the repository is independently reproducible, while the actual research question is:
-
-> Can a provider-authorized service right remain portable and independently verifiable from CKB state while high-frequency payment is handled by Fiber/x402, without restoring a provider-owned entitlement database?
-
-See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
-
-## Fastest deployment
-
-If you only want a working reviewer/demo instance and already have Docker:
-
-**Windows:**
-
-```bat
-deploy.cmd demo
-```
-
-**Linux / macOS / WSL:**
+For the complete local verification flow:
 
 ```bash
-chmod +x deploy.sh
-./deploy.sh demo
-```
-
-For real CKB testnet configuration:
-
-```bash
-./deploy.sh init-testnet
-# fill/import real contract deployment metadata
-./deploy.sh doctor
-./deploy.sh testnet
-```
-
-For an optional self-hosted official Fiber node:
-
-```bash
-./deploy.sh fiber-init /secure/path/to/ckb-private-key
-./deploy.sh testnet-fiber
-```
-
-`fiber-init` never funds the key or opens channels. Windows users can run the same deployment flow through `deploy.cmd`/`deploy.ps1`. See [`HUONG_DAN_TRIEN_KHAI.md`](HUONG_DAN_TRIEN_KHAI.md) for Vietnamese instructions, [`DEPLOY_STEP_BY_STEP.md`](DEPLOY_STEP_BY_STEP.md) for the English local-ZIP runbook, and [`DEPLOY.md`](DEPLOY.md) for the compact reference.
-
-## Operator usability
-
-After deployment, the web UI reads `/api/status` and shows CKB/Fiber readiness instead of making users guess whether dependencies are online. Useful operations include:
-
-```bash
-./deploy.sh smoke testnet
-./deploy.sh backup-state testnet
-npm run support
-```
-
-On Windows, replace `./deploy.sh` with `deploy.cmd`. `backup-state` exports only SkillPass/facilitator application state; it deliberately excludes `.env.testnet`, private keys, and live Fiber channel storage. `npm run support` creates `.runtime/support-bundle.json` with diagnostic metadata while excluding secret values.
-
-## One-command setup + verification
-
-On Linux, macOS, or WSL:
-
-```bash
-chmod +x run_all.sh
 ./run_all.sh
 ```
-
-`run_all.sh` detects the OS/CPU and then:
-
-1. uses system Node.js when it is >=22, otherwise downloads a portable Node 22 into `.tooling/`;
-2. installs a local Rust toolchain pinned by this project and the CKB RISC-V target;
-3. installs the isolated npm dependencies for the CCC client, React app, and live service;
-4. bootstraps safe config templates;
-5. runs the complete Node test suite;
-6. runs the basic HTTP smoke test;
-7. runs the x402/Fiber facilitator smoke test;
-8. runs the combined **payment + capability + transfer** smoke test;
-9. type-checks the CCC client;
-10. builds the React/CCC frontend;
-11. writes a benchmark report;
-12. builds/tests the CKB Type Script.
 
 Useful variants:
 
 ```bash
-./run_all.sh --no-rust        # fastest JS/local verification
-./run_all.sh --serve          # verify everything, then open local demo on :8787
-./run_all.sh --with-offckb    # also install OffCKB locally
-./run_all.sh --with-fiber     # also pull/check the official Fiber v0.9.0 Docker image
-./run_all.sh --skip-install   # reuse already-installed dependencies
+./run_all.sh --no-rust
+./run_all.sh --serve
+./run_all.sh --with-offckb
+./run_all.sh --with-fiber
 ```
 
-`--with-fiber` only pulls/checks the official Fiber Docker image. It deliberately does **not** import wallet keys, create/fund channels, or move assets.
+`--with-fiber` never imports wallet keys, funds channels or moves assets automatically.
 
-## Local product demo
+## Automated evidence
 
-```bash
-npm run dev
-```
-
-Open `http://127.0.0.1:8787/`.
-
-For the real CCC/testnet development UI, run `npm run dev:web` after setup/configuration. It starts the live API and Vite frontend together; use `npm run dev:frontend-only` only when you already have an API backend running.
-
-The UI supports both:
-
-- capability-only access; and
-- a local mock of `402 -> Fiber payment -> retry -> capability authorization`.
-
-The deterministic combined smoke test proves:
+Current dependency-free Node suite:
 
 ```text
-402 quote
-  -> unpaid request rejected
-  -> payment marked paid
-  -> quote reuse with changed protected input is rejected
-  -> Alice paid access succeeds
-  -> same payment replay rejected
-  -> capability transferred Alice -> Bob
-  -> Alice can pay but is still rejected as NOT_OWNER
-  -> Bob pays with a fresh quote and succeeds
+89 tests
+88 passed
+0 failed
 ```
-
-This is **simulation evidence**, not a claim of a real Fiber payment or CKB testnet deployment.
-
-## Agent/tool discovery
-
-A deployed live service publishes machine-readable, read-only metadata so an AI agent or integration can understand the authorization and payment boundary without scraping the UI:
-
-- `GET /.well-known/skillpass.json` — SkillPass capability, wallet-authentication, health and payment metadata.
-- `GET /api/openapi.json` — minimal OpenAPI 3.1 contract for status, challenge and protected analysis calls.
-
-Neither document contains wallet private keys, facilitator bearer tokens, Fiber node keys, or private environment values. The discovery document explicitly states that signing remains in the user's wallet.
-
-## Current automated evidence
-
-The dependency-free Node path currently contains **50 tests** plus three HTTP/integration smoke paths. The local benchmark writes results to `reports/benchmarks/latest.md`.
 
 Run:
 
 ```bash
 npm test
-npm run smoke:http
-npm run smoke:fiber
-npm run smoke:paid
-npm run benchmark
+npm run test:security
+npm run verify:production
 ```
 
-For the complete environment:
+With npm dependencies/network available, also run:
 
 ```bash
+npm run setup
+npm run build:web
+npm run typecheck:ckb
+```
+
+For Rust/contract verification:
+
+```bash
+npm run verify:contract
+# or
 npm run verify:full
 ```
 
-## Real CKB/Fiber path
+## Agent/tool discovery
 
-The live CKB path uses **CCC** for wallet/transaction integration and the Rust CKB Type Script for capability invariants. The Fiber adapter uses FNN JSON-RPC (`new_invoice`, `get_invoice`, etc.).
+The live service publishes read-only machine-readable metadata:
 
-Start with `./deploy.sh init-testnet`, then `./deploy.sh doctor`. The live service now supports the real paid path directly: it preflights current capability ownership, returns an x402 v2 `402`, verifies Fiber payment through the facilitator, verifies the signed CKB challenge and live Cell again, computes the protected result, persists settlement/delivery state, and only then returns the response. Payment quotes and bounded delivery receipts survive service restarts in the single-process deployment profile; settlement is idempotent so an already-consumed invoice can recover the same delivery path after a crash without a second charge.
+- `GET /.well-known/skillpass.json`
+- `GET /api/openapi.json`
+- `GET /api/status`
+- `GET /api/config`
 
-For a local FNN receiver endpoint:
+These documents do not contain wallet keys or backend bearer/database secrets.
 
-```bash
-FIBER_BACKEND=fnn \
-FIBER_RPC_URL=http://127.0.0.1:8227 \
-npm run facilitator
-```
+## Capability data v1
 
-A real paid E2E requires funded Fiber peers/channels. It is intentionally not auto-created by `run_all.sh` because that is a network/asset operation.
-
-See [`DEPLOY_STEP_BY_STEP.md`](DEPLOY_STEP_BY_STEP.md), [`DEPLOY.md`](DEPLOY.md), and [`HOW_TO_VERIFY.md`](HOW_TO_VERIFY.md).
-
-## Capability data
-
-Fixed 106-byte v1 layout:
+Fixed 106-byte layout:
 
 | Offset | Size | Field |
 |---:|---:|---|
@@ -247,55 +268,37 @@ Type Script args:
 issuer_id || capability_id
 ```
 
-Creation uses a Type-ID-style identity:
+Key invariants include issuer-authorized issue, singleton capability identity, immutable capability metadata during transfer, transferability policy, and live-owner authorization at service use time.
 
-```text
-CKB_HASH(serialized first CellInput || uint64_le(capability_output_index))
-```
+See [`docs/capability-format.md`](docs/capability-format.md), [`docs/state-machine.md`](docs/state-machine.md), and the Rust contract in `contracts/capability-type`.
 
-The transfer keeps capability identity/service/issuer/expiry/flags immutable while ownership moves via the Cell lock.
+## Research positioning
 
-## Repository layout
+The Fiber/x402 facilitator is not claimed as SkillPass novelty. The repository's core question is whether a provider-authorized service right can remain portable and independently verifiable from CKB state while payment is handled by Fiber/x402 without restoring a provider-owned entitlement database.
 
-```text
-apps/demo-service/           local clickable API/UI and combined paid-access demo
-apps/fiber-facilitator/      small x402/Fiber compatibility server (mock or FNN RPC)
-apps/web/                    React + CCC real-CKB frontend
-apps/live-service/           live CKB + x402/Fiber protected-service backend
-contracts/capability-type/   CKB Rust Type Script + ckb-testtool tests
-packages/capability-codec/   browser/server 106-byte codec
-packages/protocol-core/      deterministic capability transition rules
-packages/verifier/           ownership + challenge/replay verification model
-packages/ckb-client/         CCC issue/discovery/transfer/live-cell helpers
-packages/x402-fiber/         experimental x402-v2/Fiber compatibility layer
-deploy/                      Docker Compose demo/testnet/Fiber profiles
-deploy.sh                     one-command deployment/doctor/log/status helper
-scripts/                     bootstrap, smoke, benchmark, release, verification
-docs/                        protocol + ecosystem research + local/deployment documentation
-reports/                     benchmark, limits, verification matrix
-```
+See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
 
-## External technical references
+## Other documentation
 
-- CCC: https://github.com/ckb-devrel/ccc
-- Fiber: https://github.com/nervosnetwork/fiber
-- Fiber agent/x402 design: https://github.com/nervosnetwork/fiber/issues/1255
-- Fiber x402 facilitator draft: https://github.com/nervosnetwork/fiber/pull/1301
-- x402 v2 specification: https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md
+### Vietnamese
 
-## Claim boundary
+- [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md) — production multi-user deployment.
+- [`HUONG_DAN_TRIEN_KHAI.md`](HUONG_DAN_TRIEN_KHAI.md) — development/testnet deployment.
+- [`HUONG_DAN_SU_DUNG.md`](HUONG_DAN_SU_DUNG.md) — application use.
+- [`KIEN_TRUC_VA_BAO_MAT_VI.md`](KIEN_TRUC_VA_BAO_MAT_VI.md) — architecture/security.
+- [`XU_LY_LOI_VI.md`](XU_LY_LOI_VI.md) — troubleshooting.
 
-This repository is a **funding/research-ready prototype**, not a production-security certification. Do not label it mainnet-ready until the Type Script is independently reviewed, real CKB/Fiber transactions are published, real replay/state storage is productionized, and unrelated users reproduce the flow.
+### English/reference
 
-## Security regression checks
+- [`DEPLOY_STEP_BY_STEP.md`](DEPLOY_STEP_BY_STEP.md)
+- [`DEPLOY.md`](DEPLOY.md)
+- [`HOW_TO_VERIFY.md`](HOW_TO_VERIFY.md)
+- [`SECURITY.md`](SECURITY.md)
+- [`VALIDATION.md`](VALIDATION.md)
+- [`reports/limitations.md`](reports/limitations.md)
 
-SkillPass includes dedicated XSS/browser-request regression tests in addition to the protocol/payment suite:
+## Production limitations
 
-```bash
-npm run test:security
-npm run smoke:security-browser
-# or both:
-npm run verify:security
-```
+The bundled production Compose profile is **multi-replica but single-host**. One VPS is still one failure domain. For multi-host HA, use external/HA PostgreSQL and Redis plus a real load balancer/orchestrator and tested failover procedures.
 
-The security suite rejects raw DOM injection sinks, tests common HTML/SVG/URL XSS payloads through the HTTP API, verifies CSP and JSON-only mutation handling, and checks cross-site browser request rejection. See `BAO_MAT_XSS_VI.md` for the Vietnamese security guide.
+The release deliberately remains CKB/Fiber **testnet-only**. Do not switch to mainnet merely by editing an environment variable. Independent contract/security review, operational HA, backup/restore drills, abuse protection and payment-economic review are required before using real-value mainnet assets.

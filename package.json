@@ -1,6 +1,6 @@
 {
-  "name": "ckb-skillpass-mvp",
-  "version": "0.8.0",
+  "name": "ckb-skillpass",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -47,6 +47,14 @@
     "deploy:help": "node -e \"console.log(process.platform === 'win32' ? 'Run: deploy.cmd help' : 'Run: ./deploy.sh help')\"",
     "test:security": "node --test packages/http-security/test/security.test.mjs tests/security-xss.test.mjs",
     "smoke:security-browser": "node scripts/browser-security-smoke.mjs",
-    "verify:security": "npm run test:security && npm run smoke:security-browser"
+    "verify:security": "npm run test:security && npm run smoke:security-browser",
+    "deploy:production:init": "bash deploy-production.sh init",
+    "deploy:production:doctor": "bash deploy-production.sh doctor",
+    "deploy:production": "bash deploy-production.sh up",
+    "deploy:production:smoke": "bash deploy-production.sh smoke",
+    "deploy:production:scale": "bash deploy-production.sh scale",
+    "deploy:production:health": "bash deploy-production.sh health",
+    "deploy:production:backup": "bash deploy-production.sh backup",
+    "verify:production": "bash -n deploy-production.sh && node --check apps/live-service/server.mjs && node --check apps/live-service/runtime-state.mjs && node --check apps/fiber-facilitator/server.mjs && node --test tests/production-deployment.test.mjs tests/production-store.test.mjs"
   }
 }

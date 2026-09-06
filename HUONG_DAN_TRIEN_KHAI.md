@@ -1,5 +1,8 @@
 # Hướng dẫn triển khai SkillPass bằng tiếng Việt
 
+> **Public multi-user production:** use `HUONG_DAN_DEPLOY_MULTI_USER_VI.md` and `./deploy-production.sh`. This document primarily covers local/development or legacy testnet flows.
+
+
 > Tài liệu này dành cho bản ZIP/thư mục local. **Không cần kết nối GitHub, không cần clone repo, không cần push code.**
 
 SkillPass gồm ba phần chính:

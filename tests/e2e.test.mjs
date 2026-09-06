@@ -18,7 +18,7 @@ function call(service, wallet, outPoint, text = "A short research paper. Method.
   return service.analyze({ identity: wallet.identity, nonce: c.nonce, proof: wallet.sign(c.message), outPoint, text });
 }
 
-test("MVP: A uses -> transfers -> A denied -> B uses", () => {
+test("capability v1: A uses -> transfers -> A denied -> B uses", () => {
   const alice = new TestWallet({ identity: "alice", lockHash: ALICE, secret: "alice" });
   const bob = new TestWallet({ identity: "bob", lockHash: BOB, secret: "bob" });
   const proofVerifier = new TestProofVerifier([alice, bob]);

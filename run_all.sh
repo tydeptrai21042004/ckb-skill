@@ -177,6 +177,7 @@ if [[ "$SKIP_INSTALL" == 0 ]]; then
   npm_install_dir packages/ckb-client
   npm_install_dir apps/web
   npm_install_dir apps/live-service
+  npm_install_dir apps/fiber-facilitator
 fi
 
 if [[ "$WITH_OFFCKB" == 1 ]]; then

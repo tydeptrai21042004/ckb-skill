@@ -1,5 +1,8 @@
 # SkillPass deployment — step by step
 
+> **Public multi-user production:** use `HUONG_DAN_DEPLOY_MULTI_USER_VI.md` and `./deploy-production.sh`. This document primarily covers local/development or legacy testnet flows.
+
+
 This guide is written for a **local ZIP/folder workflow**. You do not need to connect this project to GitHub, create a repository, or push any code.
 
 ## What the deployment contains
@@ -286,7 +289,7 @@ deploy.cmd backup-state testnet
 
 This writes a timestamped directory under `backups/` and intentionally excludes secrets and live Fiber channel storage. For a self-hosted Fiber node, use the official Fiber release's backup/restore procedure before upgrades rather than treating a hot directory copy as a safe channel backup.
 
-The included JSON stores are deliberately **single-process**. Before horizontally scaling SkillPass/facilitator replicas, replace them with a shared datastore that provides atomic compare-and-set/unique-key semantics for replay consumption.
+The local/test profiles still include JSON stores for deterministic development. Public production now uses PostgreSQL for durable quote/receipt/replay state and Redis for one-time challenges/rate limiting. Use `HUONG_DAN_DEPLOY_MULTI_USER_VI.md` and `deploy-production.sh` for horizontally scaled production rather than scaling this legacy testnet profile.
 
 ---
 

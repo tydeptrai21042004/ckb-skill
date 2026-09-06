@@ -3,12 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import { spawnSync } from "node:child_process";
 
-function readJson(path, fallback = null) {
-  try { return JSON.parse(requireText(path)); } catch { return fallback; }
-}
-function requireText(path) {
-  return readFileSync(path, "utf8");
-}
+function requireText(path) { return readFileSync(path, "utf8"); }
 function parseEnv(path) {
   if (!existsSync(path)) return {};
   const out = {};
@@ -25,9 +20,15 @@ function command(name, args = ["--version"]) {
   return r.status === 0 ? (r.stdout || r.stderr).trim().split("\n")[0] : null;
 }
 function isHex32(value) { return /^0x[0-9a-fA-F]{64}$/.test(String(value || "")); }
+function secretFileConfigured(name) {
+  const path = `.secrets/${name}`;
+  try { return existsSync(path) && requireText(path).trim().length > 0; } catch { return false; }
+}
 
 const pkg = JSON.parse(await readFile("package.json", "utf8"));
-const env = parseEnv(".env.testnet");
+const production = existsSync(".env.production");
+const envPath = production ? ".env.production" : ".env.testnet";
+const env = parseEnv(envPath);
 let deployment = null;
 if (existsSync("deployments/testnet.json")) {
   try { deployment = JSON.parse(await readFile("deployments/testnet.json", "utf8")); } catch {}
@@ -36,6 +37,7 @@ if (existsSync("deployments/testnet.json")) {
 const bundle = {
   generatedAt: new Date().toISOString(),
   project: { name: pkg.name, version: pkg.version },
+  profile: production ? "production" : "testnet-development",
   runtime: {
     os: `${os.platform()} ${os.release()}`,
     arch: os.arch(),
@@ -46,11 +48,13 @@ const bundle = {
     cargo: command("cargo"),
   },
   files: {
+    envProduction: existsSync(".env.production"),
     envTestnet: existsSync(".env.testnet"),
     deploymentTestnet: existsSync("deployments/testnet.json"),
     webDependenciesInstalled: existsSync("apps/web/node_modules"),
     ckbClientDependenciesInstalled: existsSync("packages/ckb-client/node_modules"),
     liveDependenciesInstalled: existsSync("apps/live-service/node_modules"),
+    facilitatorDependenciesInstalled: existsSync("apps/fiber-facilitator/node_modules"),
   },
   deployment: deployment ? {
     network: deployment.network || "testnet",
@@ -60,19 +64,27 @@ const bundle = {
     depIndex: deployment.depIndex ?? null,
   } : null,
   config: {
+    stateBackend: env.STATE_BACKEND || null,
+    skillpassReplicas: env.SKILLPASS_REPLICAS || null,
     paymentsRequired: env.PAYMENTS_REQUIRED || null,
     fiberBackend: env.FIBER_BACKEND || null,
     fiberNetwork: env.FIBER_NETWORK || null,
     fiberPaymentProof: env.FIBER_PAYMENT_PROOF || null,
-    publicBaseUrlConfigured: Boolean(env.PUBLIC_BASE_URL),
+    publicOriginConfigured: Boolean(env.PUBLIC_DOMAIN || env.PUBLIC_BASE_URL),
     ckbRpcConfigured: Boolean(env.CKB_RPC_URL),
-    facilitatorAuthConfigured: Boolean(env.FACILITATOR_AUTH_TOKEN && !env.FACILITATOR_AUTH_TOKEN.startsWith("REPLACE")),
     fiberRpcConfigured: Boolean(env.FIBER_RPC_URL),
-    fiberRpcTokenConfigured: Boolean(env.FIBER_RPC_TOKEN),
+    facilitatorAuthConfigured: production
+      ? secretFileConfigured("facilitator_auth_token.txt")
+      : Boolean(env.FACILITATOR_AUTH_TOKEN && !env.FACILITATOR_AUTH_TOKEN.startsWith("REPLACE")),
+    fiberRpcTokenConfigured: production
+      ? secretFileConfigured("fiber_rpc_token.txt")
+      : Boolean(env.FIBER_RPC_TOKEN),
+    postgresSecretConfigured: production ? secretFileConfigured("postgres_password.txt") : false,
+    redisSecretConfigured: production ? secretFileConfigured("redis_password.txt") : false,
   },
   privacy: {
     secretsIncluded: false,
-    note: "Secret values, private keys, RPC tokens, and .env contents are intentionally excluded.",
+    note: "Secret values, private keys, RPC tokens, payment preimages, and .env contents are intentionally excluded.",
   },
 };
 

@@ -1,5 +1,8 @@
 # SkillPass v0.6 — Triển khai nhanh bằng ZIP
 
+> **Public multi-user production:** use `HUONG_DAN_DEPLOY_MULTI_USER_VI.md` and `./deploy-production.sh`. This document primarily covers local/development or legacy testnet flows.
+
+
 Tài liệu này dành cho người chỉ muốn đưa project lên chạy nhanh. **Không cần kết nối GitHub.** Giải nén ZIP, mở terminal trong thư mục project và làm theo đúng hệ điều hành.
 
 ## 1. Chuẩn bị

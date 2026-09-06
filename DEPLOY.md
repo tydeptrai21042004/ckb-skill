@@ -1,5 +1,8 @@
 # SkillPass v0.6 deployment
 
+> **Public multi-user production:** use `HUONG_DAN_DEPLOY_MULTI_USER_VI.md` and `./deploy-production.sh`. This document primarily covers local/development or legacy testnet flows.
+
+
 The v0.6 deployment goal is simple: **Docker for deployment, `run_all.sh` for development/verification**.
 
 ## 1. Fastest path — zero-config demo
