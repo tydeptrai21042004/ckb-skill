@@ -1,7 +1,7 @@
 # Week 8 Report — SkillPass
 
 **Week:** 8  
-**Date:** 7 September 2026
+**Date:** 1-6 September 2026
 
 ## Direction
 
