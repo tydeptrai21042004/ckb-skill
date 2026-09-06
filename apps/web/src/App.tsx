@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ccc } from "@ckb-ccc/connector-react";
+import QRCode from "react-qr-code";
 import {
   buildIssueCapabilityTx,
   buildTransferCapabilityTx,
@@ -20,6 +21,8 @@ type RuntimeConfig = {
     required: boolean;
     amount?: string;
     asset?: string;
+    decimals?: number;
+    atomicUnit?: string;
     network?: string;
     x402Version?: number;
     proofMode?: "invoice-status" | "preimage";
@@ -147,6 +150,22 @@ function encodeBase64Json(value: unknown) {
 
 function short(value: string, n = 7) {
   return value.length > n * 2 ? `${value.slice(0, n)}…${value.slice(-n)}` : value;
+}
+
+function formatAtomicAmount(value: string, decimals = 0) {
+  const raw = String(value || "0");
+  if (!/^[0-9]+$/.test(raw)) return raw;
+  const d = Math.max(0, Math.min(18, Number(decimals) || 0));
+  if (d === 0) return BigInt(raw).toLocaleString();
+  const padded = raw.padStart(d + 1, "0");
+  const whole = padded.slice(0, -d);
+  const fraction = padded.slice(-d).replace(/0+$/, "");
+  const grouped = BigInt(whole || "0").toLocaleString();
+  return fraction ? `${grouped}.${fraction}` : grouped;
+}
+
+function formatAtomicInteger(value: string) {
+  try { return BigInt(value).toLocaleString(); } catch { return value; }
 }
 
 function formatServiceName(value?: string) {
@@ -737,18 +756,23 @@ export default function App() {
 
             <div className="payment-amount">
               <span>Amount</span>
-              <strong>{paymentRequirement.amount} <small>{paymentRequirement.asset}</small></strong>
-              <p>{paymentRequirement.network}</p>
+              <strong>{formatAtomicAmount(paymentRequirement.amount, config?.payments?.decimals)} <small>{paymentRequirement.asset}</small></strong>
+              <p>{formatAtomicInteger(paymentRequirement.amount)} {config?.payments?.atomicUnit || "atomic units"} · {paymentRequirement.network}</p>
             </div>
 
             <div className="payment-step">
               <div className="step-number">1</div>
               <div>
                 <h3>Pay the invoice</h3>
-                <p>Use a Fiber-compatible wallet or payment tool.</p>
-                <div className="copy-field invoice-field">
-                  <code>{paymentRequirement.extra.invoice}</code>
-                  <button className="icon-button" onClick={() => void copyText(paymentRequirement.extra.invoice, "Invoice")} aria-label="Copy invoice"><Icon name="copy" size={17} /></button>
+                <p>Scan with a Fiber-compatible wallet, or copy the invoice into your Fiber payment tool.</p>
+                <div className="invoice-payment-grid">
+                  <div className="invoice-qr" aria-label="Fiber invoice QR code">
+                    <QRCode value={paymentRequirement.extra.invoice} size={148} level="M" />
+                  </div>
+                  <div className="copy-field invoice-field">
+                    <code>{paymentRequirement.extra.invoice}</code>
+                    <button className="icon-button" onClick={() => void copyText(paymentRequirement.extra.invoice, "Invoice")} aria-label="Copy invoice"><Icon name="copy" size={17} /></button>
+                  </div>
                 </div>
               </div>
             </div>

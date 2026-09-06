@@ -1,8 +1,8 @@
 import { JsonRecordStore } from "../../packages/x402-fiber/src/record-store.mjs";
 
 export class LiveServiceState {
-  constructor({ file = "", now = () => Date.now() } = {}) {
-    this.store = new JsonRecordStore({ file, now });
+  constructor({ file = "", store = null, now = () => Date.now() } = {}) {
+    this.store = store || new JsonRecordStore({ file, now });
     this.now = now;
   }
 
@@ -17,11 +17,17 @@ export class LiveServiceState {
 
   async pruneExpiredQuotes() {
     const now = this.now();
+    if (typeof this.store.pruneExpiredByExpiresAt === "function") {
+      return this.store.pruneExpiredByExpiresAt("quote:", now);
+    }
     return this.store.prune((row, key) => key.startsWith("quote:") && Number(row.expiresAt || 0) <= now);
   }
 
   async pruneExpiredReceipts(ttlMs) {
-    const now = this.now();
-    return this.store.prune((row, key) => key.startsWith("receipt:") && Number(row.updatedAt || 0) + ttlMs <= now);
+    const before = this.now() - ttlMs;
+    if (typeof this.store.pruneUpdatedBefore === "function") {
+      return this.store.pruneUpdatedBefore("receipt:", before);
+    }
+    return this.store.prune((row, key) => key.startsWith("receipt:") && Number(row.updatedAt || 0) <= before);
   }
 }

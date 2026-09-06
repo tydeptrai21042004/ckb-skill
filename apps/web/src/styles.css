@@ -285,3 +285,13 @@ ccc-connector {
   .payment-hash-row { grid-template-columns: 1fr auto; }
   .payment-hash-row > span { grid-column: 1 / -1; }
 }
+
+/* Production payment UX: scan the Fiber invoice directly from another device. */
+.invoice-payment-grid { display: grid; grid-template-columns: 166px minmax(0,1fr); gap: 12px; align-items: stretch; }
+.invoice-qr { min-height: 166px; display: grid; place-items: center; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.invoice-qr svg { width: 148px; height: 148px; max-width: 100%; }
+.invoice-payment-grid .copy-field { align-self: stretch; }
+@media (max-width: 560px) {
+  .invoice-payment-grid { grid-template-columns: 1fr; }
+  .invoice-qr { width: 166px; justify-self: center; }
+}

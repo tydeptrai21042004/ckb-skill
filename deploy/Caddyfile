@@ -1,0 +1,53 @@
+{
+    email {$ACME_EMAIL}
+    admin off
+}
+
+{$PUBLIC_DOMAIN} {
+    encode zstd gzip
+
+    request_body {
+        max_size 64KB
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        -Server
+    }
+
+    # Resolve the Docker service on each refresh interval. This allows
+    # `docker compose up --scale skillpass=N` without sticky in-process state.
+    reverse_proxy {
+        dynamic a skillpass 8787 {
+            refresh 5s
+            versions ipv4
+        }
+        lb_policy least_conn
+        lb_retries 2
+        lb_try_duration 5s
+        lb_try_interval 250ms
+        fail_duration 15s
+        max_fails 2
+        unhealthy_status 5xx
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+        transport http {
+            dial_timeout 3s
+            response_header_timeout 35s
+            keepalive 4s
+        }
+    }
+
+    log {
+        output stdout
+        # PAYMENT-SIGNATURE is application-specific and may carry payment
+        # proof material (including a preimage in strict mode). Never log it.
+        format filter {
+            request>headers>Payment-Signature delete
+        }
+    }
+}

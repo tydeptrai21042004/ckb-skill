@@ -173,7 +173,7 @@ fn verify_transition(
     enforce_identity(&before, issuer_arg, capability_arg)?;
     enforce_identity(&after, issuer_arg, capability_arg)?;
 
-    // MVP policy: CapabilityData is immutable during transfer. Ownership is
+    // v1 policy: CapabilityData is immutable during transfer. Ownership is
     // represented only by the cell lock, so the successor cannot mutate the
     // service, issuer, identity, flags, or expiry while moving the pass.
     if before != after {

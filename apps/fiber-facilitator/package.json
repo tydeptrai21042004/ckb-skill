@@ -1,0 +1,11 @@
+{
+  "name": "@skillpass/fiber-facilitator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "dependencies": {
+    "@skillpass/production-store": "file:../../packages/production-store"
+  },
+  "scripts": { "start": "node server.mjs" }
+}

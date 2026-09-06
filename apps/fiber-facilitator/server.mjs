@@ -1,5 +1,6 @@
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { join } from "node:path";
 import {
   assertJsonRequest,
@@ -16,6 +17,19 @@ import {
   MockFiberBackend,
   ReplayStore,
 } from "../../packages/x402-fiber/src/index.mjs";
+import {
+  createPostgresPool,
+  migratePostgres,
+  PostgresReplayStore,
+  postgresHealth,
+} from "@skillpass/production-store";
+
+
+function readSecret(name) {
+  const file = String(process.env[`${name}_FILE`] || "").trim();
+  if (file) return readFileSync(file, "utf8").trim();
+  return String(process.env[name] || "").trim();
+}
 
 const HOST = process.env.FACILITATOR_HOST || "127.0.0.1";
 const PORT = Number(process.env.FACILITATOR_PORT || 8790);
@@ -24,8 +38,10 @@ const NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
 const NETWORK = NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const PROOF_MODE = process.env.FIBER_PAYMENT_PROOF || "invoice-status";
 const STATE_FILE = process.env.FACILITATOR_STATE_FILE || join(process.cwd(), ".runtime", "fiber-settled.json");
+const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
 const ALLOW_DEV_PAYMENT = MODE === "mock" && process.env.ALLOW_DEV_PAYMENT === "true";
-const AUTH_TOKEN = process.env.FACILITATOR_AUTH_TOKEN || "";
+const AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
+const FIBER_RPC_TOKEN = readSecret("FIBER_RPC_TOKEN");
 
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("FACILITATOR_PORT must be 1..65535");
 if (!["mock", "fnn"].includes(MODE)) throw new Error("FIBER_BACKEND must be mock or fnn");
@@ -34,13 +50,26 @@ if (!["invoice-status", "preimage"].includes(PROOF_MODE)) throw new Error("FIBER
 if (MODE === "fnn" && !AUTH_TOKEN) throw new Error("FACILITATOR_AUTH_TOKEN is required when FIBER_BACKEND=fnn");
 
 const backend = MODE === "fnn"
-  ? new FnnFiberBackend({ rpcUrl: process.env.FIBER_RPC_URL || "http://127.0.0.1:8227", token: process.env.FIBER_RPC_TOKEN || "" })
+  ? new FnnFiberBackend({ rpcUrl: process.env.FIBER_RPC_URL || "http://127.0.0.1:8227", token: FIBER_RPC_TOKEN })
   : new MockFiberBackend();
+
+let postgresPool = null;
+let replayStore;
+if (STATE_BACKEND === "local") {
+  replayStore = new ReplayStore({ file: STATE_FILE });
+} else if (STATE_BACKEND === "postgres-redis") {
+  postgresPool = createPostgresPool();
+  await migratePostgres(postgresPool);
+  replayStore = new PostgresReplayStore({ pool: postgresPool });
+} else {
+  throw new Error("STATE_BACKEND must be local or postgres-redis");
+}
+
 const facilitator = new FiberFacilitator({
   backend,
   network: NETWORK,
   proofMode: PROOF_MODE,
-  replayStore: new ReplayStore({ file: STATE_FILE }),
+  replayStore,
 });
 
 const FACILITATOR_CSP = "default-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
@@ -50,7 +79,10 @@ function securityHeaders() {
     "cache-control": "no-store",
   };
 }
-function send(res, status, body) { res.writeHead(status, securityHeaders()); res.end(JSON.stringify(body)); }
+function send(res, status, body) {
+  res.writeHead(status, { ...securityHeaders(), "x-request-id": res.__skillpassRequestId || randomUUID() });
+  res.end(JSON.stringify(body));
+}
 async function body(req) {
   const chunks = []; let size = 0;
   for await (const chunk of req) {
@@ -77,17 +109,21 @@ function requireAuth(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  res.__skillpassRequestId = randomUUID();
   try {
     const url = safeRequestUrl(req);
     if (req.method === "GET" && url.pathname === "/livez") return send(res, 200, { ok: true, service: "skillpass-facilitator" });
     if (req.method === "GET" && (url.pathname === "/readyz" || url.pathname === "/health")) {
       const upstream = await backend.health();
       const version = upstream?.node?.version ?? upstream?.version;
-      return send(res, 200, {
-        ok: true,
+      const state = postgresPool ? await postgresHealth(postgresPool) : { ok: true, skipped: true };
+      const ok = Boolean(upstream?.ok) && Boolean(state.ok);
+      return send(res, ok ? 200 : 503, {
+        ok,
         mode: MODE,
         network: NETWORK,
         paymentProof: PROOF_MODE,
+        state: { backend: STATE_BACKEND, postgres: state },
         upstream: { ok: Boolean(upstream?.ok), backend: upstream?.backend || MODE, ...(version ? { version: String(version).slice(0, 80) } : {}) },
       });
     }
@@ -133,7 +169,8 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const status = error?.status || (error?.name === "FiberRpcError" ? 503 : 400);
     const code = error?.code || (status === 503 ? "UPSTREAM_UNAVAILABLE" : status === 401 ? "AUTH_REQUIRED" : "BAD_REQUEST");
-    return send(res, status, { error: code.toLowerCase(), code, message: publicErrorMessage(error) });
+    const message = status >= 500 ? "upstream service temporarily unavailable" : publicErrorMessage(error);
+    return send(res, status, { error: code.toLowerCase(), code, message });
   }
 });
 
@@ -144,7 +181,19 @@ server.maxHeadersCount = 80;
 
 server.listen(PORT, HOST, () => {
   console.log(`SkillPass x402/Fiber facilitator listening on http://${HOST}:${PORT}`);
-  console.log(`backend=${MODE} network=${NETWORK} paymentProof=${PROOF_MODE}`);
+  console.log(`backend=${MODE} network=${NETWORK} paymentProof=${PROOF_MODE} state=${STATE_BACKEND}`);
   if (AUTH_TOKEN) console.log("facilitator API authentication: enabled");
   if (MODE === "mock") console.log(`Mock mode is for reproducible tests only. Dev pay endpoint: ${ALLOW_DEV_PAYMENT ? "enabled" : "disabled"}.`);
 });
+
+let closing = false;
+async function shutdown(signal) {
+  if (closing) return;
+  closing = true;
+  console.log(`Received ${signal}; shutting down SkillPass facilitator`);
+  await new Promise((resolve) => server.close(resolve));
+  if (postgresPool) await postgresPool.end();
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

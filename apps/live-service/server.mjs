@@ -1,6 +1,7 @@
 import http from "node:http";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
@@ -23,7 +24,7 @@ import {
   validatePayload,
 } from "@skillpass/x402-fiber";
 import { analyzePaper, validatePaperInput, MAX_INPUT_CHARS } from "../demo-service/src/paper-analyzer.mjs";
-import { LiveServiceState } from "./state.mjs";
+import { createLiveRuntimeState } from "./runtime-state.mjs";
 import { buildDiscovery, buildOpenApi } from "./discovery.mjs";
 import {
   assertJsonRequest,
@@ -33,12 +34,20 @@ import {
   safeRequestUrl,
 } from "../../packages/http-security/src/index.mjs";
 
+
+function readSecret(name) {
+  const file = String(process.env[`${name}_FILE`] || "").trim();
+  if (file) return readFileSync(file, "utf8").trim();
+  return String(process.env[name] || "").trim();
+}
+
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 8787);
 const PUBLIC_DIR = process.env.PUBLIC_DIR || join(dirname(fileURLToPath(import.meta.url)), "public");
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const TRUST_PROXY = process.env.TRUST_PROXY === "true";
 const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(), ".runtime", "service-state.json");
+const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
 const STARTED_AT = Date.now();
@@ -48,16 +57,18 @@ const ENABLE_PUBLIC_ISSUE = process.env.ENABLE_PUBLIC_ISSUE === "true";
 const PAYMENTS_REQUIRED = process.env.PAYMENTS_REQUIRED === "true";
 const PAYMENT_AMOUNT = String(process.env.PAYMENT_AMOUNT || "100000");
 const PAYMENT_ASSET = String(process.env.PAYMENT_ASSET || "CKB");
+const PAYMENT_DECIMALS = Number(process.env.PAYMENT_DECIMALS || (PAYMENT_ASSET === "CKB" ? 8 : 0));
+const PAYMENT_ATOMIC_UNIT = String(process.env.PAYMENT_ATOMIC_UNIT || (PAYMENT_ASSET === "CKB" ? "shannon" : "atomic unit"));
 const PAYMENT_PAY_TO = String(process.env.PAYMENT_PAY_TO || "fiber-invoice-receiver");
 const PAYMENT_CURRENCY = String(process.env.PAYMENT_CURRENCY || "Fibt");
 const PAYMENT_TIMEOUT_SECONDS = Number(process.env.PAYMENT_TIMEOUT_SECONDS || 600);
 const FIBER_NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
 const FIBER_NETWORK = FIBER_NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const FACILITATOR_URL = process.env.FACILITATOR_URL || "http://127.0.0.1:8790";
+const FACILITATOR_AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
 const facilitator = PAYMENTS_REQUIRED
-  ? new FacilitatorHttpClient({ baseUrl: FACILITATOR_URL, token: process.env.FACILITATOR_AUTH_TOKEN || "" })
+  ? new FacilitatorHttpClient({ baseUrl: FACILITATOR_URL, token: FACILITATOR_AUTH_TOKEN })
   : null;
-const serviceState = new LiveServiceState({ file: SERVICE_STATE_FILE });
 
 if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PORT must be 1..65535");
 if (!Number.isSafeInteger(CHALLENGE_TTL_MS) || CHALLENGE_TTL_MS < 5_000 || CHALLENGE_TTL_MS > 10 * 60_000) throw new Error("CHALLENGE_TTL_MS must be 5000..600000");
@@ -71,6 +82,8 @@ if (!Number.isSafeInteger(PAYMENT_TIMEOUT_SECONDS) || PAYMENT_TIMEOUT_SECONDS < 
 }
 if (FIBER_NETWORK_NAME !== "testnet") throw new Error("This CKB-testnet service requires FIBER_NETWORK=testnet");
 if (!PAYMENT_ASSET.trim()) throw new Error("PAYMENT_ASSET must not be empty");
+if (!Number.isSafeInteger(PAYMENT_DECIMALS) || PAYMENT_DECIMALS < 0 || PAYMENT_DECIMALS > 18) throw new Error("PAYMENT_DECIMALS must be 0..18");
+if (!PAYMENT_ATOMIC_UNIT.trim() || PAYMENT_ATOMIC_UNIT.length > 32) throw new Error("PAYMENT_ATOMIC_UNIT must be 1..32 characters");
 if (!PAYMENT_PAY_TO.trim()) throw new Error("PAYMENT_PAY_TO must not be empty");
 if (!PAYMENT_CURRENCY.trim()) throw new Error("PAYMENT_CURRENCY must not be empty");
 
@@ -95,12 +108,21 @@ const client = process.env.CKB_RPC_URL
 
 function publicPaymentConfig() {
   return PAYMENTS_REQUIRED
-    ? { required: true, amount: PAYMENT_AMOUNT, asset: PAYMENT_ASSET, network: FIBER_NETWORK, x402Version: 2, proofMode: process.env.FIBER_PAYMENT_PROOF || "invoice-status" }
+    ? { required: true, amount: PAYMENT_AMOUNT, asset: PAYMENT_ASSET, decimals: PAYMENT_DECIMALS, atomicUnit: PAYMENT_ATOMIC_UNIT, network: FIBER_NETWORK, x402Version: 2, proofMode: process.env.FIBER_PAYMENT_PROOF || "invoice-status" }
     : { required: false };
 }
 
-const challenges = new Map();
-const rate = new Map();
+const runtimeState = await createLiveRuntimeState({
+  backend: STATE_BACKEND,
+  stateFile: SERVICE_STATE_FILE,
+  challengeTtlMs: CHALLENGE_TTL_MS,
+});
+const serviceState = runtimeState.serviceState;
+const challenges = runtimeState.challenges;
+const rateLimiter = runtimeState.rateLimiter;
+const READINESS_CACHE_MS = 5_000;
+let readinessCache = null;
+let readinessInFlight = null;
 
 function outPointFromJson(value) {
   if (!value || typeof value !== "object") throw new Error("outPoint is required");
@@ -121,32 +143,15 @@ function challengeMessage({ nonce, address, expiresAt }) {
   ].join("\n");
 }
 
-function pruneChallenges() {
-  const now = Date.now();
-  for (const [nonce, item] of challenges) {
-    if (now > item.expiresAt + CHALLENGE_TTL_MS) challenges.delete(nonce);
-  }
-  while (challenges.size > 10_000) challenges.delete(challenges.keys().next().value);
-}
-
 async function issueChallenge(address) {
-  pruneChallenges();
   await ccc.Address.fromString(address, client);
-  const nonce = randomBytes(24).toString("hex");
-  const expiresAt = Date.now() + CHALLENGE_TTL_MS;
-  const message = challengeMessage({ nonce, address, expiresAt });
-  challenges.set(nonce, { address, expiresAt, message, used: false });
-  return { nonce, expiresAt, message };
+  return challenges.issue(address, ({ nonce, identity, expiresAt }) =>
+    challengeMessage({ nonce, address: identity, expiresAt }),
+  );
 }
 
-function consumeChallenge(nonce, address) {
-  const item = challenges.get(nonce);
-  if (!item) throw Object.assign(new Error("challenge nonce not found"), { status: 401, code: "UNKNOWN_NONCE" });
-  if (item.used) throw Object.assign(new Error("challenge nonce already used"), { status: 401, code: "REPLAY" });
-  item.used = true;
-  if (Date.now() >= item.expiresAt) throw Object.assign(new Error("challenge expired"), { status: 401, code: "EXPIRED_NONCE" });
-  if (item.address !== address) throw Object.assign(new Error("challenge address mismatch"), { status: 401, code: "ADDRESS_MISMATCH" });
-  return item;
+async function consumeChallenge(nonce, address) {
+  return challenges.consume({ nonce, identity: address });
 }
 
 async function verifyLiveCapability({ outPoint, requesterAddress }) {
@@ -296,11 +301,16 @@ function requestKey(req) {
   }
   return req.socket.remoteAddress || "unknown";
 }
-function rateLimit(req, limit = 90, windowMs = 60_000) {
-  const key = requestKey(req); const now = Date.now(); const current = rate.get(key);
-  if (!current || now >= current.resetAt) { rate.set(key, { count: 1, resetAt: now + windowMs }); return; }
-  current.count += 1;
-  if (current.count > limit) throw Object.assign(new Error("rate limit exceeded"), { status: 429, code: "RATE_LIMITED" });
+
+async function rateLimit(req, limit = 90, windowMs = 60_000) {
+  const result = await rateLimiter.consume(requestKey(req), { limit, windowMs });
+  if (!result.allowed) {
+    throw Object.assign(new Error("rate limit exceeded"), {
+      status: 429,
+      code: "RATE_LIMITED",
+      retryAfterSeconds: result.retryAfterSeconds,
+    });
+  }
 }
 
 async function jsonBody(req) {
@@ -341,7 +351,8 @@ function securityHeaders(contentType) {
   });
 }
 function sendJson(res, status, body, extraHeaders = {}) {
-  res.writeHead(status, { ...securityHeaders("application/json; charset=utf-8"), "cache-control": "no-store", ...extraHeaders });
+  const requestId = res.__skillpassRequestId || randomUUID();
+  res.writeHead(status, { ...securityHeaders("application/json; charset=utf-8"), "cache-control": "no-store", "x-request-id": requestId, ...extraHeaders });
   res.end(JSON.stringify(body));
 }
 
@@ -369,10 +380,11 @@ async function sendStatic(res, pathname) {
   }
 }
 
-async function readiness() {
+async function computeReadiness() {
   const dependencies = {
     ckb: { ok: false },
     facilitator: { ok: !PAYMENTS_REQUIRED, skipped: !PAYMENTS_REQUIRED },
+    state: { ok: false, backend: STATE_BACKEND },
   };
   let tip = null;
 
@@ -380,7 +392,7 @@ async function readiness() {
     tip = (await client.getTip()).toString();
     dependencies.ckb = { ok: true };
   } catch (error) {
-    dependencies.ckb = { ok: false, error: String(error?.message || "CKB RPC unavailable").slice(0, 180) };
+    dependencies.ckb = { ok: false, error: "CKB RPC unavailable" };
   }
 
   if (PAYMENTS_REQUIRED) {
@@ -393,11 +405,23 @@ async function readiness() {
         upstream: upstream?.upstream ? { ok: Boolean(upstream.upstream.ok), backend: upstream.upstream.backend, version: upstream.upstream.version } : undefined,
       };
     } catch (error) {
-      dependencies.facilitator = { ok: false, error: String(error?.message || "facilitator unavailable").slice(0, 180) };
+      dependencies.facilitator = { ok: false, error: "facilitator unavailable" };
     }
   }
 
-  const ok = dependencies.ckb.ok && dependencies.facilitator.ok;
+  try {
+    const storage = await runtimeState.health();
+    dependencies.state = {
+      ok: Boolean(storage.ok),
+      backend: storage.backend,
+      postgres: storage.postgres,
+      redis: storage.redis,
+    };
+  } catch (error) {
+    dependencies.state = { ok: false, backend: STATE_BACKEND, error: "state backend unavailable" };
+  }
+
+  const ok = dependencies.ckb.ok && dependencies.facilitator.ok && dependencies.state.ok;
   return {
     ok,
     mode: "ckb-testnet",
@@ -412,7 +436,18 @@ async function readiness() {
   };
 }
 
+async function readiness() {
+  const now = Date.now();
+  if (readinessCache && now - readinessCache.at < READINESS_CACHE_MS) return readinessCache.value;
+  if (readinessInFlight) return readinessInFlight;
+  readinessInFlight = computeReadiness()
+    .then((value) => { readinessCache = { at: Date.now(), value }; return value; })
+    .finally(() => { readinessInFlight = null; });
+  return readinessInFlight;
+}
+
 const server = http.createServer(async (req, res) => {
+  res.__skillpassRequestId = randomUUID();
   try {
     const url = safeRequestUrl(req);
     if (url.pathname === "/livez") return sendJson(res, 200, { ok: true, service: "skillpass-live" });
@@ -440,7 +475,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      rateLimit(req);
+      await rateLimit(req);
     }
     if (req.method === "POST" && url.pathname === "/api/challenge") {
       const { address } = await jsonBody(req);
@@ -459,9 +494,9 @@ const server = http.createServer(async (req, res) => {
         payment = await verifyPaymentHeader(req, requestBody);
       }
 
-      const challenge = consumeChallenge(nonce, address);
+      const challenge = await consumeChallenge(nonce, address);
       if (!signature || signature.identity !== address) {
-        throw Object.assign(new Error("MVP requires a CKB-native wallet whose signature identity equals the CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
+        throw Object.assign(new Error("SkillPass requires a CKB-native wallet whose signature identity equals the CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
       }
       const valid = await ccc.Signer.verifyMessage(challenge.message, signature);
       if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
@@ -483,7 +518,9 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const status = error?.status || (error?.name === "FacilitatorHttpError" ? 503 : 400);
     const extraHeaders = error?.paymentRequired ? { "PAYMENT-REQUIRED": encodeHeaderJson(error.paymentRequired) } : {};
-    return sendJson(res, status, { error: error?.code || "bad_request", message: publicErrorMessage(error) }, extraHeaders);
+    if (status === 429) extraHeaders["retry-after"] = String(error?.retryAfterSeconds || 60);
+    const message = status >= 500 ? "service temporarily unavailable" : publicErrorMessage(error);
+    return sendJson(res, status, { error: error?.code || "bad_request", message }, extraHeaders);
   }
 });
 
@@ -494,10 +531,22 @@ server.maxHeadersCount = 80;
 
 server.listen(PORT, HOST, () => {
   console.log(`SkillPass live service on http://${HOST}:${PORT}`);
-  console.log(`CKB network: testnet; RPC: ${client.url}`);
+  console.log(`CKB network: testnet; RPC: ${process.env.CKB_RPC_URL ? "custom endpoint configured" : "CCC default endpoint"}`);
   console.log(`Capability code hash: ${deployment.codeHash}`);
   console.log(`x402/Fiber payments: ${PAYMENTS_REQUIRED ? `enabled via ${FACILITATOR_URL}` : "disabled"}`);
-  console.log(`Persistent service state: ${SERVICE_STATE_FILE}`);
+  console.log(`State backend: ${STATE_BACKEND}${STATE_BACKEND === "local" ? ` (${SERVICE_STATE_FILE})` : ""}`);
   console.log(`Delivery receipt retention: ${SERVICE_RECEIPT_TTL_SECONDS}s`);
   console.log("No user private key is loaded by this service.");
 });
+
+let closing = false;
+async function shutdown(signal) {
+  if (closing) return;
+  closing = true;
+  console.log(`Received ${signal}; shutting down SkillPass live service`);
+  await new Promise((resolve) => server.close(resolve));
+  await runtimeState.close();
+  process.exit(0);
+}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

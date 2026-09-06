@@ -1,0 +1,191 @@
+# SkillPass production stack for multiple concurrent users.
+# Public: Caddy :80/:443 only.
+# Private: SkillPass replicas, facilitator, PostgreSQL and Redis.
+services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in .env.production}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      skillpass:
+        condition: service_healthy
+    networks:
+      - edge
+      - backend
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+
+  postgres:
+    image: postgres:17.11-alpine3.24
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-skillpass}
+      POSTGRES_USER: ${POSTGRES_USER:-skillpass}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-skillpass} -d ${POSTGRES_DB:-skillpass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    shm_size: 256mb
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-768m}
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:8.10.1-alpine3.23
+    secrets:
+      - redis_password
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        exec redis-server \
+          --bind 0.0.0.0 \
+          --protected-mode yes \
+          --requirepass "$$(cat /run/secrets/redis_password)" \
+          --save "" \
+          --appendonly no \
+          --maxmemory ${REDIS_MAXMEMORY:-192mb} \
+          --maxmemory-policy allkeys-lru
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data
+    mem_limit: ${REDIS_MEMORY_LIMIT:-256m}
+    security_opt:
+      - no-new-privileges:true
+
+  facilitator:
+    build:
+      context: ..
+      dockerfile: Dockerfile.facilitator
+    env_file:
+      - ../.env.production
+    environment:
+      FACILITATOR_HOST: 0.0.0.0
+      FACILITATOR_PORT: 8790
+      FACILITATOR_AUTH_TOKEN_FILE: /run/secrets/facilitator_auth_token
+      FIBER_RPC_TOKEN_FILE: /run/secrets/fiber_rpc_token
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      STATE_BACKEND: postgres-redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      ALLOW_DEV_PAYMENT: "false"
+    secrets:
+      - facilitator_auth_token
+      - fiber_rpc_token
+      - postgres_password
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+      - rpc
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 256
+    mem_limit: ${FACILITATOR_MEMORY_LIMIT:-256m}
+
+  skillpass:
+    build:
+      context: ..
+      dockerfile: Dockerfile.live
+    env_file:
+      - ../.env.production
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8787
+      FACILITATOR_URL: http://facilitator:8790
+      FACILITATOR_AUTH_TOKEN_FILE: /run/secrets/facilitator_auth_token
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      STATE_BACKEND: postgres-redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      PUBLIC_BASE_URL: https://${PUBLIC_DOMAIN:?set PUBLIC_DOMAIN in .env.production}
+      TRUST_PROXY: "true"
+    secrets:
+      - facilitator_auth_token
+      - postgres_password
+      - redis_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      facilitator:
+        condition: service_healthy
+    networks:
+      - backend
+      - rpc
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    pids_limit: 256
+    mem_limit: ${SKILLPASS_MEMORY_LIMIT:-512m}
+
+secrets:
+  facilitator_auth_token:
+    file: ../.secrets/facilitator_auth_token.txt
+  fiber_rpc_token:
+    file: ../.secrets/fiber_rpc_token.txt
+  postgres_password:
+    file: ../.secrets/postgres_password.txt
+  redis_password:
+    file: ../.secrets/redis_password.txt
+
+volumes:
+  caddy_data:
+  caddy_config:
+  postgres_data:
+
+networks:
+  edge:
+  backend:
+    internal: true
+  rpc:
