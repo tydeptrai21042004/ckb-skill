@@ -154,7 +154,7 @@ Bạn có hai cách lưu:
 {
   "network": "testnet",
   "codeHash": "0x...",
-  "hashType": "data1",
+  "hashType": "data2",
   "depTxHash": "0x...",
   "depIndex": 0
 }
@@ -176,7 +176,7 @@ deploy.cmd init-testnet
 
 ```dotenv
 CAPABILITY_CODE_HASH=0x...
-CAPABILITY_HASH_TYPE=data1
+CAPABILITY_HASH_TYPE=data2
 CAPABILITY_DEP_TX_HASH=0x...
 CAPABILITY_DEP_INDEX=0
 ```

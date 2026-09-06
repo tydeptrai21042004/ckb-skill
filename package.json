@@ -55,6 +55,13 @@
     "deploy:production:scale": "bash deploy-production.sh scale",
     "deploy:production:health": "bash deploy-production.sh health",
     "deploy:production:backup": "bash deploy-production.sh backup",
-    "verify:production": "bash -n deploy-production.sh && node --check apps/live-service/server.mjs && node --check apps/live-service/runtime-state.mjs && node --check apps/fiber-facilitator/server.mjs && node --test tests/production-deployment.test.mjs tests/production-store.test.mjs"
+    "verify:production": "bash -n deploy-production.sh && node --check apps/live-service/server.mjs && node --check apps/live-service/runtime-state.mjs && node --check apps/fiber-facilitator/server.mjs && node --test tests/production-deployment.test.mjs tests/production-store.test.mjs",
+    "vercel:check": "node scripts/check-vercel-env.mjs",
+    "setup:vercel": "bash setup-vercel.sh",
+    "setup:vercel:contract": "SKILLPASS_SKIP_VERCEL=1 bash setup-vercel.sh",
+    "vercel:extract": "node scripts/extract-offckb-deployment.mjs",
+    "setup:vercel:firewall": "bash setup-vercel-firewall.sh",
+    "security:preflight": "node scripts/security-preflight.mjs",
+    "verify:vercel:secure": "bash -n setup-vercel.sh && bash -n setup-vercel-firewall.sh && node scripts/security-preflight.mjs && node --test tests/vercel-config.test.mjs tests/vercel-easy-deploy.test.mjs tests/vercel-security-hardening.test.mjs packages/http-security/test/security.test.mjs"
   }
 }
