@@ -14,9 +14,14 @@ export type DelegationGrantV1 = {
 };
 export type DelegationGrantV2 = Omit<DelegationGrantV1, "version"> & { version: 2; limits: DelegationLimits };
 export type DelegationGrant = DelegationGrantV1 | DelegationGrantV2;
+export type DelegationSignature = {
+  identity: string;
+  signature: string;
+  signType: string | number;
+};
 export type DelegationCredential = {
   grant: DelegationGrant;
-  ownerSignature: { identity: string; signature: string; [key: string]: unknown };
+  ownerSignature: DelegationSignature;
 };
 export function normalizeDelegationGrant(value: unknown, options?: { now?: number; maxLifetimeMs?: number }): DelegationGrant;
 export function buildDelegationMessage(grant: DelegationGrant): string;

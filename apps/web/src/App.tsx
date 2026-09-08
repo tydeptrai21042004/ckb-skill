@@ -719,7 +719,7 @@ export default function App() {
         : { ...baseGrant, version: 1 };
       const ownerSignature = await signer.signMessage(buildDelegationMessage(grant));
       if (ownerSignature.identity !== address) throw new Error("Delegation signature identity does not match the current owner wallet.");
-      const credential = { grant, ownerSignature } as DelegationCredential;
+      const credential: DelegationCredential = { grant, ownerSignature };
       setDelegationCredential(credential);
       const limitSummary = grant.version === 2 ? ` Limits: ${grant.limits.maxUses ?? "unlimited"} uses${grant.limits.maxSpendAtomic ? `, ${grant.limits.maxSpendAtomic} atomic units` : ""}.` : "";
       setNotice({ tone: "success", message: `Delegated ${selectedService.name} access for ${requestedMinutes} minute${requestedMinutes === 1 ? "" : "s"}.${limitSummary} Ownership stays in your wallet.` });
