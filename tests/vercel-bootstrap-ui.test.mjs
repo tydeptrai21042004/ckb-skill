@@ -6,7 +6,9 @@ const read = (file) => readFileSync(file, "utf8");
 
 test("Vercel API entrypoint fails closed with bounded JSON instead of platform plaintext", () => {
   const src = read("apps/live-service/server.ts");
-  assert.match(src, /await import\("\.\/server\.mjs"\)/);
+  assert.match(src, /runtimeEntrypoint = "\.\/server\.mjs"/);
+  assert.match(src, /await import\(runtimeEntrypoint\)/);
+  assert.match(src, /as \{ server: http\.Server \}/);
   assert.match(src, /SERVICE_NOT_CONFIGURED/);
   assert.match(src, /application\/json; charset=utf-8/);
   assert.match(src, /cache-control.*no-store/s);

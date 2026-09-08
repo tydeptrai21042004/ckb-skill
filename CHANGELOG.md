@@ -1,3 +1,12 @@
+
+## 2026-09-08 — Vercel TypeScript backend build fix
+
+- Fixed Vercel `server.ts` type-check failures for `node:http`, `node:crypto`, and `Buffer`.
+- Added service-local `@types/node` and TypeScript dependencies plus NodeNext `tsconfig.json` files.
+- Hardened the TypeScript-to-`.mjs` runtime boundary to avoid the follow-up TS7016 declaration error.
+- Applied the same fix to the Fiber facilitator service.
+- Pinned the Vercel Node runtime to `24.x` instead of an open-ended `>=22` range.
+
 ## Week 9 UI / Vercel production hotfix
 
 - Fixed Vercel API bootstrap handling so platform/server startup failures return bounded JSON instead of leaking plain-text responses into the React JSON parser.
