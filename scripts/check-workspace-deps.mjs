@@ -1,0 +1,43 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function packageJsonFiles(root) {
+  return readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(root, entry.name, "package.json"))
+    .filter((file) => existsSync(file));
+}
+
+const files = [...packageJsonFiles("apps"), ...packageJsonFiles("packages")];
+const manifests = files.map((file) => ({ file, manifest: readJson(file) }));
+const versions = new Map(
+  manifests
+    .filter(({ manifest }) => manifest.name?.startsWith("@skillpass/") && manifest.version)
+    .map(({ manifest }) => [manifest.name, manifest.version]),
+);
+
+const mismatches = [];
+for (const { file, manifest } of manifests) {
+  for (const section of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+    for (const [name, requested] of Object.entries(manifest[section] ?? {})) {
+      if (!versions.has(name)) continue;
+      const local = versions.get(name);
+      if (requested !== local) {
+        mismatches.push(`${file}: ${section}.${name}=${requested}, local=${local}`);
+      }
+    }
+  }
+}
+
+if (mismatches.length) {
+  console.error("SkillPass workspace dependency mismatch detected.");
+  console.error("npm will try to fetch these private packages from the registry instead of linking the local workspace:");
+  for (const mismatch of mismatches) console.error(`- ${mismatch}`);
+  process.exit(1);
+}
+
+console.log(`SkillPass workspace dependencies: PASS (${versions.size} local packages checked)`);
