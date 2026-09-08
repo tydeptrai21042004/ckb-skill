@@ -29,3 +29,12 @@ test("OpenAPI discovery accurately advertises 402 only when payment is enabled",
   assert.equal(free.paths["/api/analyze"].post.responses["402"], undefined);
   assert.equal(free.paths["/api/analyze"].post.requestBody.content["application/json"].schema.properties.text.maxLength, 500);
 });
+
+test("agent spec is compact and explains fresh-challenge paid retry and budgeted delegation", async () => {
+  const { buildAgentSpec } = await import("./discovery.mjs");
+  const text = buildAgentSpec({ services: [{ slug: "paper-analyzer-v1", endpoint: "/api/analyze" }], paymentsRequired: true });
+  assert.match(text, /FRESH wallet challenge/);
+  assert.match(text, /maximum calls/);
+  assert.match(text, /private keys/i);
+  assert.ok(text.split(/\s+/).length < 500);
+});

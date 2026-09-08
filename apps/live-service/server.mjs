@@ -12,7 +12,6 @@ import {
   isActive,
   normalizeHex32,
 } from "@skillpass/capability-codec";
-import { PAPER_ANALYZER_V1_SERVICE_ID } from "@skillpass/capability-codec/service-ids";
 import {
   FacilitatorHttpClient,
   FIBER_MAINNET,
@@ -23,9 +22,11 @@ import {
   makePaymentRequired,
   validatePayload,
 } from "@skillpass/x402-fiber";
-import { analyzePaper, validatePaperInput, MAX_INPUT_CHARS } from "../demo-service/src/paper-analyzer.mjs";
 import { createLiveRuntimeState } from "./runtime-state.mjs";
-import { buildDiscovery, buildOpenApi } from "./discovery.mjs";
+import { buildAgentSpec, buildDiscovery, buildOpenApi } from "./discovery.mjs";
+import { buildServiceRegistry } from "./services.mjs";
+import { canonicalJson, validateServiceInput } from "@skillpass/service-gateway";
+import { assertDelegationScope, buildDelegationMessage } from "@skillpass/delegation";
 import {
   assertJsonRequest,
   assertRequestEnvelope,
@@ -55,7 +56,6 @@ const TRUST_PROXY = process.env.TRUST_PROXY === "true";
 const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(), ".runtime", "service-state.json");
 const STATE_BACKEND = String(process.env.STATE_BACKEND || (process.env.VERCEL ? "postgres" : "local")).trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
-const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
 const SERVICE_POLICY_ID = String(process.env.SERVICE_POLICY_ID || "paper-analyzer-v1").trim();
 const SERVICE_POLICY_URL = String(process.env.SERVICE_POLICY_URL || "").trim();
 const SERVICE_TERMS_HASH_RAW = String(process.env.SERVICE_TERMS_HASH || "").trim();
@@ -65,6 +65,9 @@ const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" 
 const MAX_BODY = Number(process.env.MAX_REQUEST_BODY_BYTES || 36 * 1024);
 const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 12 * 1024);
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
+const serviceRegistry = buildServiceRegistry({ env: process.env, production: IS_PUBLIC_PRODUCTION, timeoutMs: UPSTREAM_TIMEOUT_MS });
+const PRIMARY_SERVICE = serviceRegistry.getBySlug("paper-analyzer-v1");
+const SERVICE_ID = PRIMARY_SERVICE.id; // backward-compatible primary service id
 const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
 const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
 const CAPABILITY_STATUS_RATE_LIMIT = Number(process.env.CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE || 24);
@@ -137,6 +140,27 @@ if (!PAYMENT_ATOMIC_UNIT.trim() || PAYMENT_ATOMIC_UNIT.length > 32) throw new Er
 if (!PAYMENT_PAY_TO.trim()) throw new Error("PAYMENT_PAY_TO must not be empty");
 if (!PAYMENT_CURRENCY.trim()) throw new Error("PAYMENT_CURRENCY must not be empty");
 
+function parseServicePaymentAmounts() {
+  const raw = String(process.env.SKILLPASS_SERVICE_PRICES_JSON || "").trim();
+  if (!raw) return new Map();
+  let value;
+  try { value = JSON.parse(raw); }
+  catch { throw new Error("SKILLPASS_SERVICE_PRICES_JSON must be a JSON object"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SKILLPASS_SERVICE_PRICES_JSON must be a JSON object");
+  const prices = new Map();
+  for (const [slug, amountValue] of Object.entries(value)) {
+    const service = serviceRegistry.getBySlug(slug);
+    if (!service) throw new Error(`SKILLPASS_SERVICE_PRICES_JSON contains unknown service ${slug}`);
+    const amount = String(amountValue);
+    if (!/^[1-9][0-9]*$/.test(amount)) throw new Error(`service price for ${slug} must be a positive atomic-unit integer string`);
+    prices.set(service.slug, amount);
+  }
+  return prices;
+}
+
+const SERVICE_PAYMENT_AMOUNTS = parseServicePaymentAmounts();
+function paymentAmountFor(service) { return SERVICE_PAYMENT_AMOUNTS.get(service.slug) || PAYMENT_AMOUNT; }
+
 function requireHex32(name, value) {
   try { return normalizeHex32(value, name); }
   catch { throw new Error(`${name} must be a 32-byte 0x-prefixed hex value`); }
@@ -174,20 +198,33 @@ if (SERVICE_POLICY_URL) {
   if (!["http:", "https:"].includes(policyUrl.protocol)) throw new Error("SERVICE_POLICY_URL must use http:// or https://");
   if (IS_PUBLIC_PRODUCTION && policyUrl.protocol !== "https:") throw new Error("SERVICE_POLICY_URL must use https:// in public production");
 }
-const servicePolicy = createServicePolicy({
-  serviceId: SERVICE_ID,
-  trustedIssuerIds: TRUSTED_ISSUER_IDS,
-  requireTransferable: true,
-  policyId: SERVICE_POLICY_ID,
-  termsHash: SERVICE_TERMS_HASH,
-});
-const SERVICE_POLICY_FINGERPRINT = createHash("sha256").update(JSON.stringify({
-  serviceId: SERVICE_ID.toLowerCase(),
-  trustedIssuerIds: TRUSTED_ISSUER_IDS,
-  requireTransferable: true,
-  policyId: SERVICE_POLICY_ID,
-  termsHash: SERVICE_TERMS_HASH.toLowerCase(),
-})).digest("hex");
+const serviceContexts = new Map(serviceRegistry.services.map((service) => {
+  const policyId = service.slug === PRIMARY_SERVICE.slug ? SERVICE_POLICY_ID : `${SERVICE_POLICY_ID}:${service.slug}`;
+  const policy = createServicePolicy({
+    serviceId: service.id,
+    trustedIssuerIds: TRUSTED_ISSUER_IDS,
+    requireTransferable: true,
+    policyId,
+    termsHash: SERVICE_TERMS_HASH,
+  });
+  const fingerprint = createHash("sha256").update(JSON.stringify({
+    serviceId: service.id.toLowerCase(),
+    trustedIssuerIds: TRUSTED_ISSUER_IDS,
+    requireTransferable: true,
+    policyId,
+    termsHash: SERVICE_TERMS_HASH.toLowerCase(),
+  })).digest("hex");
+  return [service.slug, Object.freeze({ service, policy, policyId, fingerprint })];
+}));
+
+function serviceContext(value) {
+  const service = typeof value === "string" ? serviceRegistry.getBySlug(value) : value;
+  if (!service) throw Object.assign(new Error("unknown SkillPass service"), { status: 404, code: "UNKNOWN_SERVICE" });
+  return serviceContexts.get(service.slug);
+}
+
+const servicePolicy = serviceContext(PRIMARY_SERVICE).policy; // backward-compatible primary references
+const SERVICE_POLICY_FINGERPRINT = serviceContext(PRIMARY_SERVICE).fingerprint;
 
 if (process.env.CKB_RPC_URL) {
   const rpc = new URL(process.env.CKB_RPC_URL);
@@ -200,9 +237,9 @@ const client = process.env.CKB_RPC_URL
   ? new ccc.ClientPublicTestnet(process.env.CKB_RPC_URL)
   : new ccc.ClientPublicTestnet();
 
-function publicPaymentConfig() {
+function publicPaymentConfig(service = PRIMARY_SERVICE) {
   return PAYMENTS_REQUIRED
-    ? { required: true, amount: PAYMENT_AMOUNT, asset: PAYMENT_ASSET, decimals: PAYMENT_DECIMALS, atomicUnit: PAYMENT_ATOMIC_UNIT, network: FIBER_NETWORK, x402Version: 2, proofMode: process.env.FIBER_PAYMENT_PROOF || "invoice-status" }
+    ? { required: true, amount: paymentAmountFor(service), asset: PAYMENT_ASSET, decimals: PAYMENT_DECIMALS, atomicUnit: PAYMENT_ATOMIC_UNIT, network: FIBER_NETWORK, x402Version: 2, proofMode: process.env.FIBER_PAYMENT_PROOF || "invoice-status" }
     : { required: false };
 }
 
@@ -214,6 +251,7 @@ const runtimeState = await createLiveRuntimeState({
 const serviceState = runtimeState.serviceState;
 const challenges = runtimeState.challenges;
 const rateLimiter = runtimeState.rateLimiter;
+const delegationUsage = runtimeState.delegationUsage;
 const READINESS_CACHE_MS = 30_000;
 let readinessCache = null;
 let readinessInFlight = null;
@@ -232,8 +270,9 @@ function outPointBinding(value) {
   return `${String(outPoint.txHash).toLowerCase()}:${String(outPoint.index)}`;
 }
 
-function requestTextHash(text) {
-  return createHash("sha256").update(String(text || ""), "utf8").digest("hex");
+function requestInputHash(service, input) {
+  const material = service.inputKind === "text" ? String(input || "") : canonicalJson(input);
+  return createHash("sha256").update(material, "utf8").digest("hex");
 }
 
 function normalizeRequestHash(value) {
@@ -242,28 +281,31 @@ function normalizeRequestHash(value) {
   return hash;
 }
 
-function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash }) {
+function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash, service, delegationId = "" }) {
+  const context = serviceContext(service);
   return [
     "SkillPass capability access",
-    "action=analyze",
-    "service=paper-analyzer-v1",
-    `service_id=${SERVICE_ID}`,
-    `policy_id=${SERVICE_POLICY_ID}`,
-    `policy_fingerprint=${SERVICE_POLICY_FINGERPRINT}`,
+    "action=invoke",
+    `service=${context.service.slug}`,
+    `service_id=${context.service.id}`,
+    `policy_id=${context.policyId}`,
+    `policy_fingerprint=${context.fingerprint}`,
     `capability_outpoint=${outPointBinding(outPoint)}`,
     `request_hash=${normalizeRequestHash(requestHash)}`,
+    `delegation_id=${String(delegationId || "direct")}`,
     `address=${address}`,
     `nonce=${nonce}`,
     `expires_at=${expiresAt}`,
   ].join("\n");
 }
 
-async function issueChallenge(address, outPoint, requestHash) {
+async function issueChallenge(address, outPoint, requestHash, service, delegationId = "") {
   await ccc.Address.fromString(address, client);
   outPointFromJson(outPoint);
   normalizeRequestHash(requestHash);
+  const context = serviceContext(service);
   return challenges.issue(address, ({ nonce, identity, expiresAt }) =>
-    challengeMessage({ nonce, address: identity, expiresAt, outPoint, requestHash }),
+    challengeMessage({ nonce, address: identity, expiresAt, outPoint, requestHash, service: context.service, delegationId }),
   );
 }
 
@@ -271,13 +313,15 @@ async function consumeChallenge(nonce, address) {
   return challenges.consume({ nonce, identity: address });
 }
 
-function challengeMatchesRequest(challenge, body) {
+function challengeMatchesRequest(challenge, body, service) {
   const expected = challengeMessage({
     nonce: body.nonce,
     address: body.address,
     expiresAt: challenge.expiresAt,
     outPoint: body.outPoint,
-    requestHash: requestTextHash(body.text),
+    requestHash: requestInputHash(service, body.input),
+    service,
+    delegationId: body.delegation?.grant?.grantId || "",
   });
   const left = Buffer.from(String(challenge.message || ""));
   const right = Buffer.from(expected);
@@ -299,7 +343,7 @@ async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   }
 }
 
-async function inspectLiveCapability({ outPoint }) {
+async function inspectLiveCapability({ outPoint, service = null }) {
   const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
   const type = cell.cellOutput.type;
@@ -310,9 +354,12 @@ async function inspectLiveCapability({ outPoint }) {
   if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
     throw Object.assign(new Error("capability identity/data mismatch"), { status: 403, code: "IDENTITY_MISMATCH" });
   }
+  const resolvedService = service || serviceRegistry.getById(capability.serviceId);
+  if (!resolvedService) throw Object.assign(new Error("capability is for an unsupported service"), { status: 403, code: "WRONG_SERVICE" });
+  const context = serviceContext(resolvedService);
   const now = BigInt(Math.floor(Date.now() / 1000));
   try {
-    verifyServicePolicy({ capability, policy: servicePolicy, nowUnixSeconds: now });
+    verifyServicePolicy({ capability, policy: context.policy, nowUnixSeconds: now });
   } catch (error) {
     if (error instanceof ServiceRightError) {
       throw Object.assign(new Error(error.message), { status: 403, code: error.code });
@@ -322,13 +369,16 @@ async function inspectLiveCapability({ outPoint }) {
   return {
     cell,
     capability,
+    service: resolvedService,
+    policyId: context.policyId,
+    policyFingerprint: context.fingerprint,
     currentOwnerLockHash: normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
     checkedAt: new Date().toISOString(),
   };
 }
 
-async function verifyLiveCapability({ outPoint, requesterAddress }) {
-  const inspected = await inspectLiveCapability({ outPoint });
+async function verifyLiveCapability({ outPoint, requesterAddress, service }) {
+  const inspected = await inspectLiveCapability({ outPoint, service });
   const requester = await ccc.Address.fromString(requesterAddress, client);
   if (!inspected.cell.cellOutput.lock.eq(requester.script)) {
     throw Object.assign(new Error("requester does not control the current live capability cell"), { status: 403, code: "NOT_OWNER" });
@@ -336,34 +386,80 @@ async function verifyLiveCapability({ outPoint, requesterAddress }) {
   return inspected;
 }
 
-function paymentBinding(req, { address, outPoint, text }) {
-  const normalized = JSON.stringify({
-    address: String(address || ""),
-    outPoint: { txHash: String(outPoint?.txHash || "").toLowerCase(), index: String(outPoint?.index ?? "") },
-    requestHash: requestTextHash(text),
-    serviceId: SERVICE_ID,
-    policyId: SERVICE_POLICY_ID,
-    policyFingerprint: SERVICE_POLICY_FINGERPRINT,
-    resource: resourceUrl(req),
+async function verifyDelegatedCapability({ credential, delegateAddress, outPoint, service }) {
+  if (!credential || typeof credential !== "object" || !credential.grant || !credential.ownerSignature) {
+    throw Object.assign(new Error("delegation credential is malformed"), { status: 401, code: "INVALID_DELEGATION" });
+  }
+  const grant = assertDelegationScope(credential.grant, {
+    delegateAddress,
+    serviceSlug: service.slug,
+    serviceId: service.id,
+    outPoint,
+    action: "invoke",
+    now: Date.now(),
+  });
+  if (credential.ownerSignature.identity !== grant.ownerAddress) {
+    throw Object.assign(new Error("delegation owner signature identity mismatch"), { status: 401, code: "DELEGATION_OWNER_MISMATCH" });
+  }
+  const ownerSignatureValid = await ccc.Signer.verifyMessage(buildDelegationMessage(grant), credential.ownerSignature);
+  if (!ownerSignatureValid) throw Object.assign(new Error("delegation owner signature is invalid"), { status: 401, code: "INVALID_DELEGATION_SIGNATURE" });
+  const inspected = await verifyLiveCapability({ outPoint, requesterAddress: grant.ownerAddress, service });
+  if (inspected.capability.capabilityId.toLowerCase() !== grant.capabilityId.toLowerCase()) {
+    throw Object.assign(new Error("delegation capability identity mismatch"), { status: 401, code: "DELEGATION_CAPABILITY_MISMATCH" });
+  }
+  return { ...inspected, delegation: grant, principalAddress: delegateAddress, ownerAddress: grant.ownerAddress };
+}
+
+function delegationInvocationKey(body, payment) {
+  if (payment?.hash && /^[0-9a-f]{64}$/i.test(String(payment.hash))) return String(payment.hash).toLowerCase();
+  return createHash("sha256")
+    .update(`${String(body.delegation?.grant?.grantId || "direct")}:${String(body.nonce || "")}`)
+    .digest("hex");
+}
+
+async function consumeDelegationBudget(verified, body, service, payment) {
+  const grant = verified?.delegation;
+  if (!grant || grant.version < 2 || !grant.limits) return null;
+  return delegationUsage.consume({
+    grantId: grant.grantId,
+    invocationKey: delegationInvocationKey(body, payment),
+    maxUses: grant.limits.maxUses,
+    maxSpendAtomic: grant.limits.maxSpendAtomic,
+    spendAtomic: PAYMENTS_REQUIRED ? paymentAmountFor(service) : "0",
+    expiresAt: grant.expiresAt,
+  });
+}
+
+function paymentBinding(req, body, service) {
+  const context = serviceContext(service);
+  const normalized = canonicalJson({
+    address: String(body.address || ""),
+    ownerAddress: String(body.delegation?.grant?.ownerAddress || body.address || ""),
+    delegationId: String(body.delegation?.grant?.grantId || "direct"),
+    outPoint: { txHash: String(body.outPoint?.txHash || "").toLowerCase(), index: String(body.outPoint?.index ?? "") },
+    requestHash: requestInputHash(service, body.input),
+    serviceId: service.id,
+    paymentAmount: PAYMENTS_REQUIRED ? paymentAmountFor(service) : "0",
+    policyId: context.policyId,
+    policyFingerprint: context.fingerprint,
+    resource: resourceUrl(req, service),
   });
   return createHash("sha256").update(normalized).digest("hex");
 }
 
-function resourceUrl(req) {
-  if (PUBLIC_BASE_URL) return `${PUBLIC_BASE_URL}/api/analyze`;
-  // On Vercel prefer the platform-owned canonical host instead of any
-  // request-supplied Host/X-Forwarded-Host value. This prevents host-header
-  // injection from changing the resource URL bound into a payment request.
+function resourceUrl(req, service) {
+  const path = `/api/invoke/${service.slug}`;
+  if (PUBLIC_BASE_URL) return `${PUBLIC_BASE_URL}${path}`;
   if (IS_VERCEL) {
     const vercelHost = String(process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || "").trim();
-    if (/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(vercelHost)) return `https://${vercelHost}/api/analyze`;
+    if (/^[A-Za-z0-9.-]+(?::[0-9]{1,5})?$/.test(vercelHost)) return `https://${vercelHost}${path}`;
     throw Object.assign(new Error("Vercel canonical production URL is unavailable"), { status: 503, code: "PUBLIC_URL_UNAVAILABLE" });
   }
-  if (!TRUST_PROXY) return `http://127.0.0.1:${PORT}/api/analyze`;
+  if (!TRUST_PROXY) return `http://127.0.0.1:${PORT}${path}`;
   const proto = String(req.headers["x-forwarded-proto"] || "https").split(",")[0].trim();
   const host = String(req.headers["x-forwarded-host"] || req.headers.host || "").split(",")[0].trim();
   if (!/^(https?)$/.test(proto) || !/^[A-Za-z0-9.:[\]-]+$/.test(host)) throw new Error("invalid proxy host/protocol headers");
-  return `${proto}://${host}/api/analyze`;
+  return `${proto}://${host}${path}`;
 }
 
 let lastPaymentPruneAt = 0;
@@ -381,13 +477,10 @@ async function maybePrunePaymentState({ force = false } = {}) {
   return paymentPruneInFlight;
 }
 
-async function createPaymentQuote(req, body) {
-  validatePaperInput(body.text);
+async function createPaymentQuote(req, body, service) {
+  validateServiceInput(service, body.input);
   await maybePrunePaymentState();
-  const binding = paymentBinding(req, body);
-
-  // Reuse a still-live quote for the exact same semantic request. This avoids
-  // generating multiple Fiber invoices when a browser retries or double-clicks.
+  const binding = paymentBinding(req, body, service);
   const existing = await serviceState.getQuoteByBinding(binding);
   if (existing) return makePaymentRequired({ resource: existing.resource, requirement: existing.requirement });
   if (quoteInFlight.has(binding)) return quoteInFlight.get(binding);
@@ -395,18 +488,17 @@ async function createPaymentQuote(req, body) {
   const pending = (async () => {
     const raced = await serviceState.getQuoteByBinding(binding);
     if (raced) return makePaymentRequired({ resource: raced.resource, requirement: raced.requirement });
-
-    // Caller ownership has already been verified before this function is called.
+    const servicePaymentAmount = paymentAmountFor(service);
     const invoice = await withTimeout(facilitator.invoice({
-      amount: PAYMENT_AMOUNT,
+      amount: servicePaymentAmount,
       currency: PAYMENT_CURRENCY,
-      description: "SkillPass paper-analyzer-v1",
+      description: `SkillPass ${service.slug}`,
       expiry: PAYMENT_TIMEOUT_SECONDS,
     }), "facilitator invoice");
     const requirement = {
       scheme: "exact",
       network: FIBER_NETWORK,
-      amount: PAYMENT_AMOUNT,
+      amount: servicePaymentAmount,
       asset: PAYMENT_ASSET,
       payTo: PAYMENT_PAY_TO,
       maxTimeoutSeconds: PAYMENT_TIMEOUT_SECONDS,
@@ -418,17 +510,18 @@ async function createPaymentQuote(req, body) {
       },
     };
     const resource = {
-      url: resourceUrl(req),
-      description: "SkillPass protected paper analysis",
+      url: resourceUrl(req, service),
+      description: `SkillPass protected ${service.name}`,
       mimeType: "application/json",
       serviceName: "SkillPass",
-      tags: ["ckb", "fiber", "portable-rights", "ai"],
+      tags: ["ckb", "fiber", "portable-rights", "agent-access", service.kind],
     };
     const required = makePaymentRequired({ resource, requirement });
     await serviceState.setQuote(String(invoice.paymentHash).toLowerCase(), {
       requirement,
       resource,
       binding,
+      service: service.slug,
       expiresAt: Date.now() + PAYMENT_TIMEOUT_SECONDS * 1000,
     });
     return required;
@@ -438,7 +531,7 @@ async function createPaymentQuote(req, body) {
   return pending;
 }
 
-async function verifyPaymentHeader(req, body) {
+async function verifyPaymentHeader(req, body, service) {
   const header = req.headers["payment-signature"];
   if (!header) return null;
   if (Buffer.byteLength(String(header)) > PAYMENT_HEADER_MAX_BYTES) {
@@ -447,7 +540,7 @@ async function verifyPaymentHeader(req, body) {
   await maybePrunePaymentState();
   const paymentPayload = decodeHeaderJson(String(header), "PAYMENT-SIGNATURE");
   const hash = String(paymentPayload?.payload?.paymentHash || "").toLowerCase();
-  const binding = paymentBinding(req, body);
+  const binding = paymentBinding(req, body, service);
 
   // If the server settled this exact semantic request but the HTTP response was
   // lost, return the persisted receipt after fresh wallet/capability auth.
@@ -562,26 +655,40 @@ async function jsonBody(req) {
   catch { throw Object.assign(new Error("request body must be valid JSON"), { status: 400, code: "INVALID_JSON" }); }
 }
 
-function validateProtectedShape(body) {
+function validateProtectedShape(body, service) {
   if (!body || typeof body !== "object" || Array.isArray(body)) throw Object.assign(new Error("request body must be a JSON object"), { status: 400, code: "INVALID_BODY" });
   if (typeof body.address !== "string" || body.address.length < 8 || body.address.length > 256) throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
   if (typeof body.nonce !== "string" || !/^[0-9a-f]{48}$/i.test(body.nonce)) throw Object.assign(new Error("nonce is invalid"), { status: 400, code: "INVALID_NONCE" });
   if (!body.signature || typeof body.signature !== "object" || body.signature.identity !== body.address) {
-    throw Object.assign(new Error("SkillPass requires a CKB-native wallet signature bound to the connected CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
+    throw Object.assign(new Error("SkillPass requires a CKB-native wallet signature bound to the acting CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
   }
-  validatePaperInput(body.text);
+  validateServiceInput(service, body.input);
   outPointFromJson(body.outPoint);
 }
 
-async function authenticateProtectedRequest(body) {
-  validateProtectedShape(body);
+async function authenticateProtectedRequest(body, service) {
+  validateProtectedShape(body, service);
   const challenge = await consumeChallenge(body.nonce, body.address);
-  if (!challengeMatchesRequest(challenge, body)) {
+  if (!challengeMatchesRequest(challenge, body, service)) {
     throw Object.assign(new Error("signed challenge does not match this capability/request"), { status: 401, code: "CHALLENGE_INTENT_MISMATCH" });
   }
   const valid = await ccc.Signer.verifyMessage(challenge.message, body.signature);
   if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
-  return verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address });
+  if (body.delegation) {
+    return verifyDelegatedCapability({ credential: body.delegation, delegateAddress: body.address, outPoint: body.outPoint, service });
+  }
+  const inspected = await verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address, service });
+  return { ...inspected, principalAddress: body.address, ownerAddress: body.address, delegation: null };
+}
+
+function normalizeInvokeBody(raw, service) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+  if (Object.prototype.hasOwnProperty.call(raw, "input")) return raw;
+  // Backward-compatible /api/analyze clients send `text` instead of `input`.
+  if (service.slug === PRIMARY_SERVICE.slug && Object.prototype.hasOwnProperty.call(raw, "text")) {
+    return { ...raw, input: raw.text };
+  }
+  return raw;
 }
 
 function bearerMatches(req, expected) {
@@ -623,6 +730,11 @@ function sendJson(res, status, body, extraHeaders = {}) {
   const requestId = res.__skillpassRequestId || randomUUID();
   res.writeHead(status, { ...securityHeaders("application/json; charset=utf-8"), "cache-control": "no-store", "x-request-id": requestId, ...extraHeaders });
   res.end(JSON.stringify(body));
+}
+function sendText(res, status, body, extraHeaders = {}) {
+  const requestId = res.__skillpassRequestId || randomUUID();
+  res.writeHead(status, { ...securityHeaders("text/plain; charset=utf-8"), "cache-control": "no-store", "x-request-id": requestId, ...extraHeaders });
+  res.end(String(body));
 }
 
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
@@ -725,7 +837,8 @@ async function computeReadiness() {
     mode: "ckb-testnet",
     network: "testnet",
     tip,
-    service: "paper-analyzer-v1",
+    service: PRIMARY_SERVICE.slug,
+    serviceCount: serviceRegistry.services.length,
     paymentsRequired: PAYMENTS_REQUIRED,
     paymentProof: PAYMENTS_REQUIRED ? (process.env.FIBER_PAYMENT_PROOF || "invoice-status") : "disabled",
     dependencies,
@@ -742,6 +855,72 @@ async function readiness() {
     .then((value) => { readinessCache = { at: Date.now(), value }; return value; })
     .finally(() => { readinessInFlight = null; });
   return readinessInFlight;
+}
+
+async function handleInvokeRequest(req, res, service, rawBody) {
+  const requestBody = normalizeInvokeBody(rawBody, service);
+  validateProtectedShape(requestBody, service);
+  await rateLimit(req, `invoke:${service.slug}`, ANALYZE_RATE_LIMIT, GLOBAL_ANALYZE_RATE_LIMIT);
+
+  // Authentication + fresh live CKB ownership happen before Fiber work or the
+  // protected service. Delegated requests additionally verify the owner-signed
+  // grant and then re-check that the delegating owner still owns the live Cell.
+  const verified = await authenticateProtectedRequest(requestBody, service);
+
+  let payment = null;
+  if (PAYMENTS_REQUIRED) {
+    if (!req.headers["payment-signature"]) {
+      const required = await createPaymentQuote(req, requestBody, service);
+      return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with a fresh wallet challenge and PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
+    }
+    payment = await verifyPaymentHeader(req, requestBody, service);
+  }
+
+  const delegationBudget = await consumeDelegationBudget(verified, requestBody, service, payment);
+
+  const result = payment?.alreadySettled
+    ? payment.receipt.result
+    : await service.execute(requestBody.input, {
+        requestId: res.__skillpassRequestId,
+        capabilityId: verified.capability.capabilityId,
+        ownerAddress: verified.ownerAddress,
+        principalAddress: verified.principalAddress,
+        invocationKey: delegationInvocationKey(requestBody, payment),
+      });
+  const settlement = await settlePayment(payment, result);
+  const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
+  return sendJson(res, 200, {
+    ok: true,
+    service: { slug: service.slug, id: service.id, name: service.name, kind: service.kind },
+    entitlement: {
+      capabilityId: verified.capability.capabilityId,
+      serviceId: verified.capability.serviceId,
+      issuerId: verified.capability.issuerId,
+      currentOwnerLockHash: verified.currentOwnerLockHash,
+      policyId: verified.policyId,
+      policyFingerprint: verified.policyFingerprint,
+      checkedAt: verified.checkedAt,
+      source: "live-ckb-cell",
+    },
+    authorization: {
+      requestId: res.__skillpassRequestId,
+      action: "invoke",
+      principal: verified.delegation ? "delegate" : "owner",
+      principalAddress: verified.principalAddress,
+      ownerAddress: verified.ownerAddress,
+      delegationId: verified.delegation?.grantId || null,
+      delegationExpiresAt: verified.delegation?.expiresAt || null,
+      delegationVersion: verified.delegation?.version || null,
+      delegationLimits: verified.delegation?.limits || null,
+      delegationUsage: delegationBudget,
+      intentBound: true,
+      entitlementVerified: true,
+      paymentRequired: PAYMENTS_REQUIRED,
+      paymentVerified: PAYMENTS_REQUIRED ? Boolean(settlement) : false,
+    },
+    result,
+    payment: settlement,
+  }, headers);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -763,16 +942,50 @@ const server = http.createServer(async (req, res) => {
         "vercel-cdn-cache-control": "max-age=60",
       });
     }
+    if (req.method === "GET" && url.pathname === "/.well-known/skillpass-agent.txt") {
+      return sendText(res, 200, buildAgentSpec({
+        services: serviceRegistry.publicList().map((service) => ({ ...service, endpoint: `/api/invoke/${service.slug}` })),
+        paymentsRequired: PAYMENTS_REQUIRED,
+      }), {
+        "cache-control": "public, max-age=300",
+        "vercel-cdn-cache-control": "max-age=3600, stale-while-revalidate=86400",
+      });
+    }
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
-      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, trustedIssuerId: TRUSTED_ISSUER_ID, trustedIssuerIds: TRUSTED_ISSUER_IDS, policy: { id: SERVICE_POLICY_ID, fingerprint: SERVICE_POLICY_FINGERPRINT, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL }, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
+      return sendJson(res, 200, buildDiscovery({
+        deployment,
+        services: serviceRegistry.publicList().map((service) => ({
+          ...service,
+          endpoint: `/api/invoke/${service.slug}`,
+          policyId: serviceContext(service).policyId,
+          policyFingerprint: serviceContext(service).fingerprint,
+          payment: publicPaymentConfig(service),
+        })),
+        trustedIssuerId: TRUSTED_ISSUER_ID,
+        trustedIssuerIds: TRUSTED_ISSUER_IDS,
+        policy: { id: SERVICE_POLICY_ID, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL },
+        payments: publicPaymentConfig(),
+      }), {
         "cache-control": "public, max-age=60",
         "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
     }
     if (req.method === "GET" && url.pathname === "/api/openapi.json") {
-      return sendJson(res, 200, buildOpenApi({ paymentsRequired: PAYMENTS_REQUIRED, maxInputChars: MAX_INPUT_CHARS }), {
+      return sendJson(res, 200, buildOpenApi({ services: serviceRegistry.publicList(), paymentsRequired: PAYMENTS_REQUIRED }), {
         "cache-control": "public, max-age=300",
         "vercel-cdn-cache-control": "max-age=3600, stale-while-revalidate=86400",
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/services") {
+      return sendJson(res, 200, { ok: true, services: serviceRegistry.publicList().map((service) => ({
+        ...service,
+        endpoint: `/api/invoke/${service.slug}`,
+        policyId: serviceContext(service).policyId,
+        policyFingerprint: serviceContext(service).fingerprint,
+        payment: publicPaymentConfig(service),
+      })) }, {
+        "cache-control": "public, max-age=60",
+        "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
     }
     if (req.method === "GET" && url.pathname === "/api/config") {
@@ -780,7 +993,14 @@ const server = http.createServer(async (req, res) => {
         network: "testnet",
         deployment,
         serviceId: SERVICE_ID,
-        service: "paper-analyzer-v1",
+        service: PRIMARY_SERVICE.slug,
+        services: serviceRegistry.publicList().map((service) => ({
+          ...service,
+          endpoint: `/api/invoke/${service.slug}`,
+          policyId: serviceContext(service).policyId,
+          policyFingerprint: serviceContext(service).fingerprint,
+          payment: publicPaymentConfig(service),
+        })),
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
         trustedIssuerId: TRUSTED_ISSUER_ID,
         trustedIssuerIds: TRUSTED_ISSUER_IDS,
@@ -794,7 +1014,8 @@ const server = http.createServer(async (req, res) => {
           termsHash: SERVICE_TERMS_HASH || null,
           url: SERVICE_POLICY_URL || null,
         },
-        limits: { maxInputChars: MAX_INPUT_CHARS },
+        limits: { maxInputChars: PRIMARY_SERVICE.maxInputChars },
+        delegation: { enabled: true, maxLifetimeSeconds: 86400, model: "owner-signed-grant", versions: [1, 2], usageLimits: { maxUses: true, maxSpendAtomic: true, productionLedger: STATE_BACKEND !== "local" } },
         payments: publicPaymentConfig(),
       }, {
         "cache-control": "public, max-age=60",
@@ -810,7 +1031,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         mode: "ckb-testnet",
         network: "testnet",
-        service: "paper-analyzer-v1",
+        service: PRIMARY_SERVICE.slug,
+        serviceCount: serviceRegistry.services.length,
         paymentsRequired: PAYMENTS_REQUIRED,
         paymentProof: PAYMENTS_REQUIRED ? (process.env.FIBER_PAYMENT_PROOF || "invoice-status") : "disabled",
         dependencies: {
@@ -840,85 +1062,59 @@ const server = http.createServer(async (req, res) => {
       const outPoint = outPointFromJson(body.outPoint);
       await rateLimit(req, "capability-status", CAPABILITY_STATUS_RATE_LIMIT, GLOBAL_CAPABILITY_STATUS_RATE_LIMIT);
       const inspected = await inspectLiveCapability({ outPoint });
-      return sendJson(res, 200, {
-        ok: true,
+      const proof = {
+        schemaVersion: "1.0",
+        network: "ckb-testnet",
         source: "live-ckb-cell",
         checkedAt: inspected.checkedAt,
+        deployment: { codeHash: deployment.codeHash, hashType: deployment.hashType },
+        outPoint: { txHash: String(outPoint.txHash).toLowerCase(), index: String(outPoint.index) },
         capability: {
           capabilityId: inspected.capability.capabilityId,
           serviceId: inspected.capability.serviceId,
+          service: inspected.service.slug,
           issuerId: inspected.capability.issuerId,
           expiry: inspected.capability.expiry.toString(),
           currentOwnerLockHash: inspected.currentOwnerLockHash,
           transferable: true,
-          policyId: SERVICE_POLICY_ID,
-          policyFingerprint: SERVICE_POLICY_FINGERPRINT,
+          policyId: inspected.policyId,
+          policyFingerprint: inspected.policyFingerprint,
         },
-      });
+      };
+      const proofHash = createHash("sha256").update(canonicalJson(proof)).digest("hex");
+      return sendJson(res, 200, { ok: true, ...proof, proofHash });
     }
 
     if (req.method === "POST" && url.pathname === "/api/challenge") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      const { address, outPoint, requestHash } = await jsonBody(req);
+      const { address, outPoint, requestHash, service: serviceSlug = PRIMARY_SERVICE.slug, delegationId = "" } = await jsonBody(req);
       if (typeof address !== "string" || address.length < 8 || address.length > 256) {
         throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
       }
+      const service = serviceContext(serviceSlug).service;
+      if (delegationId && !/^[0-9a-f]{32}$/i.test(String(delegationId))) {
+        throw Object.assign(new Error("delegationId is invalid"), { status: 400, code: "INVALID_DELEGATION_ID" });
+      }
       outPointFromJson(outPoint);
       normalizeRequestHash(requestHash);
-      // Validate the address before spending a PostgreSQL rate-limit write.
       await ccc.Address.fromString(address, client);
       await rateLimit(req, "challenge", CHALLENGE_RATE_LIMIT, GLOBAL_CHALLENGE_RATE_LIMIT);
-      return sendJson(res, 200, await issueChallenge(address, outPoint, requestHash));
+      return sendJson(res, 200, await issueChallenge(address, outPoint, requestHash, service, delegationId));
     }
 
     if (req.method === "POST" && url.pathname === "/api/analyze") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      const requestBody = await jsonBody(req);
-      validateProtectedShape(requestBody);
-      await rateLimit(req, "analyze", ANALYZE_RATE_LIMIT, GLOBAL_ANALYZE_RATE_LIMIT);
+      return handleInvokeRequest(req, res, PRIMARY_SERVICE, await jsonBody(req));
+    }
 
-      // Authentication + live CKB ownership happen BEFORE any Fiber invoice or
-      // payment verification. An unauthenticated caller cannot make the service
-      // spend money on facilitator/FNN work.
-      const verified = await authenticateProtectedRequest(requestBody);
-
-      let payment = null;
-      if (PAYMENTS_REQUIRED) {
-        if (!req.headers["payment-signature"]) {
-          const required = await createPaymentQuote(req, requestBody);
-          return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with a fresh wallet challenge and PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
-        }
-        payment = await verifyPaymentHeader(req, requestBody);
-      }
-
-      const result = payment?.alreadySettled ? payment.receipt.result : analyzePaper(requestBody.text);
-      const settlement = await settlePayment(payment, result);
-      const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
-      return sendJson(res, 200, {
-        ok: true,
-        entitlement: {
-          capabilityId: verified.capability.capabilityId,
-          serviceId: verified.capability.serviceId,
-          issuerId: verified.capability.issuerId,
-          currentOwnerLockHash: verified.currentOwnerLockHash,
-          policyId: SERVICE_POLICY_ID,
-          policyFingerprint: SERVICE_POLICY_FINGERPRINT,
-          checkedAt: verified.checkedAt,
-          source: "live-ckb-cell",
-        },
-        authorization: {
-          requestId: res.__skillpassRequestId,
-          action: "analyze",
-          intentBound: true,
-          entitlementVerified: true,
-          paymentRequired: PAYMENTS_REQUIRED,
-          paymentVerified: PAYMENTS_REQUIRED ? Boolean(settlement) : false,
-        },
-        result,
-        payment: settlement,
-      }, headers);
+    const invokeMatch = req.method === "POST" ? url.pathname.match(/^\/api\/invoke\/([a-z0-9-]{1,64})$/) : null;
+    if (invokeMatch) {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      const service = serviceContext(invokeMatch[1]).service;
+      return handleInvokeRequest(req, res, service, await jsonBody(req));
     }
 
     if (url.pathname.startsWith("/api/")) {

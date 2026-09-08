@@ -307,3 +307,34 @@ ccc-connector {
   .invoice-payment-grid { grid-template-columns: 1fr; }
   .invoice-qr { width: 158px; justify-self: center; }
 }
+
+/* Funding-ready platform surfaces: evidence, delegation and generic services. */
+.raw-result { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.raw-result summary { cursor: pointer; color: var(--muted); font-size: 10px; font-weight: 650; }
+.raw-result pre { margin: 9px 0 0; max-height: 320px; overflow: auto; padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); font-size: 9px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.receipt-card { margin-top: 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--green-soft); }
+.receipt-card > div { min-width: 0; display: grid; gap: 3px; }
+.receipt-card strong { font-size: 11px; }
+.receipt-card small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.proof-panel { display: grid; gap: 8px; }
+.proof-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.delegation-box { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 10px; }
+.delegation-box > div:first-child p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.delegation-box label { display: grid; gap: 5px; color: var(--muted); font-size: 9px; }
+.delegation-box input, .delegation-box select { width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--text); padding: 8px 10px; font: inherit; font-size: 10px; }
+.credential-output { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.credential-output > div:first-child { min-width: 0; display: grid; gap: 3px; }
+.credential-output small { color: var(--muted); font-size: 9px; line-height: 1.4; }
+
+@media (max-width: 700px) {
+  .receipt-card, .credential-output { align-items: stretch; flex-direction: column; }
+}
+
+.delegation-limit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 720px) {
+  .delegation-limit-grid { grid-template-columns: 1fr; }
+}

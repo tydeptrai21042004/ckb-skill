@@ -9,12 +9,29 @@ import {
   type Deployment,
 } from "@skillpass/ckb-client/live";
 import { FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
+import { canonicalJson } from "@skillpass/service-gateway";
+import { buildDelegationMessage, type DelegationCredential, type DelegationGrant } from "@skillpass/delegation";
+
+type ServiceDescriptor = {
+  slug: string;
+  id: `0x${string}`;
+  name: string;
+  description?: string;
+  inputKind: "text" | "json";
+  maxInputChars: number;
+  kind: string;
+  endpoint: string;
+  policyId: string;
+  policyFingerprint?: string;
+};
 
 type RuntimeConfig = {
   network: "testnet";
   deployment: Deployment;
   serviceId: `0x${string}`;
   service: string;
+  services?: ServiceDescriptor[];
+  delegation?: { enabled: boolean; maxLifetimeSeconds: number; model: string; versions?: number[]; usageLimits?: { maxUses?: boolean; maxSpendAtomic?: boolean; productionLedger?: boolean } };
   enablePublicIssue: boolean;
   trustedIssuerId: `0x${string}`;
   trustedIssuerIds?: Array<`0x${string}`>;
@@ -103,17 +120,46 @@ type PaymentRequired = {
 type PendingPayment = {
   required: PaymentRequired;
   outPoint: { txHash: string; index: string };
-  text: string;
+  input: unknown;
+  serviceSlug: string;
+};
+
+type AuthorizationReceipt = {
+  service?: { slug?: string; id?: string; name?: string; kind?: string };
+  entitlement?: Record<string, unknown>;
+  authorization?: {
+    requestId?: string;
+    action?: string;
+    principal?: "owner" | "delegate";
+    principalAddress?: string;
+    ownerAddress?: string;
+    delegationId?: string | null;
+    delegationExpiresAt?: number | null;
+    delegationVersion?: number | null;
+    delegationLimits?: { maxUses?: number; maxSpendAtomic?: string } | null;
+    delegationUsage?: { usedCalls: number; usedSpendAtomic: string; remainingUses: number | null; remainingSpendAtomic: string | null; replayed: boolean } | null;
+    intentBound?: boolean;
+    entitlementVerified?: boolean;
+    paymentRequired?: boolean;
+    paymentVerified?: boolean;
+  };
+  payment?: Record<string, unknown> | null;
 };
 
 type Notice = { tone: "info" | "success" | "error"; message: string };
 
 type CapabilityStatus = {
   ok: boolean;
+  schemaVersion?: string;
+  network?: string;
   source: "live-ckb-cell";
   checkedAt: string;
+  proofHash?: string;
+  deployment?: { codeHash: string; hashType: string };
+  outPoint?: { txHash: string; index: string };
   capability: {
     capabilityId: string;
+    service?: string;
     serviceId: string;
     issuerId: string;
     expiry: string;
@@ -312,21 +358,53 @@ export default function App() {
   const [issueRecipient, setIssueRecipient] = useState("");
   const [text, setText] = useState(loadDraft);
   const [issueDays, setIssueDays] = useState(7);
+  const [issueServiceSlug, setIssueServiceSlug] = useState("");
   const [pendingPayment, setPendingPayment] = useState<PendingPayment>();
   const [paymentPreimage, setPaymentPreimage] = useState("");
   const [result, setResult] = useState<AnalysisResult>();
+  const [lastReceipt, setLastReceipt] = useState<AuthorizationReceipt>();
   const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus>();
+  const [delegateAddress, setDelegateAddress] = useState("");
+  const [delegationMinutes, setDelegationMinutes] = useState(60);
+  const [delegationMaxUses, setDelegationMaxUses] = useState(20);
+  const [delegationMaxSpendAtomic, setDelegationMaxSpendAtomic] = useState("");
+  const [delegationCredential, setDelegationCredential] = useState<DelegationCredential>();
 
   const selectedCap = useMemo(
     () => caps.find((cap) => capabilityKey(cap) === selectedKey) ?? caps[0],
     [caps, selectedKey],
   );
 
+  const services = useMemo<ServiceDescriptor[]>(() => {
+    if (config?.services?.length) return config.services;
+    if (!config) return [];
+    return [{
+      slug: config.service,
+      id: config.serviceId,
+      name: formatServiceName(config.service),
+      description: "Protected SkillPass service",
+      inputKind: "text",
+      maxInputChars: config.limits?.maxInputChars ?? 20_000,
+      kind: "builtin",
+      endpoint: "/api/analyze",
+      policyId: config.servicePolicy?.id ?? "skillpass-default",
+      policyFingerprint: config.servicePolicy?.fingerprint,
+    }];
+  }, [config]);
+
+  const selectedService = useMemo(() => {
+    if (!selectedCap) return services[0];
+    return services.find((service) => service.id.toLowerCase() === String(selectedCap.capability.serviceId).toLowerCase()) ?? services[0];
+  }, [selectedCap, services]);
+
+  const issueService = services.find((service) => service.slug === issueServiceSlug) ?? services[0];
+
   async function loadConfig() {
     setConfigError("");
     try {
       const value = await api<RuntimeConfig>("/api/config");
       setConfig(value);
+      setIssueServiceSlug((current) => current || value.services?.[0]?.slug || value.service);
     } catch (error) {
       setConfig(undefined);
       if (error instanceof ApiRequestError) {
@@ -377,7 +455,9 @@ export default function App() {
       setCaps([]);
       setSelectedKey("");
       setResult(undefined);
+      setLastReceipt(undefined);
       setCapabilityStatus(undefined);
+      setDelegationCredential(undefined);
       return;
     }
     signer.getRecommendedAddress()
@@ -393,6 +473,7 @@ export default function App() {
         signer,
         deployment: config.deployment,
         expectedServiceId: config.serviceId,
+        expectedServiceIds: services.map((service) => service.id),
         trustedIssuerId: config.trustedIssuerId,
         trustedIssuerIds: config.trustedIssuerIds,
         requireTransferable: true,
@@ -433,12 +514,12 @@ export default function App() {
         signer,
         deployment: config.deployment,
         recipientAddress: issueRecipient.trim(),
-        serviceId: config.serviceId,
+        serviceId: issueService?.id ?? config.serviceId,
         expiry,
         flags: FLAG_TRANSFERABLE,
       });
       const { txHash } = await sendAndWait(signer, tx);
-      setNotice({ tone: "success", message: `Provider-issued pass confirmed: ${short(txHash, 10)} · ${short(capabilityId, 10)} → ${short(issueRecipient.trim(), 8)}` });
+      setNotice({ tone: "success", message: `Provider-issued ${issueService?.name ?? "SkillPass"} pass confirmed: ${short(txHash, 10)} · ${short(capabilityId, 10)} → ${short(issueRecipient.trim(), 8)}` });
       setIssueRecipient("");
       await refresh();
     } catch (e) {
@@ -486,18 +567,37 @@ export default function App() {
     }
   }
 
-  async function signedRequestBody(outPoint: { txHash: string; index: string }, requestText: string) {
+  function parseServiceInput(service: ServiceDescriptor, draft: string): unknown {
+    if (service.inputKind === "text") return draft;
+    try { return JSON.parse(draft); }
+    catch { throw new Error("This protected service expects valid JSON input."); }
+  }
+
+  async function signedRequestBody(
+    outPoint: { txHash: string; index: string },
+    input: unknown,
+    service: ServiceDescriptor,
+    delegation?: DelegationCredential,
+  ) {
     if (!signer || !address) throw new Error("Connect a wallet first.");
-    const requestHash = await sha256Hex(requestText);
-    const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", { address, outPoint, requestHash });
+    const requestMaterial = service.inputKind === "text" ? String(input) : canonicalJson(input);
+    const requestHash = await sha256Hex(requestMaterial);
+    const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", {
+      address,
+      outPoint,
+      requestHash,
+      service: service.slug,
+      delegationId: delegation?.grant.grantId || "",
+    });
     const signature = await signer.signMessage(challenge.message);
     if (signature.identity !== address) {
       throw new Error("This deployment requires a CKB-native signer whose message-signature identity matches the connected CKB address.");
     }
-    return { address, nonce: challenge.nonce, signature, outPoint, text: requestText };
+    return { address, nonce: challenge.nonce, signature, outPoint, input, ...(delegation ? { delegation } : {}) };
   }
 
-  async function sendAnalyze(
+  async function sendInvoke(
+    service: ServiceDescriptor,
     body: Awaited<ReturnType<typeof signedRequestBody>>,
     paymentRequired?: PaymentRequired,
     preimage = "",
@@ -519,34 +619,38 @@ export default function App() {
         extensions: {},
       });
     }
-    const res = await fetch("/api/analyze", { method: "POST", headers, body: JSON.stringify(body) });
+    const endpoint = service.endpoint || `/api/invoke/${service.slug}`;
+    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(body) });
     if (res.status === 402) {
       const value = await parseApiBody<{ message?: string; error?: string }>(res);
       const header = res.headers.get("payment-required");
       if (!header) throw new Error(value.message || "Payment required, but the server did not return payment details.");
       return { kind: "payment" as const, required: decodeBase64Json<PaymentRequired>(header), value };
     }
-    const value = await readApiResponse<{ result?: AnalysisResult; [key: string]: unknown }>(res);
+    const value = await readApiResponse<{ result?: AnalysisResult; [key: string]: unknown } & AuthorizationReceipt>(res);
     return { kind: "success" as const, value };
   }
 
   async function useService(cap: Found) {
-    if (!signer || !config || !address) return;
+    if (!signer || !config || !address || !selectedService) return;
     setBusy("analyze");
     setResult(undefined);
+    setLastReceipt(undefined);
     try {
       const outPoint = outPointJson(cap.cell);
-      const body = await signedRequestBody(outPoint, text);
-      const response = await sendAnalyze(body);
+      const input = parseServiceInput(selectedService, text);
+      const body = await signedRequestBody(outPoint, input, selectedService);
+      const response = await sendInvoke(selectedService, body);
       if (response.kind === "payment") {
-        setPendingPayment({ required: response.required, outPoint, text });
+        setPendingPayment({ required: response.required, outPoint, input, serviceSlug: selectedService.slug });
         setPaymentPreimage("");
         setNotice({ tone: "info", message: "Payment is required before this request can run." });
       } else {
         setPendingPayment(undefined);
         setPaymentPreimage("");
         setResult(response.value.result as AnalysisResult);
-        setNotice({ tone: "success", message: "Access verified. Analysis complete." });
+        setLastReceipt(response.value);
+        setNotice({ tone: "success", message: `Access verified. ${selectedService.name} completed.` });
       }
     } catch (e) {
       setNotice({ tone: "error", message: `Request failed: ${(e as Error).message}` });
@@ -557,13 +661,18 @@ export default function App() {
 
   async function retryPaidUse() {
     if (!pendingPayment || !signer || !address) return;
+    const service = services.find((item) => item.slug === pendingPayment.serviceSlug);
+    if (!service) {
+      setNotice({ tone: "error", message: "The protected service is no longer available." });
+      return;
+    }
     setBusy("paid-retry");
     try {
-      const body = await signedRequestBody(pendingPayment.outPoint, pendingPayment.text);
+      const body = await signedRequestBody(pendingPayment.outPoint, pendingPayment.input, service);
       if (config?.payments?.proofMode === "preimage" && !/^0x[0-9a-fA-F]{64}$/.test(paymentPreimage.trim())) {
         throw new Error("Enter the 32-byte Fiber payment preimage (0x + 64 hex characters)." );
       }
-      const response = await sendAnalyze(body, pendingPayment.required, paymentPreimage);
+      const response = await sendInvoke(service, body, pendingPayment.required, paymentPreimage);
       if (response.kind === "payment") {
         setPendingPayment({ ...pendingPayment, required: response.required });
         setNotice({ tone: "info", message: response.value.message || "Payment has not been verified yet." });
@@ -571,13 +680,65 @@ export default function App() {
         setPendingPayment(undefined);
         setPaymentPreimage("");
         setResult(response.value.result as AnalysisResult);
-        setNotice({ tone: "success", message: "Payment verified. Analysis complete." });
+        setLastReceipt(response.value);
+        setNotice({ tone: "success", message: "Payment verified. Protected request complete." });
       }
     } catch (e) {
       setNotice({ tone: "error", message: `Paid request failed: ${(e as Error).message}` });
     } finally {
       setBusy("");
     }
+  }
+
+  async function createDelegation(cap: Found) {
+    if (!signer || !address || !selectedService || !delegateAddress.trim()) return;
+    setBusy("delegate");
+    try {
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      const grantId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      const issuedAt = Date.now();
+      const maxMinutes = Math.max(1, Math.floor((config?.delegation?.maxLifetimeSeconds ?? 86_400) / 60));
+      const requestedMinutes = Math.max(1, Math.min(maxMinutes, delegationMinutes));
+      const spendLimit = delegationMaxSpendAtomic.trim();
+      if (spendLimit && !/^[1-9][0-9]{0,77}$/.test(spendLimit)) throw new Error("Spend cap must be a positive atomic-unit integer.");
+      const hasLimits = delegationMaxUses > 0 || Boolean(spendLimit);
+      const baseGrant = {
+        grantId,
+        ownerAddress: address,
+        delegateAddress: delegateAddress.trim(),
+        serviceSlug: selectedService.slug,
+        serviceId: selectedService.id,
+        capabilityId: cap.capability.capabilityId,
+        capabilityOutPoint: outPointJson(cap.cell),
+        action: "invoke",
+        issuedAt,
+        expiresAt: issuedAt + requestedMinutes * 60_000,
+      };
+      const grant: DelegationGrant = hasLimits
+        ? { ...baseGrant, version: 2, limits: { ...(delegationMaxUses > 0 ? { maxUses: delegationMaxUses } : {}), ...(spendLimit ? { maxSpendAtomic: spendLimit } : {}) } }
+        : { ...baseGrant, version: 1 };
+      const ownerSignature = await signer.signMessage(buildDelegationMessage(grant));
+      if (ownerSignature.identity !== address) throw new Error("Delegation signature identity does not match the current owner wallet.");
+      const credential = { grant, ownerSignature } as DelegationCredential;
+      setDelegationCredential(credential);
+      const limitSummary = grant.version === 2 ? ` Limits: ${grant.limits.maxUses ?? "unlimited"} uses${grant.limits.maxSpendAtomic ? `, ${grant.limits.maxSpendAtomic} atomic units` : ""}.` : "";
+      setNotice({ tone: "success", message: `Delegated ${selectedService.name} access for ${requestedMinutes} minute${requestedMinutes === 1 ? "" : "s"}.${limitSummary} Ownership stays in your wallet.` });
+    } catch (e) {
+      setDelegationCredential(undefined);
+      setNotice({ tone: "error", message: `Delegation failed: ${(e as Error).message}` });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function downloadJson(value: unknown, filename: string) {
+    const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = href;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(href);
   }
 
   async function copyText(value: string, label: string) {
@@ -590,9 +751,12 @@ export default function App() {
   }
 
   const connected = Boolean(signer && signerInfo);
-  const maxInputChars = config?.limits?.maxInputChars ?? 20_000;
-  const inputValid = text.trim().length > 0 && text.length <= maxInputChars;
-  const serviceName = formatServiceName(config?.service);
+  const maxInputChars = selectedService?.maxInputChars ?? config?.limits?.maxInputChars ?? 20_000;
+  let inputValid = text.trim().length > 0 && text.length <= maxInputChars;
+  if (selectedService?.inputKind === "json" && inputValid) {
+    try { canonicalJson(JSON.parse(text)); } catch { inputValid = false; }
+  }
+  const serviceName = selectedService?.name ?? formatServiceName(config?.service);
   const selectedActive = selectedCap ? isCapabilityActive(selectedCap) : false;
   const ckbReady = Boolean(health?.dependencies?.ckb?.ok);
   const fiberReady = !config?.payments?.required || Boolean(health?.dependencies?.facilitator?.ok);
@@ -710,11 +874,11 @@ export default function App() {
                         type="button"
                         className={`pass-option ${selected ? "selected" : ""}`}
                         key={key}
-                        onClick={() => { setSelectedKey(key); setResult(undefined); setCapabilityStatus(undefined); setRecipient(""); }}
+                        onClick={() => { setSelectedKey(key); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); setRecipient(""); }}
                       >
                         <span className={`pass-state ${active ? "active" : "expired"}`}><span />{active ? "Active" : "Expired"}</span>
-                        <strong>Pass {short(cap.capability.capabilityId, 6)}</strong>
-                        <small>Valid until {formatExpiry(cap.capability.expiry)}</small>
+                        <strong>{services.find((service) => service.id.toLowerCase() === String(cap.capability.serviceId).toLowerCase())?.name ?? "SkillPass"}</strong>
+                        <small>{short(cap.capability.capabilityId, 5)} · {formatExpiry(cap.capability.expiry)}</small>
                       </button>
                     );
                   })}
@@ -730,6 +894,14 @@ export default function App() {
                       <span>Recipient</span>
                       <input value={issueRecipient} onChange={(e) => setIssueRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
                     </label>
+                    {services.length > 1 && (
+                      <label>
+                        <span>Service</span>
+                        <select value={issueService?.slug ?? ""} onChange={(e) => setIssueServiceSlug(e.target.value)}>
+                          {services.map((service) => <option key={service.slug} value={service.slug}>{service.name}</option>)}
+                        </select>
+                      </label>
+                    )}
                     <label>
                       <span>Validity</span>
                       <select value={issueDays} onChange={(e) => setIssueDays(Number(e.target.value))}>
@@ -750,7 +922,7 @@ export default function App() {
                 <div>
                   <span className="eyebrow">Protected service</span>
                   <h1>{serviceName}</h1>
-                  <p>Access is verified from the live CKB Cell when you run the service.</p>
+                  <p>{selectedService?.description || "Access is verified from the live CKB Cell when you run the service."}</p>
                 </div>
                 {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
               </div>
@@ -771,16 +943,16 @@ export default function App() {
                       <span>Valid until {formatExpiry(selectedCap.capability.expiry)}</span>
                     </div>
 
-                    <label className="editor-label" htmlFor="paper-input">Text to analyze</label>
+                    <label className="editor-label" htmlFor="paper-input">{selectedService?.inputKind === "json" ? "JSON request" : "Protected input"}</label>
                     <textarea
                       id="paper-input"
                       className="editor"
                       maxLength={maxInputChars}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      placeholder="Paste text to analyze…"
+                      placeholder={selectedService?.inputKind === "json" ? '{"query":"example"}' : "Paste text to process…"}
                       rows={13}
-                      spellCheck
+                      spellCheck={selectedService?.inputKind !== "json"}
                     />
                     <div className="editor-footer">
                       <span />
@@ -796,7 +968,7 @@ export default function App() {
                         disabled={!selectedActive || !inputValid || Boolean(busy) || !systemReady}
                         onClick={() => useService(selectedCap)}
                       >
-                        {busy === "analyze" ? "Verifying access…" : "Run analysis"}
+                        {busy === "analyze" ? "Verifying access…" : `Run ${selectedService?.name ?? "service"}`}
                         {busy !== "analyze" && <Icon name="arrow" size={18} />}
                       </button>
                     </div>
@@ -804,7 +976,7 @@ export default function App() {
 
                   <section className="result-card">
                     <div className="result-heading">
-                      <div><span className="eyebrow">Output</span><h2>Analysis result</h2></div>
+                      <div><span className="eyebrow">Output</span><h2>{selectedService?.name ?? "Service"} result</h2></div>
                       {result && <span className="result-status"><Icon name="check" size={14} /> Complete</span>}
                     </div>
 
@@ -812,12 +984,14 @@ export default function App() {
                       <div className="result-placeholder"><p>Your result will appear here.</p></div>
                     ) : (
                       <div className="result-content">
-                        <div className="metric-grid">
-                          <div className="metric"><span>Words</span><strong>{result.words?.toLocaleString() ?? "—"}</strong></div>
-                          <div className="metric"><span>Sentences</span><strong>{result.sentences?.toLocaleString() ?? "—"}</strong></div>
-                          <div className="metric"><span>Characters</span><strong>{result.characters?.toLocaleString() ?? "—"}</strong></div>
-                          <div className="metric"><span>Lexical diversity</span><strong>{typeof result.lexicalDiversity === "number" ? `${Math.round(result.lexicalDiversity * 100)}%` : "—"}</strong></div>
-                        </div>
+                        {(typeof result.words === "number" || typeof result.sentences === "number" || typeof result.characters === "number") && (
+                          <div className="metric-grid">
+                            <div className="metric"><span>Words</span><strong>{result.words?.toLocaleString() ?? "—"}</strong></div>
+                            <div className="metric"><span>Sentences</span><strong>{result.sentences?.toLocaleString() ?? "—"}</strong></div>
+                            <div className="metric"><span>Characters</span><strong>{result.characters?.toLocaleString() ?? "—"}</strong></div>
+                            <div className="metric"><span>Lexical diversity</span><strong>{typeof result.lexicalDiversity === "number" ? `${Math.round(result.lexicalDiversity * 100)}%` : "—"}</strong></div>
+                          </div>
+                        )}
 
                         {result.preview && <div className="result-block"><h3>Preview</h3><p>{result.preview}</p></div>}
                         {markerEntries.length > 0 && (
@@ -826,6 +1000,20 @@ export default function App() {
                             <div className="marker-list">
                               {markerEntries.map(([marker, count]) => <span key={marker}>{marker}<strong>{count}</strong></span>)}
                             </div>
+                          </div>
+                        )}
+                        <details className="raw-result">
+                          <summary>Full service response</summary>
+                          <pre>{JSON.stringify(result, null, 2)}</pre>
+                        </details>
+                        {lastReceipt?.authorization && (
+                          <div className="receipt-card">
+                            <div>
+                              <span className="eyebrow">Verification receipt</span>
+                              <strong>{lastReceipt.authorization.principal === "delegate" ? "Delegated access" : "Owner access"} verified</strong>
+                              <small>Request {short(lastReceipt.authorization.requestId || "", 8)} · live entitlement {lastReceipt.authorization.entitlementVerified ? "✓" : "—"} · payment {lastReceipt.authorization.paymentRequired ? (lastReceipt.authorization.paymentVerified ? "✓" : "pending") : "not required"}</small>
+                            </div>
+                            <button className="button ghost small" onClick={() => void copyText(JSON.stringify(lastReceipt, null, 2), "Receipt")}>Copy receipt</button>
                           </div>
                         )}
                       </div>
@@ -849,9 +1037,15 @@ export default function App() {
                         </button>
                       </div>
                       {capabilityStatus && (
-                        <div className="live-owner-result" title={capabilityStatus.capability.currentOwnerLockHash}>
-                          <Icon name="check" size={14} />
-                          <span>Verified on CKB · owner {short(capabilityStatus.capability.currentOwnerLockHash, 8)}</span>
+                        <div className="proof-panel">
+                          <div className="live-owner-result" title={capabilityStatus.capability.currentOwnerLockHash}>
+                            <Icon name="check" size={14} />
+                            <span>Verified on CKB · owner {short(capabilityStatus.capability.currentOwnerLockHash, 8)}{capabilityStatus.proofHash ? ` · proof ${short(capabilityStatus.proofHash, 6)}` : ""}</span>
+                          </div>
+                          <div className="proof-actions">
+                            <button type="button" className="button ghost small" onClick={() => void copyText(JSON.stringify(capabilityStatus, null, 2), "Ownership proof")}>Copy proof</button>
+                            <button type="button" className="button ghost small" onClick={() => downloadJson(capabilityStatus, `skillpass-proof-${short(selectedCap.capability.capabilityId, 6).replace("…", "-")}.json`)}>Export JSON</button>
+                          </div>
                         </div>
                       )}
 
@@ -863,6 +1057,56 @@ export default function App() {
                         </div>
                         <p>After confirmation, this wallet no longer owns the service right.</p>
                       </div>
+
+                      {config?.delegation?.enabled !== false && selectedActive && (
+                        <div className="delegation-box">
+                          <div>
+                            <strong>Delegate to an agent</strong>
+                            <p>Create a short-lived, owner-signed credential. Your Capability Cell stays in this wallet, and transferring the pass invalidates the credential automatically.</p>
+                          </div>
+                          <label>
+                            <span>Agent / delegate CKB address</span>
+                            <input value={delegateAddress} onChange={(e) => setDelegateAddress(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
+                          </label>
+                          <label>
+                            <span>Lifetime</span>
+                            <select value={delegationMinutes} onChange={(e) => setDelegationMinutes(Number(e.target.value))}>
+                              <option value={15}>15 minutes</option>
+                              <option value={60}>1 hour</option>
+                              <option value={360}>6 hours</option>
+                              <option value={1440}>24 hours</option>
+                            </select>
+                          </label>
+                          <div className="delegation-limit-grid">
+                            <label>
+                              <span>Maximum uses</span>
+                              <select value={delegationMaxUses} onChange={(e) => setDelegationMaxUses(Number(e.target.value))}>
+                                <option value={5}>5 calls</option>
+                                <option value={20}>20 calls</option>
+                                <option value={100}>100 calls</option>
+                                <option value={1000}>1,000 calls</option>
+                                <option value={0}>Unlimited</option>
+                              </select>
+                            </label>
+                            <label>
+                              <span>Fiber spend cap (atomic units, optional)</span>
+                              <input value={delegationMaxSpendAtomic} onChange={(e) => setDelegationMaxSpendAtomic(e.target.value.replace(/\D/g, ""))} placeholder="e.g. 5000000" inputMode="numeric" autoComplete="off" />
+                            </label>
+                          </div>
+                          <button type="button" className="button secondary" disabled={Boolean(busy) || !delegateAddress.trim()} onClick={() => createDelegation(selectedCap)}>
+                            <Icon name="key" size={14} /> {busy === "delegate" ? "Signing…" : "Create delegated credential"}
+                          </button>
+                          {delegationCredential && (
+                            <div className="credential-output">
+                              <div><strong>Credential ready</strong><small>Scope: invoke {selectedService?.name} · expires {new Date(delegationCredential.grant.expiresAt).toLocaleString()}{delegationCredential.grant.version === 2 ? ` · max ${delegationCredential.grant.limits.maxUses ?? "∞"} uses${delegationCredential.grant.limits.maxSpendAtomic ? ` · spend ≤ ${delegationCredential.grant.limits.maxSpendAtomic}` : ""}` : ""}</small></div>
+                              <div className="proof-actions">
+                                <button className="button ghost small" onClick={() => void copyText(JSON.stringify(delegationCredential, null, 2), "Delegation credential")}>Copy</button>
+                                <button className="button ghost small" onClick={() => downloadJson(delegationCredential, `skillpass-delegation-${delegationCredential.grant.grantId}.json`)}>Export JSON</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       <details className="technical-details">
                         <summary>Technical details</summary>

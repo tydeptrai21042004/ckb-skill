@@ -7,11 +7,13 @@ import {
   PostgresRecordStore,
   PostgresChallengeStore,
   PostgresRateLimiter,
+  PostgresDelegationUsageLedger,
   RedisChallengeStore,
   RedisRateLimiter,
   redisHealth,
 } from "@skillpass/production-store";
 import { LiveServiceState } from "./state.mjs";
+import { LocalDelegationUsageLedger } from "@skillpass/delegation/usage-ledger";
 
 class LocalChallengeStore {
   #entries = new Map();
@@ -64,6 +66,7 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
       serviceState: new LiveServiceState({ file: stateFile }),
       challenges: new LocalChallengeStore({ ttlMs: challengeTtlMs }),
       rateLimiter: new LocalRateLimiter(),
+      delegationUsage: new LocalDelegationUsageLedger(),
       async health() { return { ok: true, backend, postgres: { ok: true, skipped: true }, redis: { ok: true, skipped: true } }; },
       async close() {},
     };
@@ -82,6 +85,7 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
       serviceState: new LiveServiceState({ store: recordStore }),
       challenges: new PostgresChallengeStore({ pool, ttlMs: challengeTtlMs }),
       rateLimiter: new PostgresRateLimiter({ pool }),
+      delegationUsage: new PostgresDelegationUsageLedger({ pool }),
       async health() {
         const postgres = await postgresHealth(pool);
         return { ok: postgres.ok, backend, postgres, redis: { ok: true, skipped: true } };
@@ -96,6 +100,7 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
     serviceState: new LiveServiceState({ store: recordStore }),
     challenges: new RedisChallengeStore({ client: redis, ttlMs: challengeTtlMs }),
     rateLimiter: new RedisRateLimiter({ client: redis }),
+    delegationUsage: new PostgresDelegationUsageLedger({ pool }),
     async health() {
       const [postgres, redisStatus] = await Promise.all([postgresHealth(pool), redisHealth(redis)]);
       return { ok: postgres.ok && redisStatus.ok, backend, postgres, redis: redisStatus };
