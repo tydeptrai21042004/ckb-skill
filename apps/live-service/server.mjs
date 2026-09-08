@@ -53,7 +53,7 @@ const PUBLIC_DIR = process.env.PUBLIC_DIR || join(dirname(fileURLToPath(import.m
 const PUBLIC_BASE_URL = String(process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
 const TRUST_PROXY = process.env.TRUST_PROXY === "true";
 const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(), ".runtime", "service-state.json");
-const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
+const STATE_BACKEND = String(process.env.STATE_BACKEND || (process.env.VERCEL ? "postgres" : "local")).trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
 const SERVICE_POLICY_ID = String(process.env.SERVICE_POLICY_ID || "paper-analyzer-v1").trim();
@@ -67,8 +67,10 @@ const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
 const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
 const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
+const CAPABILITY_STATUS_RATE_LIMIT = Number(process.env.CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE || 24);
 const GLOBAL_CHALLENGE_RATE_LIMIT = Number(process.env.GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE || 240);
 const GLOBAL_ANALYZE_RATE_LIMIT = Number(process.env.GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE || 120);
+const GLOBAL_CAPABILITY_STATUS_RATE_LIMIT = Number(process.env.GLOBAL_CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE || 600);
 const ENABLE_DEEP_HEALTH = process.env.ENABLE_DEEP_HEALTH === "true";
 const DEEP_HEALTH_TOKEN = readSecret("DEEP_HEALTH_TOKEN");
 const CHALLENGE_TTL_MS = Number(process.env.CHALLENGE_TTL_MS || 60_000);
@@ -81,6 +83,8 @@ const PAYMENT_ATOMIC_UNIT = String(process.env.PAYMENT_ATOMIC_UNIT || (PAYMENT_A
 const PAYMENT_PAY_TO = String(process.env.PAYMENT_PAY_TO || "fiber-invoice-receiver");
 const PAYMENT_CURRENCY = String(process.env.PAYMENT_CURRENCY || "Fibt");
 const PAYMENT_TIMEOUT_SECONDS = Number(process.env.PAYMENT_TIMEOUT_SECONDS || 600);
+const PAYMENT_PRUNE_INTERVAL_MS = Number(process.env.PAYMENT_PRUNE_INTERVAL_MS || 30_000);
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000);
 const FIBER_NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
 const FIBER_NETWORK = FIBER_NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const FACILITATOR_URL = process.env.FACILITATOR_URL || "http://127.0.0.1:8790";
@@ -96,8 +100,10 @@ if (!Number.isSafeInteger(UPSTREAM_TIMEOUT_MS) || UPSTREAM_TIMEOUT_MS < 1000 || 
 for (const [name, value, max] of [
   ["CHALLENGE_RATE_LIMIT_PER_MINUTE", CHALLENGE_RATE_LIMIT, 120],
   ["ANALYZE_RATE_LIMIT_PER_MINUTE", ANALYZE_RATE_LIMIT, 60],
+  ["CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE", CAPABILITY_STATUS_RATE_LIMIT, 240],
   ["GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE", GLOBAL_CHALLENGE_RATE_LIMIT, 5000],
   ["GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE", GLOBAL_ANALYZE_RATE_LIMIT, 2000],
+  ["GLOBAL_CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE", GLOBAL_CAPABILITY_STATUS_RATE_LIMIT, 10_000],
 ]) {
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${name} must be 1..${max}`);
 }
@@ -107,6 +113,9 @@ if (!Number.isSafeInteger(SERVICE_RECEIPT_TTL_SECONDS) || SERVICE_RECEIPT_TTL_SE
 }
 if (PUBLIC_BASE_URL && !/^https?:\/\//i.test(PUBLIC_BASE_URL)) throw new Error("PUBLIC_BASE_URL must start with http:// or https://");
 if (IS_PUBLIC_PRODUCTION && PUBLIC_BASE_URL && !PUBLIC_BASE_URL.startsWith("https://")) throw new Error("PUBLIC_BASE_URL must use https:// in public production");
+if (IS_PUBLIC_PRODUCTION && PAYMENTS_REQUIRED && !PUBLIC_BASE_URL && !IS_VERCEL) {
+  throw new Error("PUBLIC_BASE_URL is required for paid public production outside Vercel");
+}
 if (IS_PUBLIC_PRODUCTION && ENABLE_PUBLIC_ISSUE) throw new Error("ENABLE_PUBLIC_ISSUE=true is forbidden in the hardened public production profile");
 if (IS_PUBLIC_PRODUCTION && process.env.ALLOW_DEV_PAYMENT === "true") throw new Error("ALLOW_DEV_PAYMENT=true is forbidden in public production");
 if (IS_PUBLIC_PRODUCTION && STATE_BACKEND === "local") throw new Error("STATE_BACKEND=local is forbidden in public production; use postgres");
@@ -114,6 +123,12 @@ if (ENABLE_DEEP_HEALTH && IS_PUBLIC_PRODUCTION && DEEP_HEALTH_TOKEN.length < 32)
 if (!/^[1-9][0-9]*$/.test(PAYMENT_AMOUNT)) throw new Error("PAYMENT_AMOUNT must be a positive atomic-unit integer string");
 if (!Number.isSafeInteger(PAYMENT_TIMEOUT_SECONDS) || PAYMENT_TIMEOUT_SECONDS < 1 || PAYMENT_TIMEOUT_SECONDS > 3600) {
   throw new Error("PAYMENT_TIMEOUT_SECONDS must be 1..3600");
+}
+if (!Number.isSafeInteger(PAYMENT_PRUNE_INTERVAL_MS) || PAYMENT_PRUNE_INTERVAL_MS < 5_000 || PAYMENT_PRUNE_INTERVAL_MS > 10 * 60_000) {
+  throw new Error("PAYMENT_PRUNE_INTERVAL_MS must be 5000..600000");
+}
+if (!Number.isSafeInteger(REQUEST_TIMEOUT_MS) || REQUEST_TIMEOUT_MS < 10_000 || REQUEST_TIMEOUT_MS > 60_000) {
+  throw new Error("REQUEST_TIMEOUT_MS must be 10000..60000");
 }
 if (FIBER_NETWORK_NAME !== "testnet") throw new Error("This CKB-testnet service requires FIBER_NETWORK=testnet");
 if (!PAYMENT_ASSET.trim()) throw new Error("PAYMENT_ASSET must not be empty");
@@ -137,7 +152,21 @@ const deployment = Object.freeze({
 if (!["data", "data1", "data2", "type"].includes(deployment.hashType)) throw new Error("CAPABILITY_HASH_TYPE is required and must be data, data1, data2, or type");
 if (!Number.isSafeInteger(deployment.depIndex) || deployment.depIndex < 0) throw new Error("CAPABILITY_DEP_INDEX is invalid");
 
-const TRUSTED_ISSUER_ID = requireHex32("CAPABILITY_TRUSTED_ISSUER_ID", process.env.CAPABILITY_TRUSTED_ISSUER_ID);
+function parseTrustedIssuerIds() {
+  const values = [
+    ...String(process.env.CAPABILITY_TRUSTED_ISSUER_IDS || "").split(","),
+    String(process.env.CAPABILITY_TRUSTED_ISSUER_ID || ""),
+  ].map((value) => value.trim()).filter(Boolean);
+  if (!values.length) throw new Error("CAPABILITY_TRUSTED_ISSUER_ID or CAPABILITY_TRUSTED_ISSUER_IDS is required");
+  const normalized = values.map((value, index) => requireHex32(`CAPABILITY_TRUSTED_ISSUER_IDS[${index}]`, value).toLowerCase());
+  return Object.freeze([...new Set(normalized)].sort());
+}
+
+const TRUSTED_ISSUER_IDS = parseTrustedIssuerIds();
+const PRIMARY_TRUSTED_ISSUER_RAW = String(process.env.CAPABILITY_TRUSTED_ISSUER_ID || "").trim();
+const TRUSTED_ISSUER_ID = PRIMARY_TRUSTED_ISSUER_RAW
+  ? requireHex32("CAPABILITY_TRUSTED_ISSUER_ID", PRIMARY_TRUSTED_ISSUER_RAW).toLowerCase()
+  : TRUSTED_ISSUER_IDS[0]; // backward-compatible primary issuer, explicitly preferred during key rotation
 const SERVICE_TERMS_HASH = SERVICE_TERMS_HASH_RAW ? requireHex32("SERVICE_TERMS_HASH", SERVICE_TERMS_HASH_RAW) : "";
 if (!SERVICE_POLICY_ID || SERVICE_POLICY_ID.length > 128) throw new Error("SERVICE_POLICY_ID must be 1..128 characters");
 if (SERVICE_POLICY_URL) {
@@ -147,11 +176,18 @@ if (SERVICE_POLICY_URL) {
 }
 const servicePolicy = createServicePolicy({
   serviceId: SERVICE_ID,
-  trustedIssuerId: TRUSTED_ISSUER_ID,
+  trustedIssuerIds: TRUSTED_ISSUER_IDS,
   requireTransferable: true,
   policyId: SERVICE_POLICY_ID,
   termsHash: SERVICE_TERMS_HASH,
 });
+const SERVICE_POLICY_FINGERPRINT = createHash("sha256").update(JSON.stringify({
+  serviceId: SERVICE_ID.toLowerCase(),
+  trustedIssuerIds: TRUSTED_ISSUER_IDS,
+  requireTransferable: true,
+  policyId: SERVICE_POLICY_ID,
+  termsHash: SERVICE_TERMS_HASH.toLowerCase(),
+})).digest("hex");
 
 if (process.env.CKB_RPC_URL) {
   const rpc = new URL(process.env.CKB_RPC_URL);
@@ -187,32 +223,65 @@ function outPointFromJson(value) {
   if (!/^0x[0-9a-fA-F]{64}$/.test(String(value.txHash || ""))) throw new Error("outPoint.txHash is invalid");
   let index;
   try { index = BigInt(value.index); } catch { throw new Error("outPoint.index is invalid"); }
-  if (index < 0n) throw new Error("outPoint.index must be non-negative");
-  return ccc.OutPoint.from({ txHash: value.txHash, index });
+  if (index < 0n || index > 0xffff_ffffn) throw new Error("outPoint.index must be 0..4294967295");
+  return ccc.OutPoint.from({ txHash: String(value.txHash).toLowerCase(), index });
 }
 
-function challengeMessage({ nonce, address, expiresAt }) {
+function outPointBinding(value) {
+  const outPoint = outPointFromJson(value);
+  return `${String(outPoint.txHash).toLowerCase()}:${String(outPoint.index)}`;
+}
+
+function requestTextHash(text) {
+  return createHash("sha256").update(String(text || ""), "utf8").digest("hex");
+}
+
+function normalizeRequestHash(value) {
+  const hash = String(value || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("requestHash must be a SHA-256 hex digest");
+  return hash;
+}
+
+function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash }) {
   return [
     "SkillPass capability access",
+    "action=analyze",
     "service=paper-analyzer-v1",
     `service_id=${SERVICE_ID}`,
-    `trusted_issuer=${TRUSTED_ISSUER_ID}`,
     `policy_id=${SERVICE_POLICY_ID}`,
+    `policy_fingerprint=${SERVICE_POLICY_FINGERPRINT}`,
+    `capability_outpoint=${outPointBinding(outPoint)}`,
+    `request_hash=${normalizeRequestHash(requestHash)}`,
     `address=${address}`,
     `nonce=${nonce}`,
     `expires_at=${expiresAt}`,
   ].join("\n");
 }
 
-async function issueChallenge(address) {
+async function issueChallenge(address, outPoint, requestHash) {
   await ccc.Address.fromString(address, client);
+  outPointFromJson(outPoint);
+  normalizeRequestHash(requestHash);
   return challenges.issue(address, ({ nonce, identity, expiresAt }) =>
-    challengeMessage({ nonce, address: identity, expiresAt }),
+    challengeMessage({ nonce, address: identity, expiresAt, outPoint, requestHash }),
   );
 }
 
 async function consumeChallenge(nonce, address) {
   return challenges.consume({ nonce, identity: address });
+}
+
+function challengeMatchesRequest(challenge, body) {
+  const expected = challengeMessage({
+    nonce: body.nonce,
+    address: body.address,
+    expiresAt: challenge.expiresAt,
+    outPoint: body.outPoint,
+    requestHash: requestTextHash(body.text),
+  });
+  const left = Buffer.from(String(challenge.message || ""));
+  const right = Buffer.from(expected);
+  return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
 }
 
 async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
@@ -230,7 +299,7 @@ async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   }
 }
 
-async function verifyLiveCapability({ outPoint, requesterAddress }) {
+async function inspectLiveCapability({ outPoint }) {
   const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
   const type = cell.cellOutput.type;
@@ -250,21 +319,32 @@ async function verifyLiveCapability({ outPoint, requesterAddress }) {
     }
     throw error;
   }
-  const requester = await ccc.Address.fromString(requesterAddress, client);
-  if (!cell.cellOutput.lock.eq(requester.script)) {
-    throw Object.assign(new Error("requester does not control the current live capability cell"), { status: 403, code: "NOT_OWNER" });
-  }
-  return { cell, capability };
+  return {
+    cell,
+    capability,
+    currentOwnerLockHash: normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+    checkedAt: new Date().toISOString(),
+  };
 }
 
-function paymentBinding({ address, outPoint, text }) {
+async function verifyLiveCapability({ outPoint, requesterAddress }) {
+  const inspected = await inspectLiveCapability({ outPoint });
+  const requester = await ccc.Address.fromString(requesterAddress, client);
+  if (!inspected.cell.cellOutput.lock.eq(requester.script)) {
+    throw Object.assign(new Error("requester does not control the current live capability cell"), { status: 403, code: "NOT_OWNER" });
+  }
+  return inspected;
+}
+
+function paymentBinding(req, { address, outPoint, text }) {
   const normalized = JSON.stringify({
     address: String(address || ""),
     outPoint: { txHash: String(outPoint?.txHash || "").toLowerCase(), index: String(outPoint?.index ?? "") },
-    text: String(text || ""),
+    requestHash: requestTextHash(text),
     serviceId: SERVICE_ID,
-    trustedIssuerId: TRUSTED_ISSUER_ID,
     policyId: SERVICE_POLICY_ID,
+    policyFingerprint: SERVICE_POLICY_FINGERPRINT,
+    resource: resourceUrl(req),
   });
   return createHash("sha256").update(normalized).digest("hex");
 }
@@ -286,50 +366,76 @@ function resourceUrl(req) {
   return `${proto}://${host}/api/analyze`;
 }
 
-async function prunePaymentState() {
-  await serviceState.pruneExpiredQuotes();
-  await serviceState.pruneExpiredReceipts(SERVICE_RECEIPT_TTL_SECONDS * 1000);
+let lastPaymentPruneAt = 0;
+let paymentPruneInFlight = null;
+const quoteInFlight = new Map();
+
+async function maybePrunePaymentState({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastPaymentPruneAt < PAYMENT_PRUNE_INTERVAL_MS) return;
+  if (paymentPruneInFlight) return paymentPruneInFlight;
+  paymentPruneInFlight = Promise.all([
+    serviceState.pruneExpiredQuotes(),
+    serviceState.pruneExpiredReceipts(SERVICE_RECEIPT_TTL_SECONDS * 1000),
+  ]).then(() => { lastPaymentPruneAt = Date.now(); }).finally(() => { paymentPruneInFlight = null; });
+  return paymentPruneInFlight;
 }
 
 async function createPaymentQuote(req, body) {
   validatePaperInput(body.text);
-  await prunePaymentState();
-  // Caller ownership has already been verified before this function is called.
-  const invoice = await withTimeout(facilitator.invoice({
-    amount: PAYMENT_AMOUNT,
-    currency: PAYMENT_CURRENCY,
-    description: "SkillPass paper-analyzer-v1",
-    expiry: PAYMENT_TIMEOUT_SECONDS,
-  }), "facilitator invoice");
-  const requirement = {
-    scheme: "exact",
-    network: FIBER_NETWORK,
-    amount: PAYMENT_AMOUNT,
-    asset: PAYMENT_ASSET,
-    payTo: PAYMENT_PAY_TO,
-    maxTimeoutSeconds: PAYMENT_TIMEOUT_SECONDS,
-    extra: {
-      assetTransferMethod: FIBER_TRANSFER_METHOD,
-      paymentFlow: "authorization",
-      invoice: invoice.invoice,
-      paymentHash: invoice.paymentHash,
-    },
-  };
-  const resource = {
-    url: resourceUrl(req),
-    description: "SkillPass protected paper analysis",
-    mimeType: "application/json",
-    serviceName: "SkillPass",
-    tags: ["ckb", "fiber", "portable-rights", "ai"],
-  };
-  const required = makePaymentRequired({ resource, requirement });
-  await serviceState.setQuote(String(invoice.paymentHash).toLowerCase(), {
-    requirement,
-    resource,
-    binding: paymentBinding(body),
-    expiresAt: Date.now() + PAYMENT_TIMEOUT_SECONDS * 1000,
-  });
-  return required;
+  await maybePrunePaymentState();
+  const binding = paymentBinding(req, body);
+
+  // Reuse a still-live quote for the exact same semantic request. This avoids
+  // generating multiple Fiber invoices when a browser retries or double-clicks.
+  const existing = await serviceState.getQuoteByBinding(binding);
+  if (existing) return makePaymentRequired({ resource: existing.resource, requirement: existing.requirement });
+  if (quoteInFlight.has(binding)) return quoteInFlight.get(binding);
+
+  const pending = (async () => {
+    const raced = await serviceState.getQuoteByBinding(binding);
+    if (raced) return makePaymentRequired({ resource: raced.resource, requirement: raced.requirement });
+
+    // Caller ownership has already been verified before this function is called.
+    const invoice = await withTimeout(facilitator.invoice({
+      amount: PAYMENT_AMOUNT,
+      currency: PAYMENT_CURRENCY,
+      description: "SkillPass paper-analyzer-v1",
+      expiry: PAYMENT_TIMEOUT_SECONDS,
+    }), "facilitator invoice");
+    const requirement = {
+      scheme: "exact",
+      network: FIBER_NETWORK,
+      amount: PAYMENT_AMOUNT,
+      asset: PAYMENT_ASSET,
+      payTo: PAYMENT_PAY_TO,
+      maxTimeoutSeconds: PAYMENT_TIMEOUT_SECONDS,
+      extra: {
+        assetTransferMethod: FIBER_TRANSFER_METHOD,
+        paymentFlow: "authorization",
+        invoice: invoice.invoice,
+        paymentHash: invoice.paymentHash,
+      },
+    };
+    const resource = {
+      url: resourceUrl(req),
+      description: "SkillPass protected paper analysis",
+      mimeType: "application/json",
+      serviceName: "SkillPass",
+      tags: ["ckb", "fiber", "portable-rights", "ai"],
+    };
+    const required = makePaymentRequired({ resource, requirement });
+    await serviceState.setQuote(String(invoice.paymentHash).toLowerCase(), {
+      requirement,
+      resource,
+      binding,
+      expiresAt: Date.now() + PAYMENT_TIMEOUT_SECONDS * 1000,
+    });
+    return required;
+  })().finally(() => quoteInFlight.delete(binding));
+
+  quoteInFlight.set(binding, pending);
+  return pending;
 }
 
 async function verifyPaymentHeader(req, body) {
@@ -338,10 +444,10 @@ async function verifyPaymentHeader(req, body) {
   if (Buffer.byteLength(String(header)) > PAYMENT_HEADER_MAX_BYTES) {
     throw Object.assign(new Error("payment signature header is too large"), { status: 431, code: "PAYMENT_HEADER_TOO_LARGE" });
   }
-  await prunePaymentState();
+  await maybePrunePaymentState();
   const paymentPayload = decodeHeaderJson(String(header), "PAYMENT-SIGNATURE");
   const hash = String(paymentPayload?.payload?.paymentHash || "").toLowerCase();
-  const binding = paymentBinding(body);
+  const binding = paymentBinding(req, body);
 
   // If the server settled this exact semantic request but the HTTP response was
   // lost, return the persisted receipt after fresh wallet/capability auth.
@@ -401,7 +507,8 @@ const localBurst = new Map();
 const globalBlockedUntil = new Map();
 function localPreLimit(subject, route, limit, windowMs = 60_000) {
   const now = Date.now();
-  const key = `${route}:${subject}`;
+  const subjectHash = createHash("sha256").update(String(subject || "unknown")).digest("hex").slice(0, 24);
+  const key = `${route}:${subjectHash}`;
   let item = localBurst.get(key);
   if (!item || now >= item.resetAt) item = { count: 0, resetAt: now + windowMs };
   item.count += 1;
@@ -469,6 +576,9 @@ function validateProtectedShape(body) {
 async function authenticateProtectedRequest(body) {
   validateProtectedShape(body);
   const challenge = await consumeChallenge(body.nonce, body.address);
+  if (!challengeMatchesRequest(challenge, body)) {
+    throw Object.assign(new Error("signed challenge does not match this capability/request"), { status: 401, code: "CHALLENGE_INTENT_MISMATCH" });
+  }
   const valid = await ccc.Signer.verifyMessage(challenge.message, body.signature);
   if (!valid) throw Object.assign(new Error("wallet signature is invalid"), { status: 401, code: "INVALID_SIGNATURE" });
   return verifyLiveCapability({ outPoint: outPointFromJson(body.outPoint), requesterAddress: body.address });
@@ -498,7 +608,7 @@ const LIVE_CSP = [
 ].join("; ");
 
 function securityHeaders(contentType) {
-  return baseSecurityHeaders({
+  const headers = baseSecurityHeaders({
     contentType,
     csp: LIVE_CSP,
     // CCC/wallet UI is a third-party browser surface. Report Trusted Types
@@ -506,6 +616,8 @@ function securityHeaders(contentType) {
     // can be promoted to the enforced CSP without breaking compatible wallets.
     trustedTypesReportOnly: true,
   });
+  if (IS_PUBLIC_PRODUCTION) headers["strict-transport-security"] = "max-age=31536000";
+  return headers;
 }
 function sendJson(res, status, body, extraHeaders = {}) {
   const requestId = res.__skillpassRequestId || randomUUID();
@@ -514,23 +626,52 @@ function sendJson(res, status, body, extraHeaders = {}) {
 }
 
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
-async function sendStatic(res, pathname) {
+const staticCache = new Map();
+
+async function cachedStaticFile(file) {
+  const info = await stat(file);
+  if (!info.isFile()) throw new Error("not a file");
+  const key = `${info.mtimeMs}:${info.size}`;
+  const cached = staticCache.get(file);
+  if (cached?.key === key) return cached;
+  const body = await readFile(file);
+  const value = { key, body, etag: `W/\"${Math.trunc(info.mtimeMs).toString(16)}-${info.size.toString(16)}\"` };
+  staticCache.set(file, value);
+  if (staticCache.size > 64) staticCache.delete(staticCache.keys().next().value);
+  return value;
+}
+
+async function sendStatic(req, res, pathname) {
   let requested = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   requested = normalize(requested).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(PUBLIC_DIR, requested);
   try {
     const info = await stat(file);
     if (info.isDirectory()) file = join(file, "index.html");
-    const body = await readFile(file);
-    res.writeHead(200, { ...securityHeaders(mime[extname(file)] || "application/octet-stream"), "cache-control": requested === "index.html" ? "no-cache" : "public, max-age=300" });
-    res.end(body);
+    const asset = await cachedStaticFile(file);
+    const immutable = /(?:^|\/)assets\/[^/]+-[A-Za-z0-9_-]{6,}\.[A-Za-z0-9]+$/.test(requested);
+    const headers = {
+      ...securityHeaders(mime[extname(file)] || "application/octet-stream"),
+      "cache-control": requested === "index.html" ? "no-cache" : immutable ? "public, max-age=31536000, immutable" : "public, max-age=300",
+      etag: asset.etag,
+    };
+    if (String(req.headers["if-none-match"] || "") === asset.etag) {
+      res.writeHead(304, headers);
+      res.end();
+      return true;
+    }
+    res.writeHead(200, headers);
+    res.end(asset.body);
     return true;
   } catch {
     if (!requested.includes(".")) {
       try {
-        const body = await readFile(join(PUBLIC_DIR, "index.html"));
-        res.writeHead(200, { ...securityHeaders("text/html; charset=utf-8"), "cache-control": "no-cache" });
-        res.end(body); return true;
+        const file = join(PUBLIC_DIR, "index.html");
+        const asset = await cachedStaticFile(file);
+        const headers = { ...securityHeaders("text/html; charset=utf-8"), "cache-control": "no-cache", etag: asset.etag };
+        if (String(req.headers["if-none-match"] || "") === asset.etag) { res.writeHead(304, headers); res.end(); return true; }
+        res.writeHead(200, headers);
+        res.end(asset.body); return true;
       } catch {}
     }
     return false;
@@ -623,7 +764,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
-      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, trustedIssuerId: TRUSTED_ISSUER_ID, policy: { id: SERVICE_POLICY_ID, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL }, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
+      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, trustedIssuerId: TRUSTED_ISSUER_ID, trustedIssuerIds: TRUSTED_ISSUER_IDS, policy: { id: SERVICE_POLICY_ID, fingerprint: SERVICE_POLICY_FINGERPRINT, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL }, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
         "cache-control": "public, max-age=60",
         "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
@@ -642,10 +783,13 @@ const server = http.createServer(async (req, res) => {
         service: "paper-analyzer-v1",
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
         trustedIssuerId: TRUSTED_ISSUER_ID,
+        trustedIssuerIds: TRUSTED_ISSUER_IDS,
         servicePolicy: {
           id: SERVICE_POLICY_ID,
+          fingerprint: SERVICE_POLICY_FINGERPRINT,
           serviceId: SERVICE_ID,
           trustedIssuerId: TRUSTED_ISSUER_ID,
+          trustedIssuerIds: TRUSTED_ISSUER_IDS,
           transferableRequired: true,
           termsHash: SERVICE_TERMS_HASH || null,
           url: SERVICE_POLICY_URL || null,
@@ -689,17 +833,43 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, report.ok ? 200 : 503, report);
     }
 
+    if (req.method === "POST" && url.pathname === "/api/capability/status") {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      const body = await jsonBody(req);
+      const outPoint = outPointFromJson(body.outPoint);
+      await rateLimit(req, "capability-status", CAPABILITY_STATUS_RATE_LIMIT, GLOBAL_CAPABILITY_STATUS_RATE_LIMIT);
+      const inspected = await inspectLiveCapability({ outPoint });
+      return sendJson(res, 200, {
+        ok: true,
+        source: "live-ckb-cell",
+        checkedAt: inspected.checkedAt,
+        capability: {
+          capabilityId: inspected.capability.capabilityId,
+          serviceId: inspected.capability.serviceId,
+          issuerId: inspected.capability.issuerId,
+          expiry: inspected.capability.expiry.toString(),
+          currentOwnerLockHash: inspected.currentOwnerLockHash,
+          transferable: true,
+          policyId: SERVICE_POLICY_ID,
+          policyFingerprint: SERVICE_POLICY_FINGERPRINT,
+        },
+      });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/challenge") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      const { address } = await jsonBody(req);
+      const { address, outPoint, requestHash } = await jsonBody(req);
       if (typeof address !== "string" || address.length < 8 || address.length > 256) {
         throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
       }
+      outPointFromJson(outPoint);
+      normalizeRequestHash(requestHash);
       // Validate the address before spending a PostgreSQL rate-limit write.
       await ccc.Address.fromString(address, client);
       await rateLimit(req, "challenge", CHALLENGE_RATE_LIMIT, GLOBAL_CHALLENGE_RATE_LIMIT);
-      return sendJson(res, 200, await issueChallenge(address));
+      return sendJson(res, 200, await issueChallenge(address, outPoint, requestHash));
     }
 
     if (req.method === "POST" && url.pathname === "/api/analyze") {
@@ -732,8 +902,19 @@ const server = http.createServer(async (req, res) => {
           capabilityId: verified.capability.capabilityId,
           serviceId: verified.capability.serviceId,
           issuerId: verified.capability.issuerId,
-          currentOwnerLockHash: normalizeHex32(verified.cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+          currentOwnerLockHash: verified.currentOwnerLockHash,
           policyId: SERVICE_POLICY_ID,
+          policyFingerprint: SERVICE_POLICY_FINGERPRINT,
+          checkedAt: verified.checkedAt,
+          source: "live-ckb-cell",
+        },
+        authorization: {
+          requestId: res.__skillpassRequestId,
+          action: "analyze",
+          intentBound: true,
+          entitlementVerified: true,
+          paymentRequired: PAYMENTS_REQUIRED,
+          paymentVerified: PAYMENTS_REQUIRED ? Boolean(settlement) : false,
         },
         result,
         payment: settlement,
@@ -745,7 +926,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 404, { error: "not_found" });
     }
     if (req.method === "GET" || req.method === "HEAD") {
-      if (await sendStatic(res, url.pathname)) return;
+      if (await sendStatic(req, res, url.pathname)) return;
     }
     return sendJson(res, 404, { error: "not_found" });
   } catch (error) {
@@ -757,22 +938,29 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.requestTimeout = 12_000;
+server.requestTimeout = REQUEST_TIMEOUT_MS;
 server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 80;
 
-server.listen(PORT, HOST, () => {
+export { server };
+
+export function startServer() {
+  if (server.listening) return server;
+  server.listen(PORT, HOST, () => {
   console.log(`SkillPass live service on http://${HOST}:${PORT}`);
   console.log(`CKB network: testnet; RPC: ${process.env.CKB_RPC_URL ? "custom endpoint configured" : "CCC default endpoint"}`);
   console.log(`Capability code hash: ${deployment.codeHash}`);
-  console.log(`Trusted capability issuer: ${TRUSTED_ISSUER_ID}`);
+  console.log(`Trusted capability issuers: ${TRUSTED_ISSUER_IDS.length} configured (primary ${TRUSTED_ISSUER_ID})`);
   console.log(`Service policy: ${SERVICE_POLICY_ID}`);
   console.log(`x402/Fiber payments: ${PAYMENTS_REQUIRED ? `enabled via ${FACILITATOR_URL}` : "disabled"}`);
   console.log(`State backend: ${STATE_BACKEND}${STATE_BACKEND === "local" ? ` (${SERVICE_STATE_FILE})` : ""}`);
   console.log(`Delivery receipt retention: ${SERVICE_RECEIPT_TTL_SECONDS}s`);
   console.log("No user private key is loaded by this service.");
 });
+  return server;
+}
+
 
 let closing = false;
 async function shutdown(signal) {
@@ -783,5 +971,11 @@ async function shutdown(signal) {
   await runtimeState.close();
   process.exit(0);
 }
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
+
+
+
+if (!process.env.VERCEL) {
+  startServer();
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}

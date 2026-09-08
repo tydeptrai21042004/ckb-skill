@@ -39,7 +39,7 @@ const NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
 const NETWORK = NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const PROOF_MODE = process.env.FIBER_PAYMENT_PROOF || "invoice-status";
 const STATE_FILE = process.env.FACILITATOR_STATE_FILE || join(process.cwd(), ".runtime", "fiber-settled.json");
-const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
+const STATE_BACKEND = String(process.env.STATE_BACKEND || (process.env.VERCEL ? "postgres" : "local")).trim();
 const ALLOW_DEV_PAYMENT = MODE === "mock" && process.env.ALLOW_DEV_PAYMENT === "true";
 const AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
 const FIBER_RPC_TOKEN = readSecret("FIBER_RPC_TOKEN");
@@ -212,12 +212,19 @@ server.headersTimeout = 10_000;
 server.keepAliveTimeout = 5_000;
 server.maxHeadersCount = 80;
 
-server.listen(PORT, HOST, () => {
+export { server };
+
+export function startServer() {
+  if (server.listening) return server;
+  server.listen(PORT, HOST, () => {
   console.log(`SkillPass x402/Fiber facilitator listening on http://${HOST}:${PORT}`);
   console.log(`backend=${MODE} network=${NETWORK} paymentProof=${PROOF_MODE} state=${STATE_BACKEND}`);
   if (AUTH_TOKEN) console.log("facilitator API authentication: enabled");
   if (MODE === "mock") console.log(`Mock mode is for reproducible tests only. Dev pay endpoint: ${ALLOW_DEV_PAYMENT ? "enabled" : "disabled"}.`);
 });
+  return server;
+}
+
 
 let closing = false;
 async function shutdown(signal) {
@@ -228,5 +235,11 @@ async function shutdown(signal) {
   if (postgresPool) await postgresPool.end();
   process.exit(0);
 }
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
-process.on("SIGINT", () => void shutdown("SIGINT"));
+
+
+
+if (!process.env.VERCEL) {
+  startServer();
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+}

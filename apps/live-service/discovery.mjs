@@ -1,6 +1,7 @@
-export function buildDiscovery({ deployment, serviceId, trustedIssuerId, policy, payments, maxInputChars = 20_000 } = {}) {
+export function buildDiscovery({ deployment, serviceId, trustedIssuerId, trustedIssuerIds, policy, payments, maxInputChars = 20_000 } = {}) {
+  const issuers = Array.isArray(trustedIssuerIds) && trustedIssuerIds.length ? trustedIssuerIds : (trustedIssuerId ? [trustedIssuerId] : []);
   return Object.freeze({
-    schemaVersion: "1.0",
+    schemaVersion: "1.1",
     product: "SkillPass",
     service: {
       id: serviceId,
@@ -13,18 +14,22 @@ export function buildDiscovery({ deployment, serviceId, trustedIssuerId, policy,
       network: "ckb-testnet",
       authorizationModel: "current-live-capability-cell-owner",
       capabilityTypeScript: deployment,
-      trustedIssuerId,
+      trustedIssuerId: issuers[0] || null,
+      trustedIssuerIds: issuers,
+      issuerRotationSupported: issuers.length > 1,
       providerPolicy: policy ? {
         id: policy.id,
+        fingerprint: policy.fingerprint || null,
         transferableRequired: Boolean(policy.transferableRequired),
         termsHash: policy.termsHash || null,
         url: policy.url || null,
       } : undefined,
     },
     authentication: {
-      scheme: "ckb-wallet-one-time-challenge",
+      scheme: "ckb-wallet-one-time-intent-challenge",
       challengeEndpoint: "/api/challenge",
       signatureRequired: true,
+      intentBinding: ["action", "capability_outpoint", "request_hash", "policy_fingerprint"],
       privateKeyLocation: "user-wallet-only",
     },
     payment: payments?.required ? {
@@ -36,11 +41,13 @@ export function buildDiscovery({ deployment, serviceId, trustedIssuerId, policy,
       amount: payments.amount,
       asset: payments.asset,
       proofMode: payments.proofMode,
+      quoteReuse: "same-bound-request-until-expiry",
     } : { required: false },
     health: {
       liveness: "/livez",
       readiness: "/readyz",
       status: "/api/status",
+      capabilityStatus: "/api/capability/status",
     },
     api: {
       openapi: "/api/openapi.json",
@@ -50,22 +57,30 @@ export function buildDiscovery({ deployment, serviceId, trustedIssuerId, policy,
 }
 
 export function buildOpenApi({ paymentsRequired = false, maxInputChars = 20_000 } = {}) {
+  const outPointSchema = { type: "object", required: ["txHash", "index"], properties: { txHash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" }, index: { type: "string" } } };
   return Object.freeze({
     openapi: "3.1.0",
     info: {
       title: "SkillPass protected service API",
-      version: "0.7.0",
-      description: "Provider-issued portable service-right authorization on live CKB Cells with optional Fiber/x402 per-use payment.",
+      version: "0.8.0",
+      description: "Provider-issued portable service-right authorization on live CKB Cells with intent-bound wallet authentication and optional Fiber/x402 per-use payment.",
     },
     paths: {
       "/api/status": {
-        get: { summary: "Read sanitized deployment readiness", responses: { "200": { description: "Ready" }, "503": { description: "Required dependency unavailable" } } },
+        get: { summary: "Read sanitized service status", responses: { "200": { description: "Service alive" } } },
+      },
+      "/api/capability/status": {
+        post: {
+          summary: "Inspect a SkillPass capability from fresh CKB state",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outPoint"], properties: { outPoint: outPointSchema } } } } },
+          responses: { "200": { description: "Capability is live and satisfies provider policy" }, "403": { description: "Capability is consumed or violates service policy" } },
+        },
       },
       "/api/challenge": {
         post: {
-          summary: "Create a one-time wallet-signature challenge",
-          requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["address"], properties: { address: { type: "string", description: "CKB testnet address" } } } } } },
-          responses: { "200": { description: "Challenge created" } },
+          summary: "Create a one-time wallet intent-signature challenge",
+          requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["address", "outPoint", "requestHash"], properties: { address: { type: "string", description: "CKB testnet address" }, outPoint: outPointSchema, requestHash: { type: "string", pattern: "^[0-9a-fA-F]{64}$", description: "SHA-256 of the exact analysis text" } } } } } },
+          responses: { "200": { description: "Intent-bound challenge created" } },
         },
       },
       "/api/analyze": {
@@ -84,7 +99,7 @@ export function buildOpenApi({ paymentsRequired = false, maxInputChars = 20_000 
                     address: { type: "string" },
                     nonce: { type: "string" },
                     signature: { type: "object" },
-                    outPoint: { type: "object", required: ["txHash", "index"], properties: { txHash: { type: "string", pattern: "^0x[0-9a-fA-F]{64}$" }, index: { type: "string" } } },
+                    outPoint: outPointSchema,
                     text: { type: "string", minLength: 1, maxLength: maxInputChars },
                   },
                 },
@@ -94,7 +109,7 @@ export function buildOpenApi({ paymentsRequired = false, maxInputChars = 20_000 
           responses: {
             "200": { description: "Authorized protected result" },
             ...(paymentsRequired ? { "402": { description: "Fiber/x402 payment required" } } : {}),
-            "401": { description: "Wallet challenge/signature rejected" },
+            "401": { description: "Wallet challenge/signature or signed intent rejected" },
             "403": { description: "Capability missing, expired, wrong service, untrusted issuer, non-portable, or not owned by requester" },
           },
         },

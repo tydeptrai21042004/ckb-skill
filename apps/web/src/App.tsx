@@ -17,10 +17,13 @@ type RuntimeConfig = {
   service: string;
   enablePublicIssue: boolean;
   trustedIssuerId: `0x${string}`;
+  trustedIssuerIds?: Array<`0x${string}`>;
   servicePolicy?: {
     id: string;
+    fingerprint?: string;
     serviceId: `0x${string}`;
     trustedIssuerId: `0x${string}`;
+    trustedIssuerIds?: Array<`0x${string}`>;
     transferableRequired: boolean;
     termsHash?: string | null;
     url?: string | null;
@@ -104,6 +107,22 @@ type PendingPayment = {
 };
 
 type Notice = { tone: "info" | "success" | "error"; message: string };
+
+type CapabilityStatus = {
+  ok: boolean;
+  source: "live-ckb-cell";
+  checkedAt: string;
+  capability: {
+    capabilityId: string;
+    serviceId: string;
+    issuerId: string;
+    expiry: string;
+    currentOwnerLockHash: string;
+    transferable: boolean;
+    policyId: string;
+    policyFingerprint: string;
+  };
+};
 
 type IconName =
   | "arrow"
@@ -218,15 +237,64 @@ function formatExpiry(expiry: bigint) {
   }).format(date);
 }
 
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+type ApiErrorBody = { message?: string; error?: string; code?: string };
+
+class ApiRequestError extends Error {
+  status: number;
+  code?: string;
+  requestId?: string;
+
+  constructor(message: string, { status, code, requestId }: { status: number; code?: string; requestId?: string }) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+    this.code = code;
+    this.requestId = requestId;
+  }
+}
+
+async function parseApiBody<T>(res: Response): Promise<T> {
+  const requestId = res.headers.get("x-request-id") || res.headers.get("x-vercel-id") || undefined;
+  const raw = await res.text();
+  if (!raw.trim()) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    const message = res.status >= 500
+      ? "Service API is temporarily unavailable. Please retry after the deployment is healthy."
+      : "The service returned an invalid response.";
+    throw new ApiRequestError(message, { status: res.status || 500, requestId });
+  }
+}
+
+async function readApiResponse<T>(res: Response): Promise<T> {
+  const requestId = res.headers.get("x-request-id") || res.headers.get("x-vercel-id") || undefined;
+  const value = await parseApiBody<T>(res);
+  if (!res.ok) {
+    const body = (value && typeof value === "object" ? value : {}) as ApiErrorBody;
+    const fallback = res.status >= 500 ? "Service temporarily unavailable." : `Request failed (HTTP ${res.status}).`;
+    const code = body.code || (body.error && /^[A-Z0-9_]+$/.test(body.error) ? body.error : undefined);
+    throw new ApiRequestError(body.message || body.error || fallback, {
+      status: res.status,
+      code,
+      requestId,
+    });
+  }
+  return value;
+}
+
 async function api<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers: body === undefined ? { accept: "application/json" } : { "content-type": "application/json", accept: "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const value = await res.json();
-  if (!res.ok) throw new Error(value.message || value.error || `HTTP ${res.status}`);
-  return value;
+  return readApiResponse<T>(res);
 }
 
 export default function App() {
@@ -237,7 +305,8 @@ export default function App() {
   const [caps, setCaps] = useState<Found[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
   const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState<Notice>({ tone: "info", message: "Loading service configuration…" });
+  const [notice, setNotice] = useState<Notice>();
+  const [configError, setConfigError] = useState("");
   const [health, setHealth] = useState<RuntimeStatus>();
   const [recipient, setRecipient] = useState("");
   const [issueRecipient, setIssueRecipient] = useState("");
@@ -246,44 +315,57 @@ export default function App() {
   const [pendingPayment, setPendingPayment] = useState<PendingPayment>();
   const [paymentPreimage, setPaymentPreimage] = useState("");
   const [result, setResult] = useState<AnalysisResult>();
+  const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus>();
 
   const selectedCap = useMemo(
     () => caps.find((cap) => capabilityKey(cap) === selectedKey) ?? caps[0],
     [caps, selectedKey],
   );
 
+  async function loadConfig() {
+    setConfigError("");
+    try {
+      const value = await api<RuntimeConfig>("/api/config");
+      setConfig(value);
+    } catch (error) {
+      setConfig(undefined);
+      if (error instanceof ApiRequestError) {
+        console.error("SkillPass configuration request failed", { status: error.status, code: error.code, requestId: error.requestId });
+      }
+      setConfigError("The service is temporarily unavailable. Please try again later.");
+    }
+  }
+
+  useEffect(() => { void loadConfig(); }, []);
+
   useEffect(() => {
-    api<RuntimeConfig>("/api/config")
-      .then((c) => {
-        setConfig(c);
-        setNotice({ tone: "info", message: "Service ready. Connect your wallet to continue." });
-      })
-      .catch((e) => setNotice({ tone: "error", message: `Configuration error: ${e.message}` }));
-  }, []);
+    if (!notice || notice.tone === "error") return;
+    const timer = window.setTimeout(() => setNotice(undefined), 4_500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
 
   async function refreshHealth() {
+    if (!config) return;
     try {
       const res = await fetch("/api/status", { headers: { accept: "application/json" } });
-      const value = await res.json() as RuntimeStatus;
+      const value = await readApiResponse<RuntimeStatus>(res);
       setHealth(value);
-    } catch (e) {
+    } catch {
       setHealth({
         ok: false,
         network: "testnet",
-        paymentsRequired: Boolean(config?.payments?.required),
-        dependencies: {
-          ckb: { ok: false, error: (e as Error).message },
-          facilitator: { ok: false },
-        },
+        paymentsRequired: Boolean(config.payments?.required),
+        dependencies: { ckb: { ok: false }, facilitator: { ok: false } },
       });
     }
   }
 
   useEffect(() => {
+    if (!config) return;
     void refreshHealth();
-    const timer = window.setInterval(() => void refreshHealth(), 30_000);
+    const timer = window.setInterval(() => void refreshHealth(), 45_000);
     return () => window.clearInterval(timer);
-  }, [config?.payments?.required]);
+  }, [config]);
 
   useEffect(() => {
     try { localStorage.setItem("skillpass.paperDraft", text); } catch {}
@@ -295,6 +377,7 @@ export default function App() {
       setCaps([]);
       setSelectedKey("");
       setResult(undefined);
+      setCapabilityStatus(undefined);
       return;
     }
     signer.getRecommendedAddress()
@@ -311,6 +394,7 @@ export default function App() {
         deployment: config.deployment,
         expectedServiceId: config.serviceId,
         trustedIssuerId: config.trustedIssuerId,
+        trustedIssuerIds: config.trustedIssuerIds,
         requireTransferable: true,
       });
       setCaps(found);
@@ -338,6 +422,12 @@ export default function App() {
     if (!signer || !config || !config.enablePublicIssue || !issueRecipient.trim()) return;
     setBusy("issue");
     try {
+      const issuerAddress = await signer.getRecommendedAddressObj();
+      const issuerId = issuerAddress.script.hash().toLowerCase();
+      const trustedIssuers = (config.trustedIssuerIds?.length ? config.trustedIssuerIds : [config.trustedIssuerId]).map((value) => value.toLowerCase());
+      if (!trustedIssuers.includes(issuerId)) {
+        throw new Error("Connected wallet is not configured as a trusted SkillPass provider issuer.");
+      }
       const expiry = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, issueDays) * 86_400);
       const { tx, capabilityId } = await buildIssueCapabilityTx({
         signer,
@@ -379,9 +469,27 @@ export default function App() {
     }
   }
 
+  async function verifyLiveOwner(cap: Found) {
+    setBusy("capability-status");
+    try {
+      const value = await api<CapabilityStatus>("/api/capability/status", { outPoint: outPointJson(cap.cell) });
+      setCapabilityStatus(value);
+      setNotice({
+        tone: "success",
+        message: `Live CKB state verified. Current owner lock: ${short(value.capability.currentOwnerLockHash, 10)}.`,
+      });
+    } catch (e) {
+      setCapabilityStatus(undefined);
+      setNotice({ tone: "error", message: `Live ownership check failed: ${(e as Error).message}` });
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function signedRequestBody(outPoint: { txHash: string; index: string }, requestText: string) {
     if (!signer || !address) throw new Error("Connect a wallet first.");
-    const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", { address });
+    const requestHash = await sha256Hex(requestText);
+    const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", { address, outPoint, requestHash });
     const signature = await signer.signMessage(challenge.message);
     if (signature.identity !== address) {
       throw new Error("This deployment requires a CKB-native signer whose message-signature identity matches the connected CKB address.");
@@ -412,13 +520,13 @@ export default function App() {
       });
     }
     const res = await fetch("/api/analyze", { method: "POST", headers, body: JSON.stringify(body) });
-    const value = await res.json();
     if (res.status === 402) {
+      const value = await parseApiBody<{ message?: string; error?: string }>(res);
       const header = res.headers.get("payment-required");
       if (!header) throw new Error(value.message || "Payment required, but the server did not return payment details.");
       return { kind: "payment" as const, required: decodeBase64Json<PaymentRequired>(header), value };
     }
-    if (!res.ok) throw new Error(value.message || value.error || `HTTP ${res.status}`);
+    const value = await readApiResponse<{ result?: AnalysisResult; [key: string]: unknown }>(res);
     return { kind: "success" as const, value };
   }
 
@@ -488,7 +596,7 @@ export default function App() {
   const selectedActive = selectedCap ? isCapabilityActive(selectedCap) : false;
   const ckbReady = Boolean(health?.dependencies?.ckb?.ok);
   const fiberReady = !config?.payments?.required || Boolean(health?.dependencies?.facilitator?.ok);
-  const systemReady = ckbReady && fiberReady;
+  const systemReady = Boolean(config) && (!health || (ckbReady && fiberReady));
   const paymentRequirement = pendingPayment?.required.accepts[0];
   const markerEntries = (Object.entries(result?.markerHits ?? {}) as Array<[string, number]>).filter(([, count]) => count > 0);
 
@@ -503,15 +611,18 @@ export default function App() {
           </a>
 
           <div className="header-actions">
-            <button
-              className={`system-indicator ${systemReady ? "ready" : "warn"}`}
-              type="button"
-              onClick={() => void refreshHealth()}
-              title="Refresh service health"
-            >
-              <span className="status-dot" />
-              <span>{!health ? "Checking" : systemReady ? "Systems ready" : "Service issue"}</span>
-            </button>
+            {connected && config && (
+              <button
+                className={`system-indicator ${systemReady ? "ready" : "warn"}`}
+                type="button"
+                onClick={() => void refreshHealth()}
+                title={systemReady ? "Service online" : "Service unavailable"}
+                aria-label="Refresh service status"
+              >
+                <span className="status-dot" />
+                <span>{systemReady ? "Online" : "Unavailable"}</span>
+              </button>
+            )}
 
             {connected ? (
               <div className="wallet-menu">
@@ -525,7 +636,7 @@ export default function App() {
                 <button className="button ghost small" onClick={() => disconnect()}>Disconnect</button>
               </div>
             ) : (
-              <button className="button primary" onClick={() => open()}>
+              <button className="button primary" disabled={!config} onClick={() => open()}>
                 <Icon name="wallet" size={17} />
                 Connect wallet
               </button>
@@ -535,28 +646,38 @@ export default function App() {
       </header>
 
       <main className="main-content">
-        <div className={`notice ${notice.tone}`} role="status" aria-live="polite">
-          <span className="notice-icon">{notice.tone === "success" ? <Icon name="check" size={16} /> : notice.tone === "error" ? "!" : "i"}</span>
-          <span>{notice.message}</span>
-        </div>
+        {notice && (
+          <div className={`notice ${notice.tone}`} role="status" aria-live="polite">
+            <span className="notice-icon">{notice.tone === "success" ? <Icon name="check" size={16} /> : notice.tone === "error" ? "!" : "i"}</span>
+            <span>{notice.message}</span>
+          </div>
+        )}
 
-        {!connected ? (
+        {!connected && configError ? (
+          <section className="service-unavailable" role="alert">
+            <div className="unavailable-icon">!</div>
+            <div>
+              <span className="eyebrow">Service unavailable</span>
+              <h1>SkillPass is not ready yet.</h1>
+              <p>{configError}</p>
+              <button className="button secondary" onClick={() => void loadConfig()}>Retry</button>
+            </div>
+          </section>
+        ) : !connected ? (
           <section className="connect-view">
             <div className="connect-copy">
-              <div className="eyebrow">CKB-owned access</div>
-              <h1>Use the service with a pass you actually own.</h1>
-              <p>SkillPass checks the current Capability Cell on CKB before every protected request. Your wallet keeps control of signing.</p>
-              <button className="button primary large" onClick={() => open()}>
-                Connect a CKB wallet
-                <Icon name="arrow" />
+              <div className="eyebrow">Portable service rights</div>
+              <h1>Use the service with your CKB pass.</h1>
+              <p>Connect your wallet. SkillPass verifies the current on-chain owner before each protected request.</p>
+              <button className="button primary large" disabled={!config} onClick={() => open()}>
+                <Icon name="wallet" size={18} />
+                {config ? "Connect wallet" : "Loading service…"}
               </button>
-              <p className="privacy-note"><Icon name="shield" size={15} /> Private keys never leave your wallet.</p>
-            </div>
-
-            <div className="connect-steps" aria-label="How SkillPass works">
-              <div className="step-row"><span>01</span><div><strong>Connect</strong><p>Choose a CCC-compatible wallet.</p></div></div>
-              <div className="step-row"><span>02</span><div><strong>Select access</strong><p>SkillPass finds Capability Cells owned by your wallet.</p></div></div>
-              <div className="step-row"><span>03</span><div><strong>Use the service</strong><p>Sign a one-time challenge. Pay by Fiber only when required.</p></div></div>
+              <div className="trust-row" aria-label="Security notes">
+                <span><Icon name="shield" size={14} /> Wallet signs locally</span>
+                <span>CKB Testnet</span>
+                <span>No private keys requested</span>
+              </div>
             </div>
           </section>
         ) : (
@@ -565,10 +686,10 @@ export default function App() {
               <section className="sidebar-section">
                 <div className="section-heading compact-heading">
                   <div>
-                    <span className="eyebrow">On-chain access</span>
+                    <span className="eyebrow">Access</span>
                     <h2>Your passes</h2>
                   </div>
-                  <button className="icon-button" onClick={refresh} disabled={busy === "refresh"} title="Refresh passes" aria-label="Refresh passes">
+                  <button className="icon-button" onClick={refresh} disabled={busy === "refresh" || !config} title="Refresh passes" aria-label="Refresh passes">
                     <Icon name="refresh" size={17} />
                   </button>
                 </div>
@@ -577,8 +698,8 @@ export default function App() {
                   {caps.length === 0 ? (
                     <div className="sidebar-empty">
                       <div className="empty-icon"><Icon name="key" size={20} /></div>
-                      <strong>No passes found</strong>
-                      <p>Receive one from the provider{config?.enablePublicIssue ? " or issue a test pass below" : ""}.</p>
+                      <strong>No pass found</strong>
+                      <p>Ask the provider to issue or transfer a service pass to this wallet.</p>
                     </div>
                   ) : caps.map((cap) => {
                     const key = capabilityKey(cap);
@@ -589,11 +710,11 @@ export default function App() {
                         type="button"
                         className={`pass-option ${selected ? "selected" : ""}`}
                         key={key}
-                        onClick={() => { setSelectedKey(key); setResult(undefined); setRecipient(""); }}
+                        onClick={() => { setSelectedKey(key); setResult(undefined); setCapabilityStatus(undefined); setRecipient(""); }}
                       >
                         <span className={`pass-state ${active ? "active" : "expired"}`}><span />{active ? "Active" : "Expired"}</span>
-                        <strong>{short(cap.capability.capabilityId, 8)}</strong>
-                        <small>Expires {formatExpiry(cap.capability.expiry)}</small>
+                        <strong>Pass {short(cap.capability.capabilityId, 6)}</strong>
+                        <small>Valid until {formatExpiry(cap.capability.expiry)}</small>
                       </button>
                     );
                   })}
@@ -601,21 +722,13 @@ export default function App() {
               </section>
 
               {config?.enablePublicIssue && (
-                <section className="sidebar-section issue-box">
-                  <div className="section-heading">
-                    <div><span className="eyebrow">Demo provider</span><h3>Issue a test pass</h3></div>
-                  </div>
-                  <p>Your connected wallet acts as the provider. The new Capability Cell is created directly under the recipient's lock.</p>
-                  <div className="issue-controls">
+                <details className="sidebar-section testnet-tools">
+                  <summary>Testnet issuance</summary>
+                  <div className="testnet-tools-body">
+                    <p>Issue a test pass from the connected provider wallet.</p>
                     <label>
-                      <span>Recipient (Alice)</span>
-                      <input
-                        value={issueRecipient}
-                        onChange={(e) => setIssueRecipient(e.target.value)}
-                        placeholder="ckt1…"
-                        spellCheck={false}
-                        autoComplete="off"
-                      />
+                      <span>Recipient</span>
+                      <input value={issueRecipient} onChange={(e) => setIssueRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
                     </label>
                     <label>
                       <span>Validity</span>
@@ -626,46 +739,34 @@ export default function App() {
                         <option value={90}>90 days</option>
                       </select>
                     </label>
-                    <button className="button secondary full" disabled={Boolean(busy) || !issueRecipient.trim()} onClick={issue}>Issue to recipient</button>
+                    <button className="button secondary full" disabled={Boolean(busy) || !issueRecipient.trim()} onClick={issue}>Issue a test pass</button>
                   </div>
-                </section>
+                </details>
               )}
-
-              <section className="sidebar-section system-box">
-                <div className="system-row"><span><span className={`mini-dot ${ckbReady ? "ok" : "bad"}`} />CKB</span><strong>{!health ? "Checking" : ckbReady ? "Ready" : "Unavailable"}</strong></div>
-                <div className="system-row"><span><span className={`mini-dot ${fiberReady ? "ok" : "bad"}`} />Fiber</span><strong>{!config?.payments?.required ? "Optional" : !health ? "Checking" : fiberReady ? "Ready" : "Unavailable"}</strong></div>
-                <div className="system-row"><span>CKB tip</span><code>{health?.tip ?? "—"}</code></div>
-              </section>
             </aside>
 
             <section className="service-workspace">
               <div className="service-header">
                 <div>
-                  <div className="eyebrow">Protected service</div>
+                  <span className="eyebrow">Protected service</span>
                   <h1>{serviceName}</h1>
-                  <p>Access is checked against the selected CKB pass at request time.</p>
+                  <p>Access is verified from the live CKB Cell when you run the service.</p>
                 </div>
-                <div className="service-meta">
-                  <span className={`meta-chip ${config?.payments?.required ? "paid" : "free"}`}>
-                    {config?.payments?.required ? "Fiber payment" : "No payment"}
-                  </span>
-                  <span className="meta-chip">x402 v{config?.payments?.x402Version ?? 2}</span>
-                </div>
+                {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
               </div>
 
               {!selectedCap ? (
                 <div className="workspace-empty">
                   <div className="empty-icon large"><Icon name="key" size={25} /></div>
-                  <h2>No access pass selected</h2>
-                  <p>This wallet does not currently own a SkillPass capability for this deployment.</p>
+                  <h2>No active access pass</h2>
+                  <p>This wallet does not currently own a matching SkillPass service right.</p>
                 </div>
               ) : (
                 <>
                   <section className="editor-card">
                     <div className="selected-pass-line">
                       <div>
-                        <span className={`pass-state ${selectedActive ? "active" : "expired"}`}><span />{selectedActive ? "Pass active" : "Pass expired"}</span>
-                        <code title={selectedCap.capability.capabilityId}>{short(selectedCap.capability.capabilityId, 9)}</code>
+                        <span className={`pass-state ${selectedActive ? "active" : "expired"}`}><span />{selectedActive ? "Access active" : "Access expired"}</span>
                       </div>
                       <span>Valid until {formatExpiry(selectedCap.capability.expiry)}</span>
                     </div>
@@ -677,25 +778,25 @@ export default function App() {
                       maxLength={maxInputChars}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      placeholder="Paste the section or paper text you want to analyze…"
+                      placeholder="Paste text to analyze…"
                       rows={13}
                       spellCheck
                     />
                     <div className="editor-footer">
-                      <span>Draft saved in this browser</span>
+                      <span />
                       <span className={text.length >= maxInputChars ? "limit-hit" : ""}>{text.length.toLocaleString()} / {maxInputChars.toLocaleString()}</span>
                     </div>
                     <div className="run-row">
                       <div className="run-note">
-                        <Icon name="shield" size={17} />
-                        <span>You will sign a one-time access challenge. No transaction is sent to use the service.</span>
+                        <Icon name="shield" size={16} />
+                        <span>Wallet signature only. Using the service does not send a CKB transaction.</span>
                       </div>
                       <button
                         className="button primary large"
                         disabled={!selectedActive || !inputValid || Boolean(busy) || !systemReady}
                         onClick={() => useService(selectedCap)}
                       >
-                        {busy === "analyze" ? "Verifying…" : config?.payments?.required ? "Continue to analysis" : "Run analysis"}
+                        {busy === "analyze" ? "Verifying access…" : "Run analysis"}
                         {busy !== "analyze" && <Icon name="arrow" size={18} />}
                       </button>
                     </div>
@@ -708,9 +809,7 @@ export default function App() {
                     </div>
 
                     {!result ? (
-                      <div className="result-placeholder">
-                        <p>Run the protected service to see the result here.</p>
-                      </div>
+                      <div className="result-placeholder"><p>Your result will appear here.</p></div>
                     ) : (
                       <div className="result-content">
                         <div className="metric-grid">
@@ -720,21 +819,15 @@ export default function App() {
                           <div className="metric"><span>Lexical diversity</span><strong>{typeof result.lexicalDiversity === "number" ? `${Math.round(result.lexicalDiversity * 100)}%` : "—"}</strong></div>
                         </div>
 
-                        {result.preview && (
+                        {result.preview && <div className="result-block"><h3>Preview</h3><p>{result.preview}</p></div>}
+                        {markerEntries.length > 0 && (
                           <div className="result-block">
-                            <h3>Preview</h3>
-                            <p>{result.preview}</p>
-                          </div>
-                        )}
-
-                        <div className="result-block">
-                          <h3>Structure markers</h3>
-                          {markerEntries.length ? (
+                            <h3>Structure markers</h3>
                             <div className="marker-list">
                               {markerEntries.map(([marker, count]) => <span key={marker}>{marker}<strong>{count}</strong></span>)}
                             </div>
-                          ) : <p className="muted">No tracked structure markers were found.</p>}
-                        </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </section>
@@ -742,25 +835,45 @@ export default function App() {
                   <details className="manage-card">
                     <summary>
                       <span><Icon name="swap" size={17} /> Manage this pass</span>
-                      <span>Transfer or inspect on-chain details</span>
+                      <span>Transfer or verify ownership</span>
                     </summary>
                     <div className="manage-content">
-                      <div className="detail-grid">
-                        <div><span>Capability ID</span><code>{selectedCap.capability.capabilityId}</code></div>
-                        <div><span>Current owner</span><code>{address}</code></div>
-                        <div><span>Provider / issuer</span><code>{selectedCap.capability.issuerId}</code></div>
-                        <div><span>Service ID</span><code>{selectedCap.capability.serviceId}</code></div>
-                        <div><span>Policy</span><code>{config?.servicePolicy?.id || "paper-analyzer-v1"}</code></div>
-                        <div><span>Out point</span><code>{selectedCap.cell.outPoint.txHash}:{selectedCap.cell.outPoint.index.toString()}</code></div>
+                      <div className="ownership-check">
+                        <div>
+                          <strong>Current ownership</strong>
+                          <p>Verify the selected pass directly against the live CKB Cell.</p>
+                        </div>
+                        <button type="button" className="button secondary small" disabled={Boolean(busy)} onClick={() => verifyLiveOwner(selectedCap)}>
+                          <Icon name="shield" size={14} />
+                          {busy === "capability-status" ? "Checking…" : "Verify live owner"}
+                        </button>
                       </div>
+                      {capabilityStatus && (
+                        <div className="live-owner-result" title={capabilityStatus.capability.currentOwnerLockHash}>
+                          <Icon name="check" size={14} />
+                          <span>Verified on CKB · owner {short(capabilityStatus.capability.currentOwnerLockHash, 8)}</span>
+                        </div>
+                      )}
+
                       <div className="transfer-form">
                         <label htmlFor="recipient">Transfer to CKB address</label>
                         <div>
-                          <input id="recipient" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} />
+                          <input id="recipient" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
                           <button className="button secondary" disabled={!recipient.trim() || Boolean(busy)} onClick={() => transfer(selectedCap)}>Transfer</button>
                         </div>
-                        <p>This moves ownership of the Capability Cell. The previous owner loses access after confirmation.</p>
+                        <p>After confirmation, this wallet no longer owns the service right.</p>
                       </div>
+
+                      <details className="technical-details">
+                        <summary>Technical details</summary>
+                        <div className="detail-grid">
+                          <div><span>Capability ID</span><code>{selectedCap.capability.capabilityId}</code></div>
+                          <div><span>Owner</span><code>{address}</code></div>
+                          <div><span>Provider</span><code>{selectedCap.capability.issuerId}</code></div>
+                          <div><span>Service ID</span><code>{selectedCap.capability.serviceId}</code></div>
+                          <div><span>Out point</span><code>{selectedCap.cell.outPoint.txHash}:{selectedCap.cell.outPoint.index.toString()}</code></div>
+                        </div>
+                      </details>
                     </div>
                   </details>
                 </>
@@ -770,17 +883,14 @@ export default function App() {
         )}
       </main>
 
-      <footer className="app-footer">
-        <span>SkillPass · CKB Testnet</span>
-        <span>Wallet signing via CCC · Payments via Fiber/x402 when enabled</span>
-      </footer>
+      <footer className="app-footer">SkillPass · Portable service rights on CKB Testnet</footer>
 
       {pendingPayment && paymentRequirement && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) setPendingPayment(undefined); }}>
           <section className="payment-modal" role="dialog" aria-modal="true" aria-labelledby="payment-title">
             <div className="modal-header">
               <div>
-                <span className="eyebrow">Fiber payment</span>
+                <span className="eyebrow">Usage payment</span>
                 <h2 id="payment-title">Pay to continue</h2>
               </div>
               <button className="icon-button" aria-label="Close payment" disabled={Boolean(busy)} onClick={() => { setPendingPayment(undefined); setPaymentPreimage(""); }}><Icon name="x" /></button>
@@ -789,14 +899,12 @@ export default function App() {
             <div className="payment-amount">
               <span>Amount</span>
               <strong>{formatAtomicAmount(paymentRequirement.amount, config?.payments?.decimals)} <small>{paymentRequirement.asset}</small></strong>
-              <p>{formatAtomicInteger(paymentRequirement.amount)} {config?.payments?.atomicUnit || "atomic units"} · {paymentRequirement.network}</p>
             </div>
 
             <div className="payment-step">
-              <div className="step-number">1</div>
               <div>
-                <h3>Pay the invoice</h3>
-                <p>Scan with a Fiber-compatible wallet, or copy the invoice into your Fiber payment tool.</p>
+                <h3>Pay the Fiber invoice</h3>
+                <p>Scan the QR code or copy the invoice into a compatible wallet.</p>
                 <div className="invoice-payment-grid">
                   <div className="invoice-qr" aria-label="Fiber invoice QR code">
                     <QRCode value={paymentRequirement.extra.invoice} size={148} level="M" />
@@ -806,29 +914,10 @@ export default function App() {
                     <button className="icon-button" onClick={() => void copyText(paymentRequirement.extra.invoice, "Invoice")} aria-label="Copy invoice"><Icon name="copy" size={17} /></button>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="payment-step">
-              <div className="step-number">2</div>
-              <div>
-                <h3>Verify payment</h3>
-                <p>After payment completes, return here and retry the protected request.</p>
-                <div className="payment-hash-row">
-                  <span>Payment hash</span>
-                  <code>{short(paymentRequirement.extra.paymentHash, 12)}</code>
-                  <button className="text-button" onClick={() => void copyText(paymentRequirement.extra.paymentHash, "Payment hash")}>Copy</button>
-                </div>
                 {config?.payments?.proofMode === "preimage" && (
                   <label className="preimage-field">
                     <span>Payment preimage</span>
-                    <input
-                      value={paymentPreimage}
-                      onChange={(e) => setPaymentPreimage(e.target.value)}
-                      placeholder="0x + 64 hex characters"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
+                    <input value={paymentPreimage} onChange={(e) => setPaymentPreimage(e.target.value)} placeholder="0x + 64 hex characters" autoComplete="off" spellCheck={false} />
                   </label>
                 )}
               </div>
@@ -837,7 +926,7 @@ export default function App() {
             <div className="payment-security"><Icon name="shield" size={16} /><span>SkillPass never asks for your private key or seed phrase.</span></div>
             <div className="modal-actions">
               <button className="button ghost" disabled={Boolean(busy)} onClick={() => { setPendingPayment(undefined); setPaymentPreimage(""); }}>Cancel</button>
-              <button className="button primary" disabled={Boolean(busy)} onClick={retryPaidUse}>{busy === "paid-retry" ? "Checking payment…" : "I paid — verify"}<Icon name="arrow" size={17} /></button>
+              <button className="button primary" disabled={Boolean(busy)} onClick={retryPaidUse}>{busy === "paid-retry" ? "Verifying…" : "Verify payment"}<Icon name="arrow" size={17} /></button>
             </div>
           </section>
         </div>

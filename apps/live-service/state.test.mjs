@@ -13,6 +13,7 @@ test("live payment quotes survive service-state restart and can be deleted", asy
     await state.setQuote("0xABC", { binding: "request-1", expiresAt: Date.now() + 60_000 });
     const restarted = new LiveServiceState({ file });
     assert.equal((await restarted.getQuote("0xabc")).binding, "request-1");
+    assert.equal((await restarted.getQuoteByBinding("request-1")).binding, "request-1");
     assert.equal(await restarted.deleteQuote("0xAbC"), true);
     assert.equal(await restarted.getQuote("0xabc"), null);
   } finally {
@@ -29,7 +30,7 @@ test("successful delivery receipt survives restart while expired quotes are prun
     await state.setQuote("0x01", { binding: "expired", expiresAt: now + 5 });
     await state.setReceipt("0x02", { binding: "paid-request", result: { score: 1 }, settlement: { success: true } });
     now += 10;
-    assert.equal(await state.pruneExpiredQuotes(), 1);
+    assert.equal(await state.pruneExpiredQuotes(), 2);
 
     const restarted = new LiveServiceState({ file, now: () => now });
     assert.equal(await restarted.getQuote("0x01"), null);
@@ -55,4 +56,22 @@ test("old delivery receipts are pruned after the configured retention window", a
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test("same binding resolves to one live quote and pointer is removed with quote", async () => {
+  let now = 5_000;
+  const state = new LiveServiceState({ now: () => now });
+  await state.setQuote("0xAA", { binding: "same-request", requirement: { amount: "1" }, expiresAt: now + 1_000 });
+  assert.equal((await state.getQuoteByBinding("same-request")).requirement.amount, "1");
+  await state.deleteQuote("0xaa");
+  assert.equal(await state.getQuoteByBinding("same-request"), null);
+});
+
+test("expired binding pointer never resurrects an old payment quote", async () => {
+  let now = 7_000;
+  const state = new LiveServiceState({ now: () => now });
+  await state.setQuote("0xBB", { binding: "expiring-request", expiresAt: now + 10 });
+  now += 11;
+  assert.equal(await state.getQuoteByBinding("expiring-request"), null);
 });
