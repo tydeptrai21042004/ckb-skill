@@ -25,7 +25,9 @@ function fallbackServer() {
 
 const server = await (async () => {
 try {
-  return (await import("./server.mjs")).server;
+  const runtimeEntrypoint = "./server.mjs";
+  const runtime = (await import(runtimeEntrypoint)) as { server: http.Server };
+  return runtime.server;
 } catch (error) {
   console.error("SkillPass facilitator bootstrap failed:", error instanceof Error ? error.message : "unknown error");
   return fallbackServer();

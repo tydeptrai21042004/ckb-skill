@@ -26,7 +26,9 @@ function fallbackServer() {
 
 const server = await (async () => {
 try {
-  return (await import("./server.mjs")).server;
+  const runtimeEntrypoint = "./server.mjs";
+  const runtime = (await import(runtimeEntrypoint)) as { server: http.Server };
+  return runtime.server;
 } catch (error) {
   // Keep deployment details in server logs only. Browser/API callers always get
   // bounded JSON instead of Vercel's plain-text bootstrap error page.

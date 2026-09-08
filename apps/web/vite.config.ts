@@ -15,5 +15,18 @@ export default defineConfig({
       "/.well-known": apiOrigin,
     },
   },
-  build: { sourcemap: true },
+  build: {
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@ckb-ccc")) return "vendor-ckb";
+          if (id.includes("react-dom") || id.includes("/react/")) return "vendor-react";
+          if (id.includes("react-qr-code")) return "vendor-qr";
+          return "vendor";
+        },
+      },
+    },
+  },
 });
