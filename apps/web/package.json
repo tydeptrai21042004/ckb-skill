@@ -15,8 +15,8 @@
     "react-qr-code": "2.2.0",
     "@skillpass/ckb-client": "1.0.0",
     "@skillpass/capability-codec": "0.7.0",
-    "@skillpass/service-gateway": "1.0.0",
-    "@skillpass/delegation": "1.0.0"
+    "@skillpass/service-gateway": "1.2.0",
+    "@skillpass/delegation": "1.2.0"
   },
   "devDependencies": {
     "@types/react": "19.0.0",
