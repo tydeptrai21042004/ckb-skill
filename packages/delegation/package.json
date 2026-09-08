@@ -1,0 +1,15 @@
+{
+  "name": "@skillpass/delegation",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "import": "./src/index.mjs"
+    },
+    "./usage-ledger": {
+      "import": "./src/usage-ledger.mjs"
+    }
+  }
+}

@@ -40,7 +40,7 @@ for (const required of [
 mustNotMatch(".env.vercel.example", /^DATABASE_URL=postgres/m, "must not contain a real/local database URL");
 ok("Hardened Vercel defaults checked");
 
-mustMatch("apps/live-service/server.mjs", /authenticateProtectedRequest\(requestBody\)[\s\S]{0,1600}createPaymentQuote\(/,
+mustMatch("apps/live-service/server.mjs", /authenticateProtectedRequest\(requestBody, service\)[\s\S]{0,1600}createPaymentQuote\(req, requestBody, service\)/,
   "wallet + live CKB ownership verification must happen before invoice creation");
 mustMatch("apps/live-service/server.mjs", /ENABLE_DEEP_HEALTH[\s\S]*DEEP_HEALTH_TOKEN/,
   "deep health endpoint must be opt-in/token guarded");

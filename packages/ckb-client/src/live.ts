@@ -258,6 +258,8 @@ export async function discoverOwnedCapabilities(params: {
   signer: ccc.Signer;
   deployment: Deployment;
   expectedServiceId?: `0x${string}`;
+  /** Preferred multi-service allowlist for gateway deployments. */
+  expectedServiceIds?: Array<`0x${string}`>;
   /** Backward-compatible single issuer filter. */
   trustedIssuerId?: `0x${string}`;
   /** Preferred rotation-safe issuer allowlist. */
@@ -266,6 +268,11 @@ export async function discoverOwnedCapabilities(params: {
 }) {
   validateDeployment(params.deployment);
   const trustedIssuers = normalizeTrustedIssuerSet(params.trustedIssuerIds ?? params.trustedIssuerId);
+  const expectedServices = params.expectedServiceIds?.length
+    ? new Set(params.expectedServiceIds.map((value) => normalizeHex32(value, "expectedServiceId").toLowerCase()))
+    : params.expectedServiceId
+      ? new Set([normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()])
+      : null;
   const found: Array<{ cell: ccc.Cell; capability: ReturnType<typeof decodeCapability> }> = [];
   const owner = await params.signer.getRecommendedAddressObj();
   for await (const cell of params.signer.client.findCellsByLock(owner.script, undefined, true)) {
@@ -277,7 +284,7 @@ export async function discoverOwnedCapabilities(params: {
     try {
       const capability = decodeCapability(cell.outputData);
       if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) continue;
-      if (params.expectedServiceId && capability.serviceId.toLowerCase() !== normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()) continue;
+      if (expectedServices && !expectedServices.has(capability.serviceId.toLowerCase())) continue;
       if (trustedIssuers && !trustedIssuers.has(capability.issuerId.toLowerCase())) continue;
       if ((params.requireTransferable ?? false) && !hasFlag(capability, FLAG_TRANSFERABLE)) continue;
       found.push({ cell, capability });

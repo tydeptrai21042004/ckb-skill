@@ -53,6 +53,30 @@ const MIGRATIONS = [
         ON skillpass_rate_limits (reset_at);
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS skillpass_delegation_usage (
+        grant_id TEXT PRIMARY KEY,
+        used_calls BIGINT NOT NULL DEFAULT 0 CHECK (used_calls >= 0),
+        used_spend NUMERIC(78,0) NOT NULL DEFAULT 0 CHECK (used_spend >= 0),
+        expires_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+      );
+      CREATE INDEX IF NOT EXISTS skillpass_delegation_usage_expiry_idx
+        ON skillpass_delegation_usage (expires_at);
+
+      CREATE TABLE IF NOT EXISTS skillpass_delegation_invocations (
+        grant_id TEXT NOT NULL,
+        invocation_key TEXT NOT NULL,
+        spend NUMERIC(78,0) NOT NULL DEFAULT 0 CHECK (spend >= 0),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (grant_id, invocation_key)
+      );
+      CREATE INDEX IF NOT EXISTS skillpass_delegation_invocations_time_idx
+        ON skillpass_delegation_invocations (created_at);
+    `,
+  },
 ];
 
 export function createPostgresPool(env = process.env) {

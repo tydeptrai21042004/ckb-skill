@@ -273,3 +273,121 @@ export class RedisRateLimiter {
     return { allowed: count <= limit, count, limit, retryAfterSeconds: Math.max(1, Math.ceil(ttlMs / 1000)) };
   }
 }
+
+function normalizeDelegationUsageInput({ grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic = "0", expiresAt }) {
+  const id = String(grantId || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(id)) throw new Error("delegation grantId is invalid");
+  const key = String(invocationKey || "").trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(key)) throw new Error("delegation invocationKey must be a SHA-256 hex digest");
+  const uses = maxUses == null ? null : Number(maxUses);
+  if (uses != null && (!Number.isSafeInteger(uses) || uses < 1 || uses > 10_000)) throw new Error("delegation maxUses must be 1..10000");
+  const normalizeAtomic = (value, label, nullable = false) => {
+    if (nullable && (value == null || value === "")) return null;
+    const raw = String(value ?? "0").trim();
+    if (!/^[0-9]{1,78}$/.test(raw)) throw new Error(`${label} must be a non-negative atomic-unit integer string`);
+    return BigInt(raw).toString();
+  };
+  const maxSpend = normalizeAtomic(maxSpendAtomic, "delegation maxSpendAtomic", true);
+  const spend = normalizeAtomic(spendAtomic, "delegation spendAtomic");
+  const expiry = Number(expiresAt);
+  if (!Number.isSafeInteger(expiry) || expiry <= 0) throw new Error("delegation expiresAt is invalid");
+  return { grantId: id, invocationKey: key, maxUses: uses, maxSpendAtomic: maxSpend, spendAtomic: spend, expiresAt: expiry };
+}
+
+function usageResult({ usedCalls, usedSpendAtomic, maxUses, maxSpendAtomic, replayed }) {
+  const calls = Number(usedCalls);
+  const spend = BigInt(String(usedSpendAtomic || "0"));
+  const maxSpend = maxSpendAtomic == null ? null : BigInt(maxSpendAtomic);
+  return Object.freeze({
+    usedCalls: calls,
+    usedSpendAtomic: spend.toString(),
+    remainingUses: maxUses == null ? null : Math.max(0, maxUses - calls),
+    remainingSpendAtomic: maxSpend == null ? null : (maxSpend > spend ? maxSpend - spend : 0n).toString(),
+    replayed: Boolean(replayed),
+  });
+}
+
+export class PostgresDelegationUsageLedger {
+  constructor({ pool, now = () => Date.now() } = {}) {
+    if (!pool) throw new Error("PostgresDelegationUsageLedger requires pool");
+    this.pool = pool;
+    this.now = now;
+  }
+
+  async consume(input) {
+    const normalized = normalizeDelegationUsageInput(input);
+    if (this.now() >= normalized.expiresAt) throw Object.assign(new Error("delegation is expired"), { status: 403, code: "DELEGATION_EXPIRED" });
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO skillpass_delegation_usage(grant_id, used_calls, used_spend, expires_at, updated_at)
+         VALUES ($1, 0, 0, to_timestamp($2::double precision / 1000.0), clock_timestamp())
+         ON CONFLICT (grant_id) DO NOTHING`,
+        [normalized.grantId, normalized.expiresAt],
+      );
+      const { rows } = await client.query(
+        `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+                extract(epoch from expires_at) * 1000 AS expires_ms
+           FROM skillpass_delegation_usage
+          WHERE grant_id = $1 FOR UPDATE`,
+        [normalized.grantId],
+      );
+      if (!rows.length) throw new Error("delegation usage row is missing");
+      const row = rows[0];
+      const storedExpiry = Math.trunc(Number(row.expires_ms));
+      if (storedExpiry !== normalized.expiresAt) {
+        throw Object.assign(new Error("delegation grantId collision detected"), { status: 403, code: "DELEGATION_GRANT_COLLISION" });
+      }
+      const replay = await client.query(
+        `SELECT spend::text AS spend FROM skillpass_delegation_invocations WHERE grant_id = $1 AND invocation_key = $2`,
+        [normalized.grantId, normalized.invocationKey],
+      );
+      if (replay.rows.length) {
+        await client.query("COMMIT");
+        return usageResult({ usedCalls: row.used_calls, usedSpendAtomic: row.used_spend, maxUses: normalized.maxUses, maxSpendAtomic: normalized.maxSpendAtomic, replayed: true });
+      }
+      const usedCalls = Number(row.used_calls || 0);
+      const usedSpend = BigInt(String(row.used_spend || "0"));
+      const nextCalls = usedCalls + 1;
+      const nextSpend = usedSpend + BigInt(normalized.spendAtomic);
+      if (normalized.maxUses != null && nextCalls > normalized.maxUses) {
+        throw Object.assign(new Error("delegation use limit exhausted"), { status: 403, code: "DELEGATION_USE_LIMIT_EXHAUSTED" });
+      }
+      if (normalized.maxSpendAtomic != null && nextSpend > BigInt(normalized.maxSpendAtomic)) {
+        throw Object.assign(new Error("delegation spend limit exhausted"), { status: 403, code: "DELEGATION_SPEND_LIMIT_EXHAUSTED" });
+      }
+      await client.query(
+        `UPDATE skillpass_delegation_usage
+            SET used_calls = $2, used_spend = $3::numeric, updated_at = clock_timestamp()
+          WHERE grant_id = $1`,
+        [normalized.grantId, nextCalls, nextSpend.toString()],
+      );
+      await client.query(
+        `INSERT INTO skillpass_delegation_invocations(grant_id, invocation_key, spend, created_at)
+         VALUES ($1, $2, $3::numeric, clock_timestamp())`,
+        [normalized.grantId, normalized.invocationKey, normalized.spendAtomic],
+      );
+      await client.query("COMMIT");
+      return usageResult({ usedCalls: nextCalls, usedSpendAtomic: nextSpend, maxUses: normalized.maxUses, maxSpendAtomic: normalized.maxSpendAtomic, replayed: false });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async pruneExpired() {
+    const result = await this.pool.query(
+      `DELETE FROM skillpass_delegation_usage WHERE expires_at <= clock_timestamp() RETURNING grant_id`,
+    );
+    if (result.rows.length) {
+      await this.pool.query(
+        `DELETE FROM skillpass_delegation_invocations WHERE grant_id = ANY($1::text[])`,
+        [result.rows.map((row) => row.grant_id)],
+      );
+    }
+    return result.rowCount;
+  }
+}
