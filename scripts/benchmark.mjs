@@ -18,7 +18,7 @@ const cell = chain.issue({
     issuerId: ISSUER, capabilityId: randomId32(), expiry: BigInt(Math.floor(Date.now() / 1000) + 86_400),
   }),
 });
-const verifier = new CapabilityVerifier({ chain, expectedServiceId: PAPER_ANALYZER_V1_SERVICE_ID });
+const verifier = new CapabilityVerifier({ chain, expectedServiceId: PAPER_ANALYZER_V1_SERVICE_ID, expectedIssuerId: ISSUER });
 for (let i = 0; i < 500; i++) verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER });
 const samples = new Array(N);
 const started = performance.now();

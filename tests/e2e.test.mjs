@@ -35,7 +35,7 @@ test("capability v1: A uses -> transfers -> A denied -> B uses", () => {
       expiry: 10_000n,
     }),
   });
-  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   const service = new SkillPassService({
     challengeStore: new ChallengeStore({ ttlMs: 60_000 }),
     proofVerifier,

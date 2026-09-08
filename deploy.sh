@@ -128,6 +128,8 @@ doctor(){
   [[ "$value" =~ ^(data|data1|data2|type)$ ]] && printf '[OK]   CAPABILITY_HASH_TYPE\n' || { printf '[FAIL] CAPABILITY_HASH_TYPE\n'; fail=1; }
   value="$(env_value CAPABILITY_DEP_INDEX)"
   [[ "$value" =~ ^[0-9]+$ ]] && printf '[OK]   CAPABILITY_DEP_INDEX\n' || { printf '[FAIL] CAPABILITY_DEP_INDEX\n'; fail=1; }
+  value="$(env_value CAPABILITY_TRUSTED_ISSUER_ID)"
+  [[ "$value" =~ ^0x[0-9a-fA-F]{64}$ && ! "$value" =~ ^0x0{64}$ ]] && printf '[OK]   CAPABILITY_TRUSTED_ISSUER_ID\n' || { printf '[FAIL] CAPABILITY_TRUSTED_ISSUER_ID\n'; fail=1; }
   value="$(env_value FACILITATOR_AUTH_TOKEN)"
   [[ ${#value} -ge 32 && "$value" != REPLACE* ]] && printf '[OK]   FACILITATOR_AUTH_TOKEN\n' || { printf '[FAIL] FACILITATOR_AUTH_TOKEN\n'; fail=1; }
   value="$(env_value PAYMENT_AMOUNT)"

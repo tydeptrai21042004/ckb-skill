@@ -32,6 +32,7 @@ ok("Vercel function duration and response-header guards checked");
 const env = text(".env.vercel.example");
 for (const required of [
   /STATE_BACKEND=postgres/, /POSTGRES_POOL_MAX=2/, /SKILLPASS_PUBLIC_PRODUCTION=true/,
+  /CAPABILITY_TRUSTED_ISSUER_ID=/,
   /ENABLE_PUBLIC_ISSUE=false/, /PAYMENTS_REQUIRED=false/, /FIBER_BACKEND=mock/,
   /ALLOW_DEV_PAYMENT=false/, /ENABLE_DEEP_HEALTH=false/,
   /ANALYZE_RATE_LIMIT_PER_MINUTE=8/, /UPSTREAM_TIMEOUT_MS=8000/,

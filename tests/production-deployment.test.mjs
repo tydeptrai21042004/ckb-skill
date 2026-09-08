@@ -25,6 +25,9 @@ test("production containers include shared security and shared-state packages", 
   for (const path of ["Dockerfile", "Dockerfile.live", "Dockerfile.facilitator"]) {
     assert.match(read(path), /COPY packages\/http-security \.\/packages\/http-security/, `${path} must include http-security`);
   }
+  for (const path of ["Dockerfile", "Dockerfile.live"]) {
+    assert.match(read(path), /COPY packages\/service-rights \.\/packages\/service-rights/, `${path} must include service-rights`);
+  }
   for (const path of ["Dockerfile.live", "Dockerfile.facilitator"]) {
     assert.match(read(path), /COPY packages\/production-store \.\/packages\/production-store/, `${path} must include production-store`);
   }

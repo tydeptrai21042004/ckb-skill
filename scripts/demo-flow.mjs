@@ -20,7 +20,7 @@ const initial = chain.issue({
   issuerInputLockHash: ISSUER,
   data: encodeCapabilityHex({ version: 1, flags: FLAG_TRANSFERABLE, serviceId: SERVICE, issuerId: ISSUER, capabilityId: `0x${"44".repeat(32)}`, expiry: 10_000n }),
 });
-const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
 const service = new SkillPassService({ challengeStore: new ChallengeStore(), proofVerifier, capabilityVerifier: verifier, lockHashResolver: (id) => proofVerifier.lockHashFor(id) });
 
 function use(wallet, outPoint) {

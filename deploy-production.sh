@@ -155,6 +155,7 @@ doctor(){
   value="$(env_value CAPABILITY_DEP_TX_HASH)"; is_hex32 "$value" && echo "[OK]   CAPABILITY_DEP_TX_HASH" || { echo "[FAIL] CAPABILITY_DEP_TX_HASH"; fail_count=$((fail_count+1)); }
   value="$(env_value CAPABILITY_HASH_TYPE)"; [[ "$value" =~ ^(data|data1|data2|type)$ ]] && echo "[OK]   CAPABILITY_HASH_TYPE" || { echo "[FAIL] CAPABILITY_HASH_TYPE"; fail_count=$((fail_count+1)); }
   value="$(env_value CAPABILITY_DEP_INDEX)"; [[ "$value" =~ ^[0-9]+$ ]] && echo "[OK]   CAPABILITY_DEP_INDEX" || { echo "[FAIL] CAPABILITY_DEP_INDEX"; fail_count=$((fail_count+1)); }
+  value="$(env_value CAPABILITY_TRUSTED_ISSUER_ID)"; is_hex32 "$value" && [[ ! "$value" =~ ^0x0{64}$ ]] && echo "[OK]   CAPABILITY_TRUSTED_ISSUER_ID" || { echo "[FAIL] CAPABILITY_TRUSTED_ISSUER_ID"; fail_count=$((fail_count+1)); }
 
   value="$(env_value CKB_RPC_URL)"
   if [[ ! "$value" =~ ^https?:// ]]; then echo "[FAIL] CKB_RPC_URL is required for production"; fail_count=$((fail_count+1))

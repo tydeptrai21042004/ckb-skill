@@ -29,9 +29,10 @@ function requireHttpsIfSet(name) {
   return raw;
 }
 
-for (const name of ["CAPABILITY_CODE_HASH", "CAPABILITY_DEP_TX_HASH"]) {
+for (const name of ["CAPABILITY_CODE_HASH", "CAPABILITY_DEP_TX_HASH", "CAPABILITY_TRUSTED_ISSUER_ID"]) {
   const v = required(name);
   if (v && !/^0x[0-9a-fA-F]{64}$/.test(v)) errors.push(`${name} must be 0x + 64 hex characters`);
+  if (name === "CAPABILITY_TRUSTED_ISSUER_ID" && /^0x0{64}$/i.test(v)) errors.push("CAPABILITY_TRUSTED_ISSUER_ID must not be the zero hash");
 }
 const hashType = required("CAPABILITY_HASH_TYPE");
 if (!["data", "data1", "data2", "type"].includes(hashType)) errors.push("CAPABILITY_HASH_TYPE is invalid");

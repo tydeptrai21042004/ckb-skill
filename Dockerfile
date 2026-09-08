@@ -2,6 +2,7 @@ FROM node:22.23.2-alpine3.24
 WORKDIR /app
 COPY apps/demo-service ./apps/demo-service
 COPY packages/capability-codec ./packages/capability-codec
+COPY packages/service-rights ./packages/service-rights
 COPY packages/http-security ./packages/http-security
 COPY packages/protocol-core ./packages/protocol-core
 COPY packages/verifier ./packages/verifier

@@ -18,6 +18,7 @@ const checks = [
   ["CAPABILITY_DEP_TX_HASH", /^0x[0-9a-fA-F]{64}$/],
   ["CAPABILITY_HASH_TYPE", /^(data|data1|data2|type)$/],
   ["CAPABILITY_DEP_INDEX", /^\d+$/],
+  ["CAPABILITY_TRUSTED_ISSUER_ID", /^0x[0-9a-fA-F]{64}$/],
 ];
 let ok = true;
 for (const [name, pattern] of checks) {
