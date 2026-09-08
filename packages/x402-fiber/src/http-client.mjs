@@ -11,7 +11,11 @@ export class FacilitatorHttpError extends Error {
 export class FacilitatorHttpClient {
   constructor({ baseUrl = "http://127.0.0.1:8790", token = "", fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
     if (!fetchImpl) throw new Error("fetch implementation is required");
-    this.baseUrl = String(baseUrl).replace(/\/+$/, "");
+    const parsed = new URL(String(baseUrl));
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("facilitator baseUrl must use http:// or https://");
+    if (parsed.username || parsed.password) throw new Error("facilitator baseUrl must not embed credentials");
+    if (parsed.search || parsed.hash) throw new Error("facilitator baseUrl must not contain a query string or fragment");
+    this.baseUrl = parsed.toString().replace(/\/+$/, "");
     this.token = token;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -30,6 +34,7 @@ export class FacilitatorHttpClient {
         headers,
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
+        redirect: "error",
       });
       const text = await response.text();
       let parsed = null;

@@ -83,6 +83,7 @@ export function baseSecurityHeaders({ contentType, csp, trustedTypesReportOnly =
     "referrer-policy": "no-referrer",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
     "x-permitted-cross-domain-policies": "none",
+    "x-dns-prefetch-control": "off",
     "cross-origin-resource-policy": "same-origin",
   };
   if (csp) headers["content-security-policy"] = csp;

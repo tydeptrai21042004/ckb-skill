@@ -81,3 +81,49 @@ test("provider issuer rotation accepts any explicitly trusted issuer and rejects
   assert.equal(verifyServicePolicy({ capability: cap({ issuerId: ROTATED_ISSUER }), policy: rotatingPolicy, nowUnixSeconds: 100n }).capability.issuerId, ROTATED_ISSUER);
   assert.throws(() => verifyServicePolicy({ capability: cap({ issuerId: FAKE_ISSUER }), policy: rotatingPolicy, nowUnixSeconds: 100n }), (e) => e.code === "UNTRUSTED_ISSUER");
 });
+
+test("one shared entitlement can satisfy multiple independent service policies", () => {
+  const bundleEntitlement = `0x${"66".repeat(32)}`;
+  const serviceA = createServicePolicy({
+    serviceId: SERVICE,
+    entitlementIds: [bundleEntitlement],
+    issuanceEntitlementId: bundleEntitlement,
+    bundleId: "research-agent-pack-v1",
+    trustedIssuerId: ISSUER,
+    requireTransferable: true,
+  });
+  const serviceB = createServicePolicy({
+    serviceId: OTHER_SERVICE,
+    entitlementIds: [bundleEntitlement],
+    issuanceEntitlementId: bundleEntitlement,
+    bundleId: "research-agent-pack-v1",
+    trustedIssuerId: ISSUER,
+    requireTransferable: true,
+  });
+  const shared = cap({ serviceId: bundleEntitlement });
+  assert.equal(verifyServicePolicy({ capability: shared, policy: serviceA, nowUnixSeconds: 100n }).policy.bundleId, "research-agent-pack-v1");
+  assert.equal(verifyServicePolicy({ capability: shared, policy: serviceB, nowUnixSeconds: 100n }).policy.serviceId, OTHER_SERVICE);
+});
+
+test("license mode supports non-transferable provider-revocable entitlements", async () => {
+  const { FLAG_REVOCABLE } = await import("../../capability-codec/src/index.mjs");
+  const licensePolicy = createServicePolicy({
+    serviceId: SERVICE,
+    trustedIssuerId: ISSUER,
+    requireTransferable: false,
+    delegationAllowed: false,
+    rightMode: "license",
+  });
+  assert.equal(verifyServicePolicy({ capability: cap({ flags: FLAG_REVOCABLE }), policy: licensePolicy, nowUnixSeconds: 100n }).policy.rightMode, "license");
+  assert.throws(() => verifyServicePolicy({ capability: cap({ flags: 0 }), policy: licensePolicy, nowUnixSeconds: 100n }), (e) => e.code === "NOT_REVOCABLE");
+});
+
+test("delegation requires both provider opt-in and DELEGATABLE capability flag", async () => {
+  const { FLAG_DELEGATABLE } = await import("../../capability-codec/src/index.mjs");
+  const { verifyDelegationPolicy } = await import("../src/index.mjs");
+  const allowed = createServicePolicy({ serviceId: SERVICE, trustedIssuerId: ISSUER, delegationAllowed: true });
+  const disabled = createServicePolicy({ serviceId: SERVICE, trustedIssuerId: ISSUER, delegationAllowed: false });
+  assert.doesNotThrow(() => verifyDelegationPolicy({ capability: cap({ flags: FLAG_TRANSFERABLE | FLAG_DELEGATABLE }), policy: allowed }));
+  assert.throws(() => verifyDelegationPolicy({ capability: cap(), policy: allowed }), (e) => e.code === "NOT_DELEGATABLE");
+  assert.throws(() => verifyDelegationPolicy({ capability: cap({ flags: FLAG_TRANSFERABLE | FLAG_DELEGATABLE }), policy: disabled }), (e) => e.code === "DELEGATION_DISABLED");
+});

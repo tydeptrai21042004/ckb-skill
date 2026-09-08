@@ -65,6 +65,6 @@ start("live API", "node", ["apps/live-service/server.mjs"], { PORT: apiPort });
 start(
   "Vite frontend",
   "npm",
-  ["run", "dev", "--prefix", "apps/web", "--", "--host", "0.0.0.0", "--port", webPort],
+  ["run", "dev", "--prefix", "apps/web", "--", "--host", "127.0.0.1", "--port", webPort],
   { SKILLPASS_API_ORIGIN: apiOrigin },
 );

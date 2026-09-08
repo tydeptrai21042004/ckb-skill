@@ -21,7 +21,7 @@ function deploymentReady(file) {
 
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 const rows = [
-  ["Node 22+", { ok: nodeMajor >= 22, detail: process.version }],
+  ["Node 24+", { ok: nodeMajor >= 24, detail: process.version }],
   ["npm", command("npm")],
   ["Rust/Cargo (contract)", command("cargo")],
   ["Docker (optional)", command("docker")],
@@ -36,7 +36,7 @@ for (const [name, result] of rows) {
   console.log(`${result.ok ? "[OK]  " : "[WARN]"} ${name.padEnd(24)} ${result.detail}`);
 }
 console.log("\nReadiness levels:");
-console.log("- Local demo/tests need only Node 22+.");
+console.log("- Local demo/tests need only Node 24+.");
 console.log("- Contract verification additionally needs Rust + riscv64imac-unknown-none-elf.");
 console.log("- Testnet use additionally needs real deployment metadata and a CCC-compatible wallet.");
 console.log("- Fiber FNN is optional for deterministic tests; a real paid E2E needs configured/funded Fiber topology.");

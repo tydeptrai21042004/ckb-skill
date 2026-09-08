@@ -12,7 +12,11 @@ export class FiberRpcClient {
   #id = 0;
   constructor({ url = "http://127.0.0.1:8227", token = "", fetchImpl = globalThis.fetch, timeoutMs = 15_000 } = {}) {
     if (!fetchImpl) throw new Error("fetch implementation is required");
-    this.url = url;
+    const parsed = new URL(String(url));
+    if (!["http:", "https:"].includes(parsed.protocol)) throw new Error("Fiber RPC URL must use http:// or https://");
+    if (parsed.username || parsed.password) throw new Error("Fiber RPC URL must not embed credentials");
+    if (parsed.hash) throw new Error("Fiber RPC URL must not contain a fragment");
+    this.url = parsed.toString();
     this.token = token;
     this.fetchImpl = fetchImpl;
     this.timeoutMs = timeoutMs;
@@ -29,6 +33,7 @@ export class FiberRpcClient {
         headers,
         body: JSON.stringify({ jsonrpc: "2.0", id: ++this.#id, method, params }),
         signal: controller.signal,
+        redirect: "error",
       });
       if (!response.ok) throw new FiberRpcError(`Fiber RPC HTTP ${response.status}`, { method });
       const body = await response.json();

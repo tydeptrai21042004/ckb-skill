@@ -79,6 +79,16 @@ export class JsonRecordStore {
     return this.prune((row, key) => key.startsWith(String(prefix)) && Number(row.updatedAt || 0) <= Number(beforeMs));
   }
 
+  async listPrefix(prefix, { limit = 100 } = {}) {
+    await this.#load();
+    const normalizedPrefix = String(prefix || "");
+    const boundedLimit = Number.isSafeInteger(Number(limit)) ? Math.max(1, Math.min(500, Number(limit))) : 100;
+    return [...this.#entries.values()]
+      .filter((row) => String(row.key || "").startsWith(normalizedPrefix))
+      .sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0))
+      .slice(0, boundedLimit);
+  }
+
   async size() {
     await this.#load();
     return this.#entries.size;

@@ -73,6 +73,21 @@ export class PostgresRecordStore {
     return result.rowCount;
   }
 
+  async listPrefix(prefix, { limit = 100 } = {}) {
+    const boundedLimit = Number.isSafeInteger(Number(limit)) ? Math.max(1, Math.min(500, Number(limit))) : 100;
+    const normalizedPrefix = String(prefix || "");
+    const { rows } = await this.pool.query(
+      `SELECT record_key, value, extract(epoch from updated_at) * 1000 AS updated_ms
+         FROM skillpass_service_records
+        WHERE namespace = $1 AND record_key LIKE $2 ESCAPE '\\'
+          AND (expires_at IS NULL OR expires_at > clock_timestamp())
+        ORDER BY updated_at DESC
+        LIMIT $3`,
+      [this.namespace, `${escapeLike(normalizedPrefix)}%`, boundedLimit],
+    );
+    return rows.map((row) => ({ key: row.record_key, updatedAt: Math.trunc(Number(row.updated_ms)), ...row.value }));
+  }
+
   async size() {
     const { rows } = await this.pool.query(
       "SELECT count(*)::bigint AS count FROM skillpass_service_records WHERE namespace = $1",

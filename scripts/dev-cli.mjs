@@ -70,7 +70,7 @@ async function install() {
 }
 
 async function setup() {
-  if (major() < 22) fail(`Node.js 22+ is required; found ${process.version}. Use Docker if you do not want to install Node.`);
+  if (major() < 24) fail(`Node.js 24+ is required; found ${process.version}. Use Docker if you do not want to install Node.`);
   log(`Using Node ${process.version}`);
   await bootstrapConfig();
   await install();

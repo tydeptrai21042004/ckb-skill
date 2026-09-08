@@ -108,7 +108,7 @@ function normalizeTrustedIssuerSet(values?: Array<`0x${string}`> | `0x${string}`
 export async function buildIssueCapabilityTx(params: IssueParams) {
   validateDeployment(params.deployment);
   if (!String(params.recipientAddress || "").trim()) throw new Error("recipientAddress is required");
-  if (!hasFlag(params.flags, FLAG_TRANSFERABLE)) throw new Error("Week 9 portable service-right issuance requires FLAG_TRANSFERABLE");
+  if (!Number.isSafeInteger(params.flags) || params.flags < 0 || params.flags > 0xff) throw new Error("capability flags must be an unsigned byte");
   const now = BigInt(Math.floor(Date.now() / 1000));
   if (params.expiry <= now) throw new Error("capability expiry must be in the future");
 

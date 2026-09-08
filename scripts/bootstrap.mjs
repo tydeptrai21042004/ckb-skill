@@ -6,8 +6,8 @@ function major(version) {
   return Number(version.replace(/^v/, "").split(".")[0]);
 }
 
-if (major(process.version) < 22) {
-  console.error(`Node.js 22+ is required; found ${process.version}`);
+if (major(process.version) < 24) {
+  console.error(`Node.js 24+ is required; found ${process.version}`);
   process.exit(1);
 }
 
