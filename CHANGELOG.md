@@ -1,3 +1,22 @@
+## Week 9 UI / Vercel production hotfix
+
+- Fixed Vercel API bootstrap handling so platform/server startup failures return bounded JSON instead of leaking plain-text responses into the React JSON parser.
+- Export Node HTTP servers from Vercel service entrypoints and only call `listen()` for local/self-hosted execution.
+- Added defensive frontend API parsing and a clean service-unavailable state.
+- Simplified the public UI to connect → choose pass → use service; moved protocol/on-chain details behind pass management.
+- Added regression coverage for Vercel bootstrap failure and production UI information density.
+
+# Week 9 hardening v2 — portable-right security and optimization
+
+- Bound wallet challenges to action, capability outpoint, request SHA-256 and service-policy fingerprint.
+- Added trusted-provider issuer rotation with an explicit primary issuer plus allowlist.
+- Hardened issue/transfer builders against accidental Capability Cell fee consumption, expired/self transfers and fee-completion mutation.
+- Added fresh live-chain capability-status API and web UI verification for Alice/Bob evidence.
+- Bound Fiber quotes to canonical request/policy/resource semantics and reused identical unexpired quotes.
+- Throttled payment-state pruning, added bounded static-file/ETag caching and immutable caching for fingerprinted assets only.
+- Added rate limits for live status checks, HSTS in public production and bounded request timeout.
+- Expanded Week 9 regression/security coverage and documented the new operational settings.
+
 # v0.8.0 — XSS and browser-request hardening
 
 - Added shared `packages/http-security` helpers for JSON-only mutation requests, Fetch Metadata cross-site rejection, safe route parsing and bounded plain-text errors.

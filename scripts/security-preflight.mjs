@@ -46,8 +46,12 @@ mustMatch("apps/live-service/server.mjs", /ENABLE_DEEP_HEALTH[\s\S]*DEEP_HEALTH_
   "deep health endpoint must be opt-in/token guarded");
 mustMatch("apps/live-service/server.mjs", /assertRequestEnvelope\(req/,
   "request URL/header envelope guard is required");
-mustMatch("apps/live-service/server.mjs", /requestTimeout\s*=\s*12_000/,
-  "server request timeout should stay bounded");
+mustMatch("apps/live-service/server.mjs", /const REQUEST_TIMEOUT_MS = Number\(process\.env\.REQUEST_TIMEOUT_MS \|\| 30_000\)/,
+  "server request timeout should have a bounded production default");
+mustMatch("apps/live-service/server.mjs", /REQUEST_TIMEOUT_MS must be 10000\.\.60000/,
+  "server request timeout must reject unsafe values");
+mustMatch("apps/live-service/server.mjs", /server\.requestTimeout\s*=\s*REQUEST_TIMEOUT_MS/,
+  "server request timeout should use the validated bound");
 mustMatch("apps/fiber-facilitator/server.mjs", /FACILITATOR_AUTH_TOKEN[\s\S]*32/,
   "public facilitator requires a strong auth token");
 mustMatch("apps/fiber-facilitator/server.mjs", /assertRequestEnvelope\(req/,

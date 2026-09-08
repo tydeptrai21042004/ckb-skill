@@ -12,6 +12,13 @@ The production profile combines that authorization rule with Fiber/x402-style pa
 
 > **Before publishing the URL:** run `npm run security:preflight`, configure `bash setup-vercel-firewall.sh`, and follow [`HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md`](HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md). The hardened Vercel profile keeps real Fiber payments off initially, uses a 2-connection Postgres pool per instance, bounded request/upstream timeouts, and cheap public health/status endpoints.
 
+> **Week 9 hardening:** see [`docs/WEEK_09_HARDENING_V2.md`](docs/WEEK_09_HARDENING_V2.md) for intent-bound wallet signatures, issuer rotation, live-owner verification, safer Capability transactions, Fiber quote reuse, and performance/security settings.
+
+
+## Week 9 production UI / Vercel hotfix
+
+The current Week 9 build includes a production UI cleanup and a Vercel API bootstrap guard. If a backend service fails before application startup, API callers now receive bounded JSON `503` responses and the browser shows a generic service-unavailable state instead of a raw JSON parser error. See `docs/VERCEL_UI_HOTFIX.md` before redeploying.
+
 
 ## Vercel GUI quick start
 

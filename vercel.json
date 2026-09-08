@@ -15,11 +15,13 @@
           "format": "url",
           "env": "FACILITATOR_URL"
         }
-      ]
+      ],
+      "framework": "node"
     },
     "facilitator": {
       "root": "apps/fiber-facilitator/",
-      "entrypoint": "server.ts"
+      "entrypoint": "server.ts",
+      "framework": "node"
     }
   },
   "headers": [
