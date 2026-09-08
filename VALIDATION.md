@@ -53,7 +53,7 @@ The sandbox could start npm registry access but dependency installation did not 
 - Docker image builds / Compose runtime health;
 - `npm run verify:contract`.
 
-Run `npm run setup && npm run check` on a networked Node 22 host, and run the Rust/Docker checks before publishing a release. The Type Script source was not modified in this v0.7 frontend/product pass.
+Run `npm run setup && npm run check` on a networked Node 24 host, and run the Rust/Docker checks before publishing a release. The Type Script source was not modified in this v0.7 frontend/product pass.
 
 ## Deployment changes validated statically
 

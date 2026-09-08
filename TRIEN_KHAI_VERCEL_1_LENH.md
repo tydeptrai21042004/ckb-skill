@@ -2,7 +2,7 @@
 
 ## Windows
 
-Cài Node.js 22, Rust (`rustup`) và Git for Windows. Mở **Git Bash** trong thư mục project.
+Cài Node.js 24 LTS, Rust (`rustup`) và Git for Windows. Mở **Git Bash** trong thư mục project.
 
 ```bash
 bash setup-vercel.sh

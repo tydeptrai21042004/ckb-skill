@@ -1,6 +1,6 @@
 {
   "name": "ckb-skillpass",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -45,7 +45,7 @@
     "verify:deploy": "bash -n deploy.sh && node --check apps/live-service/server.mjs && node --check apps/live-service/discovery.mjs && node --check scripts/dev-product.mjs && node --check apps/fiber-facilitator/server.mjs && node --check packages/x402-fiber/src/http-client.mjs",
     "support": "node scripts/support-bundle.mjs",
     "deploy:help": "node -e \"console.log(process.platform === 'win32' ? 'Run: deploy.cmd help' : 'Run: ./deploy.sh help')\"",
-    "test:security": "node --test packages/http-security/test/security.test.mjs tests/security-xss.test.mjs",
+    "test:security": "node --test packages/http-security/test/security.test.mjs tests/security-xss.test.mjs tests/security-readiness-v1.4.test.mjs",
     "smoke:security-browser": "node scripts/browser-security-smoke.mjs",
     "verify:security": "npm run test:security && npm run smoke:security-browser",
     "deploy:production:init": "bash deploy-production.sh init",
@@ -65,7 +65,8 @@
     "verify:vercel:secure": "bash -n setup-vercel.sh && bash -n setup-vercel-firewall.sh && node scripts/security-preflight.mjs && node --test tests/vercel-config.test.mjs tests/vercel-easy-deploy.test.mjs tests/vercel-security-hardening.test.mjs packages/http-security/test/security.test.mjs",
     "vercel:env:gui": "bash collect-vercel-env.sh",
     "typecheck:vercel": "tsc -p apps/live-service/tsconfig.json && tsc -p apps/fiber-facilitator/tsconfig.json",
-    "verify:workspaces": "node scripts/check-workspace-deps.mjs"
+    "verify:workspaces": "node scripts/check-workspace-deps.mjs",
+    "provider:admin": "node scripts/provider-admin.mjs"
   },
   "workspaces": [
     "apps/*",

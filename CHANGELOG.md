@@ -1,3 +1,14 @@
+## v1.4.0 — 2026-09-09 — deployment/security hardening
+
+- Updated Vite from 7.0.0 to 7.3.5 and made dev/preview loopback-only by default; LAN exposure is explicit.
+- Restricted Vite filesystem access and disabled production source maps by default.
+- Aligned native tooling, docs and Docker on Node 24.x / Node 24.20.0.
+- Made paid public production require a strong facilitator token and validated facilitator URL boundaries.
+- Hardened facilitator/Fiber RPC HTTP clients against embedded credentials and redirects.
+- Removed generic forwarded-IP fallback on Vercel and added DNS-prefetch protection.
+- Added security/readiness regression tests, dependency-free GitHub CI, and a release-readiness review document.
+- Remaining release warning: a root dependency lockfile is still required for reproducible transitive dependencies.
+
 
 ## 2026-09-08 — Vercel TypeScript backend build fix
 

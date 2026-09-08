@@ -1,6 +1,6 @@
 # Contributing to SkillPass
 
-The project keeps the contributor workflow intentionally small. A new developer should only need Node.js 22+ for native development, or Docker for the reproducible demo.
+The project keeps the contributor workflow intentionally small. A new developer should only need Node.js 24+ for native development, or Docker for the reproducible demo.
 
 ## First run
 

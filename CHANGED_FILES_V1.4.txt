@@ -1,0 +1,41 @@
+SkillPass v1.4 hardening — changed/added files
+
+Security/runtime changes:
+- apps/live-service/server.mjs
+- apps/web/package.json
+- apps/web/vite.config.ts
+- packages/http-security/src/index.mjs
+- packages/x402-fiber/src/http-client.mjs
+- packages/x402-fiber/src/fiber-rpc.mjs
+- Dockerfile
+- Dockerfile.live
+- Dockerfile.facilitator
+- scripts/dev-product.mjs
+- scripts/bootstrap.mjs
+- scripts/dev-cli.mjs
+- scripts/doctor.mjs
+- package.json
+- .nvmrc
+
+Regression/CI:
+- tests/security-readiness-v1.4.test.mjs
+- .github/workflows/security-readiness.yml
+
+Documentation/version-alignment:
+- SECURITY_READINESS_V1.4.md
+- CHANGELOG.md
+- README.md
+- CONTRIBUTING.md
+- docs/LOCAL_DEVELOPMENT.md
+- TRIEN_KHAI_NHANH_VI.md
+- TRIEN_KHAI_VERCEL_1_LENH.md
+- HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md
+- HUONG_DAN_VERCEL_GUI_VI.md
+- VERCEL_DEPLOY_VI.md
+- VALIDATION.md
+
+Validation in review environment:
+- Security preflight: PASS (lockfile warning only)
+- Security tests: 25/25 PASS
+- Full dependency-free Node suite: 169/169 PASS
+- Fresh web build: not validated because the uploaded archive has no installed dependencies or root lockfile; dependency resolution timed out in the sandbox.

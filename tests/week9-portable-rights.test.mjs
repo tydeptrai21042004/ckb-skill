@@ -52,8 +52,9 @@ test("provider issuer rotation is supported without accepting arbitrary issuers"
   const web = read("apps/web/src/App.tsx");
   assert.match(server, /CAPABILITY_TRUSTED_ISSUER_IDS/);
   assert.match(server, /trustedIssuerIds:\s*TRUSTED_ISSUER_IDS/);
-  assert.match(web, /trustedIssuerIds:\s*config\.trustedIssuerIds/);
-  assert.match(web, /Connected wallet is not configured as a trusted SkillPass provider issuer/);
+  assert.match(web, /const trustedIssuerIds = \[...,new Set|const trustedIssuerIds = \[\.\.\.new Set/);
+  assert.match(web, /trustedIssuerIds:\s*trustedIssuerIds\.length \? trustedIssuerIds : config\.trustedIssuerIds/);
+  assert.match(web, /Connected wallet is not configured as a trusted issuer for the selected service policy/);
 });
 
 test("transfer builder refuses unsafe fee inputs, expired rights, and self-transfer", () => {
@@ -81,11 +82,13 @@ test("public capability status endpoint reports fresh live-chain ownership", () 
   assert.match(discovery, /capabilityStatus:\s*"\/api\/capability\/status"/);
 });
 
-test("wallet discovery filters wrong service and wrong issuer before presenting passes", () => {
+test("wallet discovery finds policy-accepted owned rights and non-transferable licenses", () => {
   const src = read("apps/web/src/App.tsx");
-  assert.match(src, /expectedServiceId:\s*config\.serviceId/);
-  assert.match(src, /trustedIssuerIds:\s*config\.trustedIssuerIds/);
-  assert.match(src, /requireTransferable:\s*true/);
+  assert.match(src, /expectedServiceIds/);
+  assert.match(src, /service\.entitlementIds/);
+  assert.match(src, /trustedIssuerIds:\s*trustedIssuerIds\.length \? trustedIssuerIds : config\.trustedIssuerIds/);
+  assert.match(src, /requireTransferable:\s*false/);
+  assert.match(src, /serviceAcceptsCapability/);
 });
 
 test("browser payment payload has exactly one payer field", () => {

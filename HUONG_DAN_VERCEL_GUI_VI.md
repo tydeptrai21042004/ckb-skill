@@ -17,7 +17,7 @@ Tài liệu này dành cho cách triển khai đơn giản nhất của SkillPas
 Cho lần đầu deploy contract CKB:
 
 1. **Git Bash** hoặc WSL trên Windows.
-2. **Node.js 22 LTS trở lên**.
+2. **Node.js 24 LTS trở lên**.
 3. **npm**.
 4. **Rust/Cargo** qua rustup.
 5. Internet.

@@ -18,7 +18,7 @@ Máy của bạn có thể tắt
 
 Cần có:
 
-- Node.js 22 LTS;
+- Node.js 24 LTS;
 - npm;
 - Rust/Cargo (`rustup`);
 - Git Bash hoặc WSL nếu dùng Windows.

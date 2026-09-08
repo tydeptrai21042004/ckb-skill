@@ -166,7 +166,7 @@ Ngoài ra query/statement timeout cũng bị giới hạn trong production-store
 Cần:
 
 ```text
-Node.js 22+
+Node.js 24+
 npm
 Git Bash hoặc WSL (Windows)
 Rust/Cargo chỉ cần khi deploy contract lần đầu

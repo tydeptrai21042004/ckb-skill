@@ -10,7 +10,7 @@ Tài liệu này dành cho người chỉ muốn đưa project lên chạy nhanh
 Cần có:
 
 - Docker Desktop / Docker Engine có `docker compose`;
-- Node.js 22+ nếu muốn chạy test/support tool;
+- Node.js 24+ nếu muốn chạy test/support tool;
 - CKB wallet nếu triển khai testnet thật;
 - Fiber node chỉ khi muốn payment thật qua FNN.
 

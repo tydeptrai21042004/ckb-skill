@@ -1,8 +1,8 @@
-# SkillPass v1.2 — Portable CKB Service Gateway + Budgeted Agent Delegation + Fiber/x402
+# SkillPass v1.3 — Portable Entitlements for CKB Services, Agents, and Digital Assets
 
-SkillPass is a **multi-user CKB testnet service-right gateway**: a provider issues a Capability as a CKB Cell, the current live Cell owner can use one of multiple protected services, transfer moves that right without a provider-owned entitlement table, and the owner can create short-lived scoped credentials for AI agents without giving away the Cell or private key.
+SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or agent-delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
 
-The production profile combines that authorization rule with Fiber/x402-style payment while keeping user signing in the user's wallet.
+The strongest SkillPass use case is **service rights that should follow ownership of a CKB asset or AI agent, or be recognized by independent providers without synchronizing entitlement databases**. It is not positioned as a generic replacement for OAuth, API keys, x402, or ordinary SaaS subscriptions. Fiber/x402 remains an optional usage-payment layer; it never replaces entitlement authorization.
 
 > **Production deploy:** start with [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md), then run `./deploy-production.sh init`, `doctor`, and `up`.
 
@@ -14,8 +14,40 @@ The production profile combines that authorization rule with Fiber/x402-style pa
 
 > **Week 9 hardening:** see [`docs/WEEK_09_HARDENING_V2.md`](docs/WEEK_09_HARDENING_V2.md) for intent-bound wallet signatures, issuer rotation, live-owner verification, safer Capability transactions, Fiber quote reuse, and performance/security settings.
 
-> **Funding/product upgrade:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md), [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). v1.2 adds budgeted delegation, a true multi-upstream service catalog, gateway host allowlisting, and an agent payment-adapter retry flow.
+> **Product/market validation:** read [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md), [`docs/MULTI_PROVIDER_PILOT.md`](docs/MULTI_PROVIDER_PILOT.md), and [`docs/PROVIDER_POLICY_MODES.md`](docs/PROVIDER_POLICY_MODES.md). These documents define the target customer, the strongest cross-provider demo, explicit kill/pivot criteria, and the owned-right vs revocable-license policy model.
 
+> **Funding/product foundation:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md), [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md).
+
+
+## What v1.3 adds
+
+- **Per-service provider trust** — each protected service can accept a different issuer allowlist instead of sharing one global trust decision.
+- **Shared bundle entitlements** — multiple independent service policies can accept the same immutable Capability entitlement ID through `entitlementIds`, so one live Cell can unlock an opt-in provider bundle without entitlement-database synchronization.
+- **Owned right vs revocable license** — `rightMode=owned` keeps provider revocation disabled; `rightMode=license` requires explicit `FLAG_REVOCABLE` opt-in and supports a provider deny/restore record.
+- **Transferable or non-transferable products** — providers can require portable rights or issue conventional owner-bound licenses.
+- **Provider-controlled agent delegation** — a service can require delegation, allow it optionally, or disable it entirely. A transferable Capability is no longer automatically delegatable.
+- **Transfer-aware UI** — non-transferable licenses no longer show a misleading transfer action; delegation controls reflect both Cell flags and provider policy.
+- **Provider operations CLI** — list, revoke, and restore revocable licenses with `npm run provider:admin`; admin secrets stay out of browser code.
+- **Persistent revocation listing** — local and PostgreSQL record stores can enumerate current service revocations for provider operations.
+- **Market-validation artifacts** — a multi-provider pilot plan, customer hypotheses, success gates, measurements, and kill/pivot criteria are included in `docs/`.
+
+### Best fit / poor fit
+
+| Strong fit | Usually a poor default fit |
+| --- | --- |
+| AI agents or digital assets whose service rights should move with ownership | Ordinary account-bound monthly SaaS with no reason to transfer access |
+| Multiple independent providers honoring a shared entitlement model | A single provider whose existing database already solves the whole workflow |
+| Scoped, budgeted machine delegation tied to a live CKB outpoint | Pure pay-per-request APIs where x402 alone is sufficient |
+| Transferable memberships, model/data/API bundles, CKB game/DOB/device rights | Workflows where OAuth/Biscuit/signed receipts are simpler and portability adds no value |
+
+### Provider policy example
+
+```dotenv
+SERVICE_RIGHT_MODE=owned
+SKILLPASS_SERVICE_POLICIES_JSON={"paper-analyzer-v1":{"entitlementIds":["0xSHARED_BUNDLE_ID"],"issuanceEntitlementId":"0xSHARED_BUNDLE_ID","bundleId":"research-agent-pack-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]},"research-insights-v1":{"entitlementIds":["0xSHARED_BUNDLE_ID"],"issuanceEntitlementId":"0xSHARED_BUNDLE_ID","bundleId":"research-agent-pack-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]}}
+```
+
+For a shared bundle, every participating provider must explicitly trust the bundle issuer; providers remain independent service operators even though they opt into a common entitlement authority. When any service uses `rightMode=license`, configure a strong `SKILLPASS_ADMIN_TOKEN`. Provider revocation is a service-layer policy deny; it does **not** burn or seize the user's CKB Cell.
 
 ## Week 9 production UI / Vercel hotfix
 
@@ -24,7 +56,7 @@ The current Week 9 build includes a production UI cleanup and a Vercel API boots
 
 ## Vercel GUI quick start
 
-Prerequisites for the first CKB contract deployment: Node.js 22, Rust/Cargo, and Git Bash or WSL on Windows. No local PostgreSQL, Redis, Docker, CKB node, or Vercel CLI is required.
+Prerequisites for the first CKB contract deployment: Node.js 24 LTS, Rust/Cargo, and Git Bash or WSL on Windows. No local PostgreSQL, Redis, Docker, CKB node, or Vercel CLI is required.
 
 ```bash
 bash collect-vercel-env.sh
@@ -41,7 +73,7 @@ Then use only the Vercel Dashboard: import the repository, paste `.env.vercel.gu
 
 If a valid `deployments/testnet.json` already exists, `collect-vercel-env.sh` reuses it and does not spend Testnet CKB again.
 
-## What v1.2 adds
+## v1.2 foundation retained
 
 - **Multi-service Capability discovery** — a single deployment can recognize several protected service IDs.
 - **Service Gateway** — protect operator-configured read/query APIs without changing the upstream application.
@@ -323,9 +355,9 @@ See [`docs/capability-format.md`](docs/capability-format.md), [`docs/state-machi
 
 ## Research positioning
 
-The Fiber/x402 facilitator is not claimed as SkillPass novelty. The repository's core question is whether a provider-authorized service right can remain portable and independently verifiable from CKB state while payment is handled by Fiber/x402 without restoring a provider-owned entitlement database.
+The Fiber/x402 facilitator is not claimed as SkillPass novelty. The repository's core question is whether a provider-authorized service right can remain independently verifiable from live CKB state while ownership, delegation, transfer, revocation policy, and optional payment stay cleanly separated.
 
-See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
+The project deliberately treats **portable rights as a hypothesis to validate**, not as proof that every SaaS subscription should be transferable. See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md) and [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md).
 
 ## Other documentation
 
@@ -358,3 +390,6 @@ The release deliberately remains CKB/Fiber **testnet-only**. Do not switch to ma
 - [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md) — protect an existing idempotent JSON API.
 - [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) — scoped agent credentials, transfer invalidation, and `@skillpass/agent-sdk`.
 - [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md) — ecosystem gap, grant milestone, production limitations, and next phase.
+- [`docs/PROVIDER_POLICY_MODES.md`](docs/PROVIDER_POLICY_MODES.md) — owned rights, revocable licenses, transfer/delegation controls, and provider admin commands.
+- [`docs/MULTI_PROVIDER_PILOT.md`](docs/MULTI_PROVIDER_PILOT.md) — recommended cross-provider proof-of-value demo.
+- [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md) — customer hypotheses, metrics, success gates, and pivot criteria.

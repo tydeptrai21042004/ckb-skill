@@ -1,4 +1,4 @@
-FROM node:22.23.2-alpine3.24
+FROM node:24.20.0-alpine3.24
 WORKDIR /app
 COPY apps/demo-service ./apps/demo-service
 COPY packages/capability-codec ./packages/capability-codec
