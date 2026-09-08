@@ -83,6 +83,28 @@ function addCapabilityCellDep(tx: ccc.Transaction, deployment: Deployment): void
   );
 }
 
+function isCapabilityType(type: ccc.Script | undefined, deployment: Deployment): boolean {
+  return Boolean(type && type.codeHash === deployment.codeHash && type.hashType === deployment.hashType);
+}
+
+function assertNoCapabilityFundingInputs(tx: ccc.Transaction, deployment: Deployment): void {
+  for (const input of tx.inputs) {
+    const type = input.cellOutput?.type;
+    if (isCapabilityType(type, deployment)) {
+      throw new Error("refusing to use an existing SkillPass capability Cell as a funding/fee input");
+    }
+  }
+}
+
+function normalizeTrustedIssuerSet(values?: Array<`0x${string}`> | `0x${string}`): Set<string> | null {
+  if (values == null) return null;
+  const list = Array.isArray(values) ? values : [values];
+  const normalized = list
+    .filter((value) => String(value || "").trim())
+    .map((value) => normalizeHex32(value, "trustedIssuerId").toLowerCase());
+  return normalized.length ? new Set(normalized) : null;
+}
+
 export async function buildIssueCapabilityTx(params: IssueParams) {
   validateDeployment(params.deployment);
   if (!String(params.recipientAddress || "").trim()) throw new Error("recipientAddress is required");
@@ -116,6 +138,7 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
   addCapabilityCellDep(tx, params.deployment);
   await tx.completeInputsByCapacity(params.signer);
   if (!tx.inputs[0]) throw new Error("CCC did not select a funding input for capability issuance");
+  assertNoCapabilityFundingInputs(tx, params.deployment);
 
   const capabilityId = deriveCapabilityId(tx.inputs[0], 0);
   const type = capabilityTypeScript(params.deployment, issuerId, capabilityId);
@@ -132,6 +155,7 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
   tx.outputs[0].type = type;
   tx.outputsData[0] = data;
   await tx.completeFeeBy(params.signer);
+  assertNoCapabilityFundingInputs(tx, params.deployment);
 
   // completeFeeBy may append inputs, but it must not replace first input.
   const postFeeId = deriveCapabilityId(tx.inputs[0], 0);
@@ -155,6 +179,9 @@ export async function buildTransferCapabilityTx(params: {
   outPoint: ccc.OutPointLike;
   recipientAddress: string;
 }) {
+  validateDeployment(params.deployment);
+  const recipientAddress = String(params.recipientAddress || "").trim();
+  if (!recipientAddress) throw new Error("recipientAddress is required");
   const cell = await params.signer.client.getCellLive(params.outPoint, true, true);
   if (!cell) throw new Error("Capability cell is not live (missing or consumed)");
   if (!cell.cellOutput.type) throw new Error("Cell has no Capability Type Script");
@@ -176,7 +203,13 @@ export async function buildTransferCapabilityTx(params: {
   if (!hasFlag(capability, FLAG_TRANSFERABLE)) {
     throw new Error("Capability is non-transferable");
   }
-  const recipient = await ccc.Address.fromString(params.recipientAddress, params.signer.client);
+  if (!isActive(capability, BigInt(Math.floor(Date.now() / 1000)))) {
+    throw new Error("refusing to transfer an expired capability");
+  }
+  const recipient = await ccc.Address.fromString(recipientAddress, params.signer.client);
+  if (cell.cellOutput.lock.eq(recipient.script)) {
+    throw new Error("recipient already owns this capability");
+  }
 
   const tx = ccc.Transaction.default();
   addCapabilityCellDep(tx, params.deployment);
@@ -190,6 +223,27 @@ export async function buildTransferCapabilityTx(params: {
     cell.outputData,
   );
   await tx.completeFeeBy(params.signer);
+
+  // A transfer may legitimately consume the selected capability as input[0], but
+  // fee completion must never consume a second SkillPass capability as capacity.
+  for (const input of tx.inputs.slice(1)) {
+    if (isCapabilityType(input.cellOutput?.type, params.deployment)) {
+      throw new Error("refusing to use another SkillPass capability Cell as a transfer funding/fee input");
+    }
+  }
+
+  // Safety postconditions: fee completion may append funding inputs/change, but
+  // the capability transition itself must remain a one-to-one data/type-preserving
+  // move whose only semantic change is the lock owner.
+  if (!tx.inputs[0]?.previousOutput || tx.inputs[0].previousOutput.txHash !== cell.outPoint.txHash || tx.inputs[0].previousOutput.index !== cell.outPoint.index) {
+    throw new Error("capability input changed while completing transfer fee");
+  }
+  const output = tx.outputs[0];
+  if (!output?.type || output.type.codeHash !== cell.cellOutput.type.codeHash || output.type.hashType !== cell.cellOutput.type.hashType || output.type.args !== cell.cellOutput.type.args) {
+    throw new Error("capability Type Script changed while completing transfer fee");
+  }
+  if (tx.outputsData[0] !== cell.outputData) throw new Error("capability data changed while completing transfer fee");
+  if (!output.lock.eq(recipient.script)) throw new Error("capability recipient lock changed while completing transfer fee");
   return tx;
 }
 
@@ -204,10 +258,14 @@ export async function discoverOwnedCapabilities(params: {
   signer: ccc.Signer;
   deployment: Deployment;
   expectedServiceId?: `0x${string}`;
+  /** Backward-compatible single issuer filter. */
   trustedIssuerId?: `0x${string}`;
+  /** Preferred rotation-safe issuer allowlist. */
+  trustedIssuerIds?: Array<`0x${string}`>;
   requireTransferable?: boolean;
 }) {
   validateDeployment(params.deployment);
+  const trustedIssuers = normalizeTrustedIssuerSet(params.trustedIssuerIds ?? params.trustedIssuerId);
   const found: Array<{ cell: ccc.Cell; capability: ReturnType<typeof decodeCapability> }> = [];
   const owner = await params.signer.getRecommendedAddressObj();
   for await (const cell of params.signer.client.findCellsByLock(owner.script, undefined, true)) {
@@ -220,13 +278,20 @@ export async function discoverOwnedCapabilities(params: {
       const capability = decodeCapability(cell.outputData);
       if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) continue;
       if (params.expectedServiceId && capability.serviceId.toLowerCase() !== normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()) continue;
-      if (params.trustedIssuerId && capability.issuerId.toLowerCase() !== normalizeHex32(params.trustedIssuerId, "trustedIssuerId").toLowerCase()) continue;
+      if (trustedIssuers && !trustedIssuers.has(capability.issuerId.toLowerCase())) continue;
       if ((params.requireTransferable ?? false) && !hasFlag(capability, FLAG_TRANSFERABLE)) continue;
       found.push({ cell, capability });
     } catch {
       // Discovery stays robust even if a foreign malformed cell is indexed.
     }
   }
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  found.sort((a, b) => {
+    const activeDelta = Number(isActive(b.capability, now)) - Number(isActive(a.capability, now));
+    if (activeDelta) return activeDelta;
+    if (a.capability.expiry !== b.capability.expiry) return a.capability.expiry < b.capability.expiry ? -1 : 1;
+    return a.capability.capabilityId.localeCompare(b.capability.capabilityId);
+  });
   return found;
 }
 
@@ -251,7 +316,8 @@ export async function verifyLiveCapability(params: {
   outPoint: ccc.OutPointLike;
   requesterAddress: string;
   expectedServiceId: `0x${string}`;
-  trustedIssuerId: `0x${string}`;
+  trustedIssuerId?: `0x${string}`;
+  trustedIssuerIds?: Array<`0x${string}`>;
   nowUnixSeconds: bigint;
   requireTransferable?: boolean;
 }) {
@@ -271,8 +337,9 @@ export async function verifyLiveCapability(params: {
   if (capability.serviceId.toLowerCase() !== normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()) {
     throw new Error("capability is for a different service");
   }
-  if (capability.issuerId.toLowerCase() !== normalizeHex32(params.trustedIssuerId, "trustedIssuerId").toLowerCase()) {
-    throw new Error("capability was not issued by the trusted service provider");
+  const trustedIssuers = normalizeTrustedIssuerSet(params.trustedIssuerIds ?? params.trustedIssuerId);
+  if (!trustedIssuers || !trustedIssuers.has(capability.issuerId.toLowerCase())) {
+    throw new Error("capability was not issued by a trusted service provider");
   }
   if ((params.requireTransferable ?? true) && !hasFlag(capability, FLAG_TRANSFERABLE)) {
     throw new Error("service policy requires a transferable capability");

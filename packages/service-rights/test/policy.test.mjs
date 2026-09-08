@@ -12,6 +12,7 @@ import {
 
 const ISSUER = `0x${"11".repeat(32)}`;
 const FAKE_ISSUER = `0x${"12".repeat(32)}`;
+const ROTATED_ISSUER = `0x${"13".repeat(32)}`;
 const ALICE = `0x${"aa".repeat(32)}`;
 const BOB = `0x${"bb".repeat(32)}`;
 const CAPABILITY_ID = `0x${"44".repeat(32)}`;
@@ -67,4 +68,16 @@ test("Bob must satisfy payment separately after ownership succeeds", () => {
     cell: { lockHash: BOB }, capability: cap(), requesterLockHash: BOB, policy, nowUnixSeconds: 100n,
     paymentRequired: true, paymentVerified: true,
   }).authorized, true);
+});
+
+
+test("provider issuer rotation accepts any explicitly trusted issuer and rejects outsiders", () => {
+  const rotatingPolicy = createServicePolicy({
+    serviceId: SERVICE,
+    trustedIssuerIds: [ISSUER, ROTATED_ISSUER, ISSUER.toUpperCase().replace("0X", "0x")],
+    requireTransferable: true,
+  });
+  assert.equal(rotatingPolicy.trustedIssuerIds.length, 2);
+  assert.equal(verifyServicePolicy({ capability: cap({ issuerId: ROTATED_ISSUER }), policy: rotatingPolicy, nowUnixSeconds: 100n }).capability.issuerId, ROTATED_ISSUER);
+  assert.throws(() => verifyServicePolicy({ capability: cap({ issuerId: FAKE_ISSUER }), policy: rotatingPolicy, nowUnixSeconds: 100n }), (e) => e.code === "UNTRUSTED_ISSUER");
 });
