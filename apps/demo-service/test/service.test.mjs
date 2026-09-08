@@ -29,7 +29,7 @@ function fixture() {
     }),
   });
   const challengeStore = new ChallengeStore({ ttlMs: 1000, now: () => 1000 });
-  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   const service = new SkillPassService({
     challengeStore,
     proofVerifier,

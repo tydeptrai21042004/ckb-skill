@@ -1,4 +1,4 @@
-export function buildDiscovery({ deployment, serviceId, payments, maxInputChars = 20_000 } = {}) {
+export function buildDiscovery({ deployment, serviceId, trustedIssuerId, policy, payments, maxInputChars = 20_000 } = {}) {
   return Object.freeze({
     schemaVersion: "1.0",
     product: "SkillPass",
@@ -13,6 +13,13 @@ export function buildDiscovery({ deployment, serviceId, payments, maxInputChars 
       network: "ckb-testnet",
       authorizationModel: "current-live-capability-cell-owner",
       capabilityTypeScript: deployment,
+      trustedIssuerId,
+      providerPolicy: policy ? {
+        id: policy.id,
+        transferableRequired: Boolean(policy.transferableRequired),
+        termsHash: policy.termsHash || null,
+        url: policy.url || null,
+      } : undefined,
     },
     authentication: {
       scheme: "ckb-wallet-one-time-challenge",
@@ -48,7 +55,7 @@ export function buildOpenApi({ paymentsRequired = false, maxInputChars = 20_000 
     info: {
       title: "SkillPass protected service API",
       version: "0.7.0",
-      description: "CKB live Capability Cell authorization with optional Fiber/x402 payment.",
+      description: "Provider-issued portable service-right authorization on live CKB Cells with optional Fiber/x402 per-use payment.",
     },
     paths: {
       "/api/status": {
@@ -88,7 +95,7 @@ export function buildOpenApi({ paymentsRequired = false, maxInputChars = 20_000 
             "200": { description: "Authorized protected result" },
             ...(paymentsRequired ? { "402": { description: "Fiber/x402 payment required" } } : {}),
             "401": { description: "Wallet challenge/signature rejected" },
-            "403": { description: "Capability missing, expired, wrong service, or not owned by requester" },
+            "403": { description: "Capability missing, expired, wrong service, untrusted issuer, non-portable, or not owned by requester" },
           },
         },
       },

@@ -16,6 +16,15 @@ type RuntimeConfig = {
   serviceId: `0x${string}`;
   service: string;
   enablePublicIssue: boolean;
+  trustedIssuerId: `0x${string}`;
+  servicePolicy?: {
+    id: string;
+    serviceId: `0x${string}`;
+    trustedIssuerId: `0x${string}`;
+    transferableRequired: boolean;
+    termsHash?: string | null;
+    url?: string | null;
+  };
   limits?: { maxInputChars?: number };
   payments?: {
     required: boolean;
@@ -231,6 +240,7 @@ export default function App() {
   const [notice, setNotice] = useState<Notice>({ tone: "info", message: "Loading service configuration…" });
   const [health, setHealth] = useState<RuntimeStatus>();
   const [recipient, setRecipient] = useState("");
+  const [issueRecipient, setIssueRecipient] = useState("");
   const [text, setText] = useState(loadDraft);
   const [issueDays, setIssueDays] = useState(7);
   const [pendingPayment, setPendingPayment] = useState<PendingPayment>();
@@ -296,7 +306,13 @@ export default function App() {
     if (!signer || !config) return;
     setBusy("refresh");
     try {
-      const found = await discoverOwnedCapabilities({ signer, deployment: config.deployment });
+      const found = await discoverOwnedCapabilities({
+        signer,
+        deployment: config.deployment,
+        expectedServiceId: config.serviceId,
+        trustedIssuerId: config.trustedIssuerId,
+        requireTransferable: true,
+      });
       setCaps(found);
       setSelectedKey((current) => {
         if (found.some((cap) => capabilityKey(cap) === current)) return current;
@@ -319,19 +335,21 @@ export default function App() {
   useEffect(() => { if (signer && config) void refresh(); }, [signer, config]);
 
   async function issue() {
-    if (!signer || !config || !config.enablePublicIssue) return;
+    if (!signer || !config || !config.enablePublicIssue || !issueRecipient.trim()) return;
     setBusy("issue");
     try {
       const expiry = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, issueDays) * 86_400);
       const { tx, capabilityId } = await buildIssueCapabilityTx({
         signer,
         deployment: config.deployment,
+        recipientAddress: issueRecipient.trim(),
         serviceId: config.serviceId,
         expiry,
         flags: FLAG_TRANSFERABLE,
       });
       const { txHash } = await sendAndWait(signer, tx);
-      setNotice({ tone: "success", message: `Pass issued on CKB: ${short(txHash, 10)} · ${short(capabilityId, 10)}` });
+      setNotice({ tone: "success", message: `Provider-issued pass confirmed: ${short(txHash, 10)} · ${short(capabilityId, 10)} → ${short(issueRecipient.trim(), 8)}` });
+      setIssueRecipient("");
       await refresh();
     } catch (e) {
       setNotice({ tone: "error", message: `Issue failed: ${(e as Error).message}` });
@@ -587,8 +605,18 @@ export default function App() {
                   <div className="section-heading">
                     <div><span className="eyebrow">Demo provider</span><h3>Issue a test pass</h3></div>
                   </div>
-                  <p>Creates a transferable testnet Capability Cell from your wallet.</p>
+                  <p>Your connected wallet acts as the provider. The new Capability Cell is created directly under the recipient's lock.</p>
                   <div className="issue-controls">
+                    <label>
+                      <span>Recipient (Alice)</span>
+                      <input
+                        value={issueRecipient}
+                        onChange={(e) => setIssueRecipient(e.target.value)}
+                        placeholder="ckt1…"
+                        spellCheck={false}
+                        autoComplete="off"
+                      />
+                    </label>
                     <label>
                       <span>Validity</span>
                       <select value={issueDays} onChange={(e) => setIssueDays(Number(e.target.value))}>
@@ -598,7 +626,7 @@ export default function App() {
                         <option value={90}>90 days</option>
                       </select>
                     </label>
-                    <button className="button secondary full" disabled={Boolean(busy)} onClick={issue}>Issue pass</button>
+                    <button className="button secondary full" disabled={Boolean(busy) || !issueRecipient.trim()} onClick={issue}>Issue to recipient</button>
                   </div>
                 </section>
               )}
@@ -719,6 +747,10 @@ export default function App() {
                     <div className="manage-content">
                       <div className="detail-grid">
                         <div><span>Capability ID</span><code>{selectedCap.capability.capabilityId}</code></div>
+                        <div><span>Current owner</span><code>{address}</code></div>
+                        <div><span>Provider / issuer</span><code>{selectedCap.capability.issuerId}</code></div>
+                        <div><span>Service ID</span><code>{selectedCap.capability.serviceId}</code></div>
+                        <div><span>Policy</span><code>{config?.servicePolicy?.id || "paper-analyzer-v1"}</code></div>
                         <div><span>Out point</span><code>{selectedCap.cell.outPoint.txHash}:{selectedCap.cell.outPoint.index.toString()}</code></div>
                       </div>
                       <div className="transfer-form">

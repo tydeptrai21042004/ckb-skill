@@ -57,7 +57,7 @@ function createDemoRuntime() {
       expiry: BigInt(Math.floor(Date.now() / 1000) + 86_400),
     }),
   });
-  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE_ID });
+  const capabilityVerifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE_ID, expectedIssuerId: ISSUER });
   const challengeStore = new ChallengeStore({ ttlMs: 60_000 });
   const service = new SkillPassService({
     challengeStore,

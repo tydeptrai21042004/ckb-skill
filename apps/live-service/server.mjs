@@ -34,6 +34,11 @@ import {
   rejectCrossSiteBrowserRequest,
   safeRequestUrl,
 } from "../../packages/http-security/src/index.mjs";
+import {
+  ServiceRightError,
+  createServicePolicy,
+  verifyServicePolicy,
+} from "../../packages/service-rights/src/index.mjs";
 
 
 function readSecret(name) {
@@ -51,6 +56,9 @@ const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(),
 const STATE_BACKEND = String(process.env.STATE_BACKEND || "local").trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;
+const SERVICE_POLICY_ID = String(process.env.SERVICE_POLICY_ID || "paper-analyzer-v1").trim();
+const SERVICE_POLICY_URL = String(process.env.SERVICE_POLICY_URL || "").trim();
+const SERVICE_TERMS_HASH_RAW = String(process.env.SERVICE_TERMS_HASH || "").trim();
 const STARTED_AT = Date.now();
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true";
@@ -129,6 +137,22 @@ const deployment = Object.freeze({
 if (!["data", "data1", "data2", "type"].includes(deployment.hashType)) throw new Error("CAPABILITY_HASH_TYPE is required and must be data, data1, data2, or type");
 if (!Number.isSafeInteger(deployment.depIndex) || deployment.depIndex < 0) throw new Error("CAPABILITY_DEP_INDEX is invalid");
 
+const TRUSTED_ISSUER_ID = requireHex32("CAPABILITY_TRUSTED_ISSUER_ID", process.env.CAPABILITY_TRUSTED_ISSUER_ID);
+const SERVICE_TERMS_HASH = SERVICE_TERMS_HASH_RAW ? requireHex32("SERVICE_TERMS_HASH", SERVICE_TERMS_HASH_RAW) : "";
+if (!SERVICE_POLICY_ID || SERVICE_POLICY_ID.length > 128) throw new Error("SERVICE_POLICY_ID must be 1..128 characters");
+if (SERVICE_POLICY_URL) {
+  const policyUrl = new URL(SERVICE_POLICY_URL);
+  if (!["http:", "https:"].includes(policyUrl.protocol)) throw new Error("SERVICE_POLICY_URL must use http:// or https://");
+  if (IS_PUBLIC_PRODUCTION && policyUrl.protocol !== "https:") throw new Error("SERVICE_POLICY_URL must use https:// in public production");
+}
+const servicePolicy = createServicePolicy({
+  serviceId: SERVICE_ID,
+  trustedIssuerId: TRUSTED_ISSUER_ID,
+  requireTransferable: true,
+  policyId: SERVICE_POLICY_ID,
+  termsHash: SERVICE_TERMS_HASH,
+});
+
 if (process.env.CKB_RPC_URL) {
   const rpc = new URL(process.env.CKB_RPC_URL);
   if (!['http:', 'https:'].includes(rpc.protocol)) throw new Error("CKB_RPC_URL must use http:// or https://");
@@ -171,6 +195,9 @@ function challengeMessage({ nonce, address, expiresAt }) {
   return [
     "SkillPass capability access",
     "service=paper-analyzer-v1",
+    `service_id=${SERVICE_ID}`,
+    `trusted_issuer=${TRUSTED_ISSUER_ID}`,
+    `policy_id=${SERVICE_POLICY_ID}`,
     `address=${address}`,
     `nonce=${nonce}`,
     `expires_at=${expiresAt}`,
@@ -214,11 +241,15 @@ async function verifyLiveCapability({ outPoint, requesterAddress }) {
   if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
     throw Object.assign(new Error("capability identity/data mismatch"), { status: 403, code: "IDENTITY_MISMATCH" });
   }
-  if (capability.serviceId.toLowerCase() !== SERVICE_ID.toLowerCase()) {
-    throw Object.assign(new Error("capability is for another service"), { status: 403, code: "WRONG_SERVICE" });
-  }
   const now = BigInt(Math.floor(Date.now() / 1000));
-  if (!isActive(capability, now)) throw Object.assign(new Error("capability is expired"), { status: 403, code: "EXPIRED" });
+  try {
+    verifyServicePolicy({ capability, policy: servicePolicy, nowUnixSeconds: now });
+  } catch (error) {
+    if (error instanceof ServiceRightError) {
+      throw Object.assign(new Error(error.message), { status: 403, code: error.code });
+    }
+    throw error;
+  }
   const requester = await ccc.Address.fromString(requesterAddress, client);
   if (!cell.cellOutput.lock.eq(requester.script)) {
     throw Object.assign(new Error("requester does not control the current live capability cell"), { status: 403, code: "NOT_OWNER" });
@@ -232,6 +263,8 @@ function paymentBinding({ address, outPoint, text }) {
     outPoint: { txHash: String(outPoint?.txHash || "").toLowerCase(), index: String(outPoint?.index ?? "") },
     text: String(text || ""),
     serviceId: SERVICE_ID,
+    trustedIssuerId: TRUSTED_ISSUER_ID,
+    policyId: SERVICE_POLICY_ID,
   });
   return createHash("sha256").update(normalized).digest("hex");
 }
@@ -590,7 +623,7 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
-      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
+      return sendJson(res, 200, buildDiscovery({ deployment, serviceId: SERVICE_ID, trustedIssuerId: TRUSTED_ISSUER_ID, policy: { id: SERVICE_POLICY_ID, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL }, payments: publicPaymentConfig(), maxInputChars: MAX_INPUT_CHARS }), {
         "cache-control": "public, max-age=60",
         "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
@@ -608,6 +641,15 @@ const server = http.createServer(async (req, res) => {
         serviceId: SERVICE_ID,
         service: "paper-analyzer-v1",
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
+        trustedIssuerId: TRUSTED_ISSUER_ID,
+        servicePolicy: {
+          id: SERVICE_POLICY_ID,
+          serviceId: SERVICE_ID,
+          trustedIssuerId: TRUSTED_ISSUER_ID,
+          transferableRequired: true,
+          termsHash: SERVICE_TERMS_HASH || null,
+          url: SERVICE_POLICY_URL || null,
+        },
         limits: { maxInputChars: MAX_INPUT_CHARS },
         payments: publicPaymentConfig(),
       }, {
@@ -684,7 +726,18 @@ const server = http.createServer(async (req, res) => {
       const result = payment?.alreadySettled ? payment.receipt.result : analyzePaper(requestBody.text);
       const settlement = await settlePayment(payment, result);
       const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
-      return sendJson(res, 200, { ok: true, capabilityId: verified.capability.capabilityId, result, payment: settlement }, headers);
+      return sendJson(res, 200, {
+        ok: true,
+        entitlement: {
+          capabilityId: verified.capability.capabilityId,
+          serviceId: verified.capability.serviceId,
+          issuerId: verified.capability.issuerId,
+          currentOwnerLockHash: normalizeHex32(verified.cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+          policyId: SERVICE_POLICY_ID,
+        },
+        result,
+        payment: settlement,
+      }, headers);
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -713,6 +766,8 @@ server.listen(PORT, HOST, () => {
   console.log(`SkillPass live service on http://${HOST}:${PORT}`);
   console.log(`CKB network: testnet; RPC: ${process.env.CKB_RPC_URL ? "custom endpoint configured" : "CCC default endpoint"}`);
   console.log(`Capability code hash: ${deployment.codeHash}`);
+  console.log(`Trusted capability issuer: ${TRUSTED_ISSUER_ID}`);
+  console.log(`Service policy: ${SERVICE_POLICY_ID}`);
   console.log(`x402/Fiber payments: ${PAYMENTS_REQUIRED ? `enabled via ${FACILITATOR_URL}` : "disabled"}`);
   console.log(`State backend: ${STATE_BACKEND}${STATE_BACKEND === "local" ? ` (${SERVICE_STATE_FILE})` : ""}`);
   console.log(`Delivery receipt retention: ${SERVICE_RECEIPT_TTL_SECONDS}s`);

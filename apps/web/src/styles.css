@@ -118,7 +118,9 @@ code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
 .issue-box > p { color: var(--muted); font-size: 11px; line-height: 1.5; margin: 9px 0 12px; }
 .issue-controls { display: grid; gap: 9px; }
 .issue-controls label { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
-.issue-controls select { border: 1px solid var(--line-strong); background: #fff; color: var(--ink); border-radius: 8px; padding: 7px 28px 7px 9px; font-size: 11px; }
+.issue-controls select, .issue-controls input { border: 1px solid var(--line-strong); background: #fff; color: var(--ink); border-radius: 8px; padding: 7px 9px; font-size: 11px; min-width: 0; }
+.issue-controls input { width: 100%; grid-column: 1 / -1; font-family: "SFMono-Regular", Consolas, monospace; }
+.issue-controls input:focus, .issue-controls select:focus { border-color: #8bb29e; outline: none; box-shadow: 0 0 0 3px rgba(20,95,63,.08); }
 .system-box { display: grid; gap: 9px; }
 .system-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 10px; color: var(--muted); }
 .system-row > span { display: inline-flex; align-items: center; gap: 6px; }

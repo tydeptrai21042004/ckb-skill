@@ -123,6 +123,27 @@ fn valid_issue_succeeds_with_type_id_style_identity_and_issuer_input() {
 }
 
 #[test]
+fn provider_can_issue_directly_to_a_different_recipient() {
+    let mut fx = setup();
+    let issuer = hash32(&fx.owner_a);
+    let funding_input = create_input(&mut fx.context, fx.owner_a.clone(), None, Bytes::new());
+    let cap_id = creation_id(&funding_input, 0);
+    let cap_type = build_cap_type(&fx, issuer, cap_id);
+    let data = capability_data(TRANSFERABLE, [1u8; 32], issuer, cap_id, 2_000_000_000);
+
+    // Provider/issuer A authorizes and funds creation, while recipient B becomes
+    // the first owner. The contract binds issuer authority to transaction inputs
+    // and ownership to the output lock, so these roles do not need to be equal.
+    let tx = TransactionBuilder::default()
+        .input(funding_input)
+        .output(output(fx.owner_b.clone(), Some(cap_type)))
+        .output_data(data.pack())
+        .build();
+    let tx = fx.context.complete_tx(tx);
+    fx.context.verify_tx(&tx, MAX_CYCLES).expect("provider -> recipient issuance");
+}
+
+#[test]
 fn creation_uses_absolute_transaction_output_index() {
     let mut fx = setup();
     let issuer = hash32(&fx.owner_a);
