@@ -15,34 +15,36 @@ test("Week 9 issuance separates provider signer from recipient owner", () => {
 test("live service validates provider policy before owner and payment", () => {
   const src = read("apps/live-service/server.mjs");
   const inspectStart = src.indexOf("async function inspectLiveCapability");
-  const policy = src.indexOf("verifyServicePolicy({ capability, policy: servicePolicy", inspectStart);
+  const policy = src.indexOf("verifyServicePolicy({ capability, policy: context.policy", inspectStart);
   const verifyStart = src.indexOf("async function verifyLiveCapability", inspectStart);
   const owner = src.indexOf("requester does not control the current live capability cell", verifyStart);
-  const quote = src.indexOf("createPaymentQuote(req, requestBody)", src.indexOf('url.pathname === "/api/analyze"'));
+  const handlerStart = src.indexOf("async function handleInvokeRequest");
+  const auth = src.indexOf("authenticateProtectedRequest(requestBody, service)", handlerStart);
+  const quote = src.indexOf("createPaymentQuote(req, requestBody, service)", handlerStart);
   assert.ok(policy > inspectStart && verifyStart > policy && owner > verifyStart, "provider policy must be checked before owner success");
-  assert.ok(quote > owner, "payment quote must happen after entitlement verification path");
+  assert.ok(auth > handlerStart && quote > auth, "payment quote must happen after entitlement verification path");
 });
 
 test("wallet challenge is an intent signature bound to capability and request hash", () => {
   const server = read("apps/live-service/server.mjs");
   const web = read("apps/web/src/App.tsx");
   const challenge = server.slice(server.indexOf("function challengeMessage"), server.indexOf("async function withTimeout"));
-  assert.match(challenge, /action=analyze/);
+  assert.match(challenge, /action=invoke/);
   assert.match(challenge, /capability_outpoint=/);
   assert.match(challenge, /request_hash=/);
   assert.match(challenge, /policy_fingerprint=/);
   assert.match(server, /CHALLENGE_INTENT_MISMATCH/);
-  assert.match(web, /const requestHash = await sha256Hex\(requestText\)/);
-  assert.match(web, /\{ address, outPoint, requestHash \}/);
+  assert.match(web, /const requestHash = await sha256Hex\(requestMaterial\)/);
+  assert.match(web, /address,\s*outPoint,\s*requestHash,\s*service:/);
 });
 
 test("payment quote binding includes canonical provider-policy fingerprint and resource", () => {
   const src = read("apps/live-service/server.mjs");
   const binding = src.slice(src.indexOf("function paymentBinding"), src.indexOf("function resourceUrl"));
-  assert.match(binding, /policyFingerprint:\s*SERVICE_POLICY_FINGERPRINT/);
-  assert.match(binding, /policyId:\s*SERVICE_POLICY_ID/);
-  assert.match(binding, /resource:\s*resourceUrl\(req\)/);
-  assert.match(binding, /requestHash:\s*requestTextHash\(text\)/);
+  assert.match(binding, /policyFingerprint:\s*context\.fingerprint/);
+  assert.match(binding, /policyId:\s*context\.policyId/);
+  assert.match(binding, /resource:\s*resourceUrl\(req, service\)/);
+  assert.match(binding, /requestHash:\s*requestInputHash\(service, body\.input\)/);
 });
 
 test("provider issuer rotation is supported without accepting arbitrary issuers", () => {

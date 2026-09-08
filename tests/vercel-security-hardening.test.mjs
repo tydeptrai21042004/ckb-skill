@@ -8,10 +8,10 @@ const ROOT = resolve(new URL("..", import.meta.url).pathname);
 
 test("public paid flow authenticates wallet and live CKB ownership before creating a Fiber invoice", async () => {
   const src = await readFile(join(ROOT, "apps/live-service/server.mjs"), "utf8");
-  const analyze = src.indexOf('url.pathname === "/api/analyze"');
-  const auth = src.indexOf("authenticateProtectedRequest(requestBody)", analyze);
-  const quote = src.indexOf("createPaymentQuote(req, requestBody)", analyze);
-  assert.ok(analyze >= 0 && auth > analyze && quote > auth, "invoice must not be created before wallet/CKB auth");
+  const handler = src.indexOf("async function handleInvokeRequest");
+  const auth = src.indexOf("authenticateProtectedRequest(requestBody, service)", handler);
+  const quote = src.indexOf("createPaymentQuote(req, requestBody, service)", handler);
+  assert.ok(handler >= 0 && auth > handler && quote > auth, "invoice must not be created before wallet/CKB auth");
 });
 
 test("public status is shallow and deep readiness is opt-in/token guarded", async () => {

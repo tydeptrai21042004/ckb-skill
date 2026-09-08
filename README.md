@@ -1,6 +1,6 @@
-# SkillPass v1.0 — Portable CKB Service Rights + Fiber/x402 Payments
+# SkillPass v1.2 — Portable CKB Service Gateway + Budgeted Agent Delegation + Fiber/x402
 
-SkillPass is a **multi-user CKB testnet service-right implementation**: a provider issues a capability as a CKB Cell, the current live Cell owner can use a protected service, and transfer moves that right to the next owner without a provider-owned entitlement table.
+SkillPass is a **multi-user CKB testnet service-right gateway**: a provider issues a Capability as a CKB Cell, the current live Cell owner can use one of multiple protected services, transfer moves that right without a provider-owned entitlement table, and the owner can create short-lived scoped credentials for AI agents without giving away the Cell or private key.
 
 The production profile combines that authorization rule with Fiber/x402-style payment while keeping user signing in the user's wallet.
 
@@ -13,6 +13,8 @@ The production profile combines that authorization rule with Fiber/x402-style pa
 > **Before publishing the URL:** run `npm run security:preflight`, configure `bash setup-vercel-firewall.sh`, and follow [`HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md`](HUONG_DAN_PUBLISH_AN_TOAN_VERCEL_VI.md). The hardened Vercel profile keeps real Fiber payments off initially, uses a 2-connection Postgres pool per instance, bounded request/upstream timeouts, and cheap public health/status endpoints.
 
 > **Week 9 hardening:** see [`docs/WEEK_09_HARDENING_V2.md`](docs/WEEK_09_HARDENING_V2.md) for intent-bound wallet signatures, issuer rotation, live-owner verification, safer Capability transactions, Fiber quote reuse, and performance/security settings.
+
+> **Funding/product upgrade:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md), [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). v1.2 adds budgeted delegation, a true multi-upstream service catalog, gateway host allowlisting, and an agent payment-adapter retry flow.
 
 
 ## Week 9 production UI / Vercel hotfix
@@ -39,7 +41,26 @@ Then use only the Vercel Dashboard: import the repository, paste `.env.vercel.gu
 
 If a valid `deployments/testnet.json` already exists, `collect-vercel-env.sh` reuses it and does not spend Testnet CKB again.
 
-## What v1.0 changes
+## What v1.2 adds
+
+- **Multi-service Capability discovery** — a single deployment can recognize several protected service IDs.
+- **Service Gateway** — protect operator-configured read/query APIs without changing the upstream application.
+- **Multi-upstream catalog** — register up to 12 external protected services with independent IDs, bounds, timeouts, and prices.
+- **SSRF/config hardening** — production upstream gateways require HTTPS + an exact hostname allowlist and reject private literal targets/redirects.
+- **Research Insights** — a second built-in protected service with manuscript/readability/structure signals.
+- **Agent delegation** — owner-signed, short-lived, service-scoped credentials bound to a live Capability outpoint.
+- **Budgeted delegation v2** — optionally sign maximum call count and total Fiber atomic-unit spend; production counters are serialized in PostgreSQL.
+- **Backward-compatible delegation v1** — existing unlimited short-lived grants keep their original signed-message format.
+- **Automatic delegation invalidation on transfer** — old grants fail when the bound Cell is consumed.
+- **Evidence export** — live-owner proof bundles + deterministic proof hash.
+- **Authorization receipts** — UI exposes request/entitlement/payment verification evidence.
+- **Dynamic OpenAPI/discovery** — service catalog and delegation model are machine-readable.
+- **Agent SDK** — discover services and create signed owner/delegate invocations while surfacing x402/Fiber payment requirements.
+- **Agent payment adapter** — optional SDK helper pays via a caller-supplied adapter and obtains a fresh one-time challenge before retrying.
+- **LLM-friendly agent spec** — `/.well-known/skillpass-agent.txt` gives agents a compact protocol description.
+- **Per-service Fiber pricing** — keep a global default while overriding atomic payment amounts by protected service slug.
+
+### Existing production foundation
 
 The public deployment path no longer relies on single-process JSON/Map state:
 
@@ -189,17 +210,18 @@ PAYMENT_ATOMIC_UNIT=shannon
 
 The browser converts that integer for display only. The protocol payload keeps the exact integer amount.
 
-The paid request flow is:
+The paid request flow is deliberately **authorization-first** so SkillPass does not mint Fiber invoices for callers who do not currently hold (or validly delegate) the service right:
 
 ```text
-request
-  -> 402 + Fiber invoice
-  -> user pays invoice
-  -> retry with PAYMENT-SIGNATURE
-  -> facilitator verifies payment
-  -> wallet challenge is consumed + signature verified
-  -> live Capability Cell is verified again
-  -> protected work is computed
+request with fresh wallet challenge/signature
+  -> consume challenge + verify signature/identity
+  -> verify live Capability ownership or owner-signed delegation
+  -> 402 + Fiber invoice when payment is still required
+  -> user/agent pays invoice
+  -> retry with PAYMENT-SIGNATURE + a fresh intent-bound challenge
+  -> re-verify live Capability/delegation
+  -> facilitator verifies payment proof
+  -> protected idempotent work is computed
   -> settlement is idempotently recorded
   -> delivery receipt is persisted
   -> HTTP response
@@ -239,13 +261,7 @@ Useful variants:
 
 ## Automated evidence
 
-Current dependency-free Node suite:
-
-```text
-89 tests
-88 passed
-0 failed
-```
+Current dependency-free Node suite is expected to be run from the repository rather than represented by a hard-coded count, because the suite grows with each feature revision.
 
 Run:
 
@@ -335,3 +351,10 @@ See [`docs/research-gap-and-funding.md`](docs/research-gap-and-funding.md).
 The bundled production Compose profile is **multi-replica but single-host**. One VPS is still one failure domain. For multi-host HA, use external/HA PostgreSQL and Redis plus a real load balancer/orchestrator and tested failover procedures.
 
 The release deliberately remains CKB/Fiber **testnet-only**. Do not switch to mainnet merely by editing an environment variable. Independent contract/security review, operational HA, backup/restore drills, abuse protection and payment-economic review are required before using real-value mainnet assets.
+
+
+## New platform documentation
+
+- [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md) — protect an existing idempotent JSON API.
+- [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) — scoped agent credentials, transfer invalidation, and `@skillpass/agent-sdk`.
+- [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md) — ecosystem gap, grant milestone, production limitations, and next phase.

@@ -28,6 +28,9 @@ test("production containers include shared security and shared-state packages", 
   for (const path of ["Dockerfile", "Dockerfile.live"]) {
     assert.match(read(path), /COPY packages\/service-rights \.\/packages\/service-rights/, `${path} must include service-rights`);
   }
+  assert.match(read("Dockerfile.live"), /COPY packages\/service-gateway \.\/packages\/service-gateway/, "Dockerfile.live must include service-gateway");
+  assert.match(read("Dockerfile.live"), /COPY packages\/delegation \.\/packages\/delegation/, "Dockerfile.live must include delegation");
+  assert.match(read("Dockerfile.live"), /research-insights\.mjs/, "Dockerfile.live must include the second built-in service");
   for (const path of ["Dockerfile.live", "Dockerfile.facilitator"]) {
     assert.match(read(path), /COPY packages\/production-store \.\/packages\/production-store/, `${path} must include production-store`);
   }
@@ -58,6 +61,11 @@ test("PostgreSQL replay consumption is atomic and Redis challenge consumption is
   const migration = read("packages/production-store/src/postgres.mjs");
   const stores = read("packages/production-store/src/stores.mjs");
   assert.match(migration, /payment_hash TEXT PRIMARY KEY/);
+  assert.match(migration, /skillpass_delegation_usage/);
+  assert.match(migration, /skillpass_delegation_invocations/);
+  assert.match(stores, /PostgresDelegationUsageLedger/);
+  assert.match(stores, /FOR UPDATE/);
+  assert.match(stores, /DELEGATION_USE_LIMIT_EXHAUSTED/);
   assert.match(stores, /ON CONFLICT \(payment_hash\) DO NOTHING/);
   assert.match(stores, /GETDEL/);
   assert.match(stores, /INCR/);
@@ -89,6 +97,8 @@ test("production config defaults to shared state and multiple replicas", () => {
   assert.match(env, /^FIBER_BACKEND=fnn$/m);
   assert.match(env, /^PAYMENT_DECIMALS=8$/m);
   assert.match(env, /^PAYMENT_ATOMIC_UNIT=shannon$/m);
+  assert.match(env, /^SKILLPASS_GATEWAY_ALLOWED_HOSTS=$/m);
+  assert.match(env, /^SKILLPASS_UPSTREAM_SERVICES_JSON=\[\]$/m);
 });
 
 test("public status/logging does not expose raw upstream errors or configured RPC URLs", () => {

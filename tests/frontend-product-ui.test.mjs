@@ -27,7 +27,7 @@ test("local demo renders structured service results and reversible ownership tra
 
 test("live CCC frontend has a single editor workspace with readable result output", () => {
   assert.equal((liveApp.match(/<textarea/g) || []).length, 1);
-  assert.match(liveApp, /Analysis result/);
+  assert.match(liveApp, /Service"} result|selectedService\?\.name/);
   assert.match(liveApp, /metric-grid/);
   assert.match(liveApp, /Manage this pass/);
   assert.doesNotMatch(liveApp, /Your capabilities/);
