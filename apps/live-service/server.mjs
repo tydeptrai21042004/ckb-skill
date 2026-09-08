@@ -7,8 +7,12 @@ import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { ccc } from "@ckb-ccc/ccc";
 import {
+  FLAG_DELEGATABLE,
+  FLAG_REVOCABLE,
+  FLAG_TRANSFERABLE,
   decodeCapability,
   encodeTypeArgs,
+  hasFlag,
   isActive,
   normalizeHex32,
 } from "@skillpass/capability-codec";
@@ -38,6 +42,8 @@ import {
 import {
   ServiceRightError,
   createServicePolicy,
+  policyAcceptsEntitlement,
+  verifyDelegationPolicy,
   verifyServicePolicy,
 } from "../../packages/service-rights/src/index.mjs";
 
@@ -119,6 +125,23 @@ if (IS_PUBLIC_PRODUCTION && PUBLIC_BASE_URL && !PUBLIC_BASE_URL.startsWith("http
 if (IS_PUBLIC_PRODUCTION && PAYMENTS_REQUIRED && !PUBLIC_BASE_URL && !IS_VERCEL) {
   throw new Error("PUBLIC_BASE_URL is required for paid public production outside Vercel");
 }
+if (IS_PUBLIC_PRODUCTION && PAYMENTS_REQUIRED && FACILITATOR_AUTH_TOKEN.length < 32) {
+  throw new Error("FACILITATOR_AUTH_TOKEN must be at least 32 characters when payments are enabled in public production");
+}
+{
+  const facilitatorUrl = new URL(FACILITATOR_URL);
+  if (!["http:", "https:"].includes(facilitatorUrl.protocol)) throw new Error("FACILITATOR_URL must use http:// or https://");
+  if (facilitatorUrl.username || facilitatorUrl.password) throw new Error("FACILITATOR_URL must not embed credentials");
+  if (facilitatorUrl.search || facilitatorUrl.hash) throw new Error("FACILITATOR_URL must not contain a query string or fragment");
+  if (IS_PUBLIC_PRODUCTION && !IS_VERCEL && facilitatorUrl.protocol !== "https:") {
+    const host = facilitatorUrl.hostname.toLowerCase();
+    const privateServiceName = /^[a-z0-9](?:[a-z0-9-]{0,62})$/.test(host);
+    const loopback = ["localhost", "127.0.0.1", "::1"].includes(host);
+    if (!privateServiceName && !loopback) {
+      throw new Error("public production may use an http:// facilitator only on a private single-label or loopback hostname");
+    }
+  }
+}
 if (IS_PUBLIC_PRODUCTION && ENABLE_PUBLIC_ISSUE) throw new Error("ENABLE_PUBLIC_ISSUE=true is forbidden in the hardened public production profile");
 if (IS_PUBLIC_PRODUCTION && process.env.ALLOW_DEV_PAYMENT === "true") throw new Error("ALLOW_DEV_PAYMENT=true is forbidden in public production");
 if (IS_PUBLIC_PRODUCTION && STATE_BACKEND === "local") throw new Error("STATE_BACKEND=local is forbidden in public production; use postgres");
@@ -186,35 +209,90 @@ function parseTrustedIssuerIds() {
   return Object.freeze([...new Set(normalized)].sort());
 }
 
+function parseBooleanPolicy(value, fallback, label) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (String(value).toLowerCase() === "true") return true;
+  if (String(value).toLowerCase() === "false") return false;
+  throw new Error(`${label} must be boolean`);
+}
+
+function parsePolicyUrl(value, label) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const url = new URL(raw);
+  if (!["http:", "https:"].includes(url.protocol)) throw new Error(`${label} must use http:// or https://`);
+  if (IS_PUBLIC_PRODUCTION && url.protocol !== "https:") throw new Error(`${label} must use https:// in public production`);
+  return raw;
+}
+
+function parseServicePolicyOverrides() {
+  const raw = String(process.env.SKILLPASS_SERVICE_POLICIES_JSON || "").trim();
+  if (!raw) return {};
+  let value;
+  try { value = JSON.parse(raw); }
+  catch { throw new Error("SKILLPASS_SERVICE_POLICIES_JSON must be a JSON object"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SKILLPASS_SERVICE_POLICIES_JSON must be a JSON object");
+  for (const [slug, item] of Object.entries(value)) {
+    if (!serviceRegistry.getBySlug(slug)) throw new Error(`SKILLPASS_SERVICE_POLICIES_JSON contains unknown service ${slug}`);
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`service policy for ${slug} must be an object`);
+  }
+  return value;
+}
+
 const TRUSTED_ISSUER_IDS = parseTrustedIssuerIds();
 const PRIMARY_TRUSTED_ISSUER_RAW = String(process.env.CAPABILITY_TRUSTED_ISSUER_ID || "").trim();
 const TRUSTED_ISSUER_ID = PRIMARY_TRUSTED_ISSUER_RAW
   ? requireHex32("CAPABILITY_TRUSTED_ISSUER_ID", PRIMARY_TRUSTED_ISSUER_RAW).toLowerCase()
   : TRUSTED_ISSUER_IDS[0]; // backward-compatible primary issuer, explicitly preferred during key rotation
 const SERVICE_TERMS_HASH = SERVICE_TERMS_HASH_RAW ? requireHex32("SERVICE_TERMS_HASH", SERVICE_TERMS_HASH_RAW) : "";
+const DEFAULT_RIGHT_MODE = String(process.env.SERVICE_RIGHT_MODE || "owned").trim().toLowerCase();
+const SKILLPASS_ADMIN_TOKEN = readSecret("SKILLPASS_ADMIN_TOKEN");
+const SERVICE_POLICY_OVERRIDES = parseServicePolicyOverrides();
 if (!SERVICE_POLICY_ID || SERVICE_POLICY_ID.length > 128) throw new Error("SERVICE_POLICY_ID must be 1..128 characters");
-if (SERVICE_POLICY_URL) {
-  const policyUrl = new URL(SERVICE_POLICY_URL);
-  if (!["http:", "https:"].includes(policyUrl.protocol)) throw new Error("SERVICE_POLICY_URL must use http:// or https://");
-  if (IS_PUBLIC_PRODUCTION && policyUrl.protocol !== "https:") throw new Error("SERVICE_POLICY_URL must use https:// in public production");
-}
+if (!["owned", "license"].includes(DEFAULT_RIGHT_MODE)) throw new Error("SERVICE_RIGHT_MODE must be owned or license");
+const DEFAULT_POLICY_URL = parsePolicyUrl(SERVICE_POLICY_URL, "SERVICE_POLICY_URL");
+
 const serviceContexts = new Map(serviceRegistry.services.map((service) => {
-  const policyId = service.slug === PRIMARY_SERVICE.slug ? SERVICE_POLICY_ID : `${SERVICE_POLICY_ID}:${service.slug}`;
+  const override = SERVICE_POLICY_OVERRIDES[service.slug] || {};
+  const policyId = String(override.policyId || (service.slug === PRIMARY_SERVICE.slug ? SERVICE_POLICY_ID : `${SERVICE_POLICY_ID}:${service.slug}`)).trim();
+  if (!policyId || policyId.length > 128) throw new Error(`policyId for ${service.slug} must be 1..128 characters`);
+  const trustedIssuerSource = override.trustedIssuerIds ?? override.trustedIssuerId ?? TRUSTED_ISSUER_IDS;
+  const rawEntitlementIds = override.entitlementIds ?? override.acceptedEntitlementIds ?? [service.id];
+  const entitlementIds = (Array.isArray(rawEntitlementIds) ? rawEntitlementIds : [rawEntitlementIds])
+    .map((value, index) => requireHex32(`${service.slug}.entitlementIds[${index}]`, value).toLowerCase());
+  const issuanceEntitlementId = requireHex32(`${service.slug}.issuanceEntitlementId`, override.issuanceEntitlementId || entitlementIds[0]).toLowerCase();
+  const termsHash = override.termsHash ? requireHex32(`${service.slug}.termsHash`, override.termsHash) : SERVICE_TERMS_HASH;
+  const policyUrl = parsePolicyUrl(override.url ?? DEFAULT_POLICY_URL, `${service.slug}.url`);
   const policy = createServicePolicy({
     serviceId: service.id,
-    trustedIssuerIds: TRUSTED_ISSUER_IDS,
-    requireTransferable: true,
+    entitlementIds,
+    issuanceEntitlementId,
+    bundleId: override.bundleId || "",
+    trustedIssuerIds: trustedIssuerSource,
+    requireTransferable: parseBooleanPolicy(override.requireTransferable, true, `${service.slug}.requireTransferable`),
+    delegationAllowed: parseBooleanPolicy(override.delegationAllowed, true, `${service.slug}.delegationAllowed`),
+    requireDelegatable: parseBooleanPolicy(override.requireDelegatable, false, `${service.slug}.requireDelegatable`),
+    rightMode: override.rightMode || DEFAULT_RIGHT_MODE,
     policyId,
-    termsHash: SERVICE_TERMS_HASH,
+    termsHash,
   });
-  const fingerprint = createHash("sha256").update(JSON.stringify({
-    serviceId: service.id.toLowerCase(),
-    trustedIssuerIds: TRUSTED_ISSUER_IDS,
-    requireTransferable: true,
-    policyId,
-    termsHash: SERVICE_TERMS_HASH.toLowerCase(),
-  })).digest("hex");
-  return [service.slug, Object.freeze({ service, policy, policyId, fingerprint })];
+  const fingerprintMaterial = canonicalJson({
+    serviceId: policy.serviceId,
+    entitlementIds: policy.entitlementIds,
+    issuanceEntitlementId: policy.issuanceEntitlementId,
+    bundleId: policy.bundleId,
+    trustedIssuerIds: policy.trustedIssuerIds,
+    requireTransferable: policy.requireTransferable,
+    delegationAllowed: policy.delegationAllowed,
+    requireDelegatable: policy.requireDelegatable,
+    rightMode: policy.rightMode,
+    policyId: policy.policyId,
+    termsHash: policy.termsHash,
+    url: policyUrl,
+  });
+  const fingerprint = createHash("sha256").update(fingerprintMaterial).digest("hex");
+  return [service.slug, Object.freeze({ service, policy, policyId, policyUrl, fingerprint })];
 }));
 
 function serviceContext(value) {
@@ -223,8 +301,63 @@ function serviceContext(value) {
   return serviceContexts.get(service.slug);
 }
 
+function publicPolicyFor(service) {
+  const context = serviceContext(service);
+  const policy = context.policy;
+  return Object.freeze({
+    id: context.policyId,
+    fingerprint: context.fingerprint,
+    serviceId: policy.serviceId,
+    entitlementIds: policy.entitlementIds,
+    issuanceEntitlementId: policy.issuanceEntitlementId,
+    bundleId: policy.bundleId || null,
+    trustedIssuerId: policy.trustedIssuerIds[0],
+    trustedIssuerIds: policy.trustedIssuerIds,
+    rightMode: policy.rightMode,
+    transferableRequired: policy.requireTransferable,
+    delegationAllowed: policy.delegationAllowed,
+    delegatableRequired: policy.requireDelegatable,
+    termsHash: policy.termsHash || null,
+    url: context.policyUrl || null,
+  });
+}
+
+function contextsAcceptingCapability(capability, nowUnixSeconds = BigInt(Math.floor(Date.now() / 1000))) {
+  return [...serviceContexts.values()].filter((context) => {
+    try {
+      verifyServicePolicy({ capability, policy: context.policy, nowUnixSeconds });
+      return true;
+    } catch { return false; }
+  });
+}
+
+function publicServiceDescriptor(service) {
+  const context = serviceContext(service);
+  return Object.freeze({
+    ...service,
+    endpoint: `/api/invoke/${service.slug}`,
+    policyId: context.policyId,
+    policyFingerprint: context.fingerprint,
+    policy: publicPolicyFor(service),
+    entitlementIds: context.policy.entitlementIds,
+    issuanceEntitlementId: context.policy.issuanceEntitlementId,
+    bundleId: context.policy.bundleId || null,
+    rightMode: context.policy.rightMode,
+    transferableRequired: context.policy.requireTransferable,
+    delegationAllowed: context.policy.delegationAllowed,
+    delegatableRequired: context.policy.requireDelegatable,
+    trustedIssuerId: context.policy.trustedIssuerIds[0],
+    trustedIssuerIds: context.policy.trustedIssuerIds,
+    payment: publicPaymentConfig(service),
+  });
+}
+
 const servicePolicy = serviceContext(PRIMARY_SERVICE).policy; // backward-compatible primary references
 const SERVICE_POLICY_FINGERPRINT = serviceContext(PRIMARY_SERVICE).fingerprint;
+const HAS_LICENSE_POLICIES = [...serviceContexts.values()].some((context) => context.policy.rightMode === "license");
+if (IS_PUBLIC_PRODUCTION && HAS_LICENSE_POLICIES && SKILLPASS_ADMIN_TOKEN.length < 32) {
+  throw new Error("SKILLPASS_ADMIN_TOKEN must be at least 32 characters when a public production service uses rightMode=license");
+}
 
 if (process.env.CKB_RPC_URL) {
   const rpc = new URL(process.env.CKB_RPC_URL);
@@ -343,7 +476,7 @@ async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   }
 }
 
-async function inspectLiveCapability({ outPoint, service = null }) {
+async function inspectLiveCapability({ outPoint, service = null, skipRevocation = false }) {
   const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
   const type = cell.cellOutput.type;
@@ -354,10 +487,19 @@ async function inspectLiveCapability({ outPoint, service = null }) {
   if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
     throw Object.assign(new Error("capability identity/data mismatch"), { status: 403, code: "IDENTITY_MISMATCH" });
   }
-  const resolvedService = service || serviceRegistry.getById(capability.serviceId);
-  if (!resolvedService) throw Object.assign(new Error("capability is for an unsupported service"), { status: 403, code: "WRONG_SERVICE" });
-  const context = serviceContext(resolvedService);
+
   const now = BigInt(Math.floor(Date.now() / 1000));
+  let context;
+  const acceptingContexts = contextsAcceptingCapability(capability, now);
+  if (service) {
+    context = serviceContext(service);
+  } else {
+    const directService = serviceRegistry.getById(capability.serviceId);
+    const directContext = directService ? serviceContext(directService) : null;
+    context = directContext && acceptingContexts.includes(directContext) ? directContext : acceptingContexts[0];
+    if (!context) throw Object.assign(new Error("capability is not accepted by any configured SkillPass service"), { status: 403, code: "WRONG_SERVICE" });
+  }
+
   try {
     verifyServicePolicy({ capability, policy: context.policy, nowUnixSeconds: now });
   } catch (error) {
@@ -366,13 +508,27 @@ async function inspectLiveCapability({ outPoint, service = null }) {
     }
     throw error;
   }
+
+  if (!skipRevocation && context.policy.rightMode === "license") {
+    const revocation = await serviceState.getRevocation(context.service.slug, capability.capabilityId);
+    if (revocation) {
+      throw Object.assign(new Error("provider revoked this service license"), {
+        status: 403,
+        code: "PROVIDER_REVOKED",
+        revocation,
+      });
+    }
+  }
+
   return {
     cell,
     capability,
-    service: resolvedService,
+    service: context.service,
+    policy: context.policy,
     policyId: context.policyId,
     policyFingerprint: context.fingerprint,
     currentOwnerLockHash: normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+    acceptedByServices: acceptingContexts.map((candidate) => candidate.service.slug),
     checkedAt: new Date().toISOString(),
   };
 }
@@ -390,6 +546,10 @@ async function verifyDelegatedCapability({ credential, delegateAddress, outPoint
   if (!credential || typeof credential !== "object" || !credential.grant || !credential.ownerSignature) {
     throw Object.assign(new Error("delegation credential is malformed"), { status: 401, code: "INVALID_DELEGATION" });
   }
+  const context = serviceContext(service);
+  if (!context.policy.delegationAllowed) {
+    throw Object.assign(new Error("provider policy does not allow agent delegation for this service"), { status: 403, code: "DELEGATION_DISABLED" });
+  }
   const grant = assertDelegationScope(credential.grant, {
     delegateAddress,
     serviceSlug: service.slug,
@@ -404,6 +564,14 @@ async function verifyDelegatedCapability({ credential, delegateAddress, outPoint
   const ownerSignatureValid = await ccc.Signer.verifyMessage(buildDelegationMessage(grant), credential.ownerSignature);
   if (!ownerSignatureValid) throw Object.assign(new Error("delegation owner signature is invalid"), { status: 401, code: "INVALID_DELEGATION_SIGNATURE" });
   const inspected = await verifyLiveCapability({ outPoint, requesterAddress: grant.ownerAddress, service });
+  try {
+    verifyDelegationPolicy({ capability: inspected.capability, policy: inspected.policy });
+  } catch (error) {
+    if (error instanceof ServiceRightError) {
+      throw Object.assign(new Error(error.message), { status: 403, code: error.code });
+    }
+    throw error;
+  }
   if (inspected.capability.capabilityId.toLowerCase() !== grant.capabilityId.toLowerCase()) {
     throw Object.assign(new Error("delegation capability identity mismatch"), { status: 401, code: "DELEGATION_CAPABILITY_MISMATCH" });
   }
@@ -587,7 +755,7 @@ async function settlePayment(payment, result) {
 
 function requestKey(req) {
   if (IS_VERCEL) {
-    const forwarded = String(req.headers["x-vercel-forwarded-for"] || req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    const forwarded = String(req.headers["x-vercel-forwarded-for"] || "").split(",")[0].trim();
     if (forwarded) return forwarded.slice(0, 128);
   } else if (TRUST_PROXY) {
     const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
@@ -698,6 +866,31 @@ function bearerMatches(req, expected) {
   const left = Buffer.from(value);
   const right = Buffer.from(expected);
   return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
+}
+
+function requireProviderAdmin(req) {
+  if (SKILLPASS_ADMIN_TOKEN.length < 32) {
+    throw Object.assign(new Error("provider administration is not configured"), { status: 503, code: "ADMIN_NOT_CONFIGURED" });
+  }
+  if (!bearerMatches(req, SKILLPASS_ADMIN_TOKEN)) {
+    throw Object.assign(new Error("provider administration authentication required"), { status: 401, code: "ADMIN_AUTH_REQUIRED" });
+  }
+}
+
+function licenseContext(serviceSlug) {
+  const context = serviceContext(serviceSlug);
+  if (context.policy.rightMode !== "license") {
+    throw Object.assign(new Error("provider revocation is only available for rightMode=license"), { status: 409, code: "REVOCATION_NOT_ALLOWED" });
+  }
+  return context;
+}
+
+function cleanAdminReason(value) {
+  return String(value || "provider policy revocation")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 500) || "provider policy revocation";
 }
 
 const LIVE_CSP = [
@@ -944,7 +1137,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass-agent.txt") {
       return sendText(res, 200, buildAgentSpec({
-        services: serviceRegistry.publicList().map((service) => ({ ...service, endpoint: `/api/invoke/${service.slug}` })),
+        services: serviceRegistry.publicList().map(publicServiceDescriptor),
         paymentsRequired: PAYMENTS_REQUIRED,
       }), {
         "cache-control": "public, max-age=300",
@@ -954,16 +1147,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname === "/.well-known/skillpass.json") {
       return sendJson(res, 200, buildDiscovery({
         deployment,
-        services: serviceRegistry.publicList().map((service) => ({
-          ...service,
-          endpoint: `/api/invoke/${service.slug}`,
-          policyId: serviceContext(service).policyId,
-          policyFingerprint: serviceContext(service).fingerprint,
-          payment: publicPaymentConfig(service),
-        })),
+        services: serviceRegistry.publicList().map(publicServiceDescriptor),
         trustedIssuerId: TRUSTED_ISSUER_ID,
         trustedIssuerIds: TRUSTED_ISSUER_IDS,
-        policy: { id: SERVICE_POLICY_ID, transferableRequired: true, termsHash: SERVICE_TERMS_HASH, url: SERVICE_POLICY_URL },
+        policy: publicPolicyFor(PRIMARY_SERVICE),
         payments: publicPaymentConfig(),
       }), {
         "cache-control": "public, max-age=60",
@@ -971,19 +1158,13 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (req.method === "GET" && url.pathname === "/api/openapi.json") {
-      return sendJson(res, 200, buildOpenApi({ services: serviceRegistry.publicList(), paymentsRequired: PAYMENTS_REQUIRED }), {
+      return sendJson(res, 200, buildOpenApi({ services: serviceRegistry.publicList().map(publicServiceDescriptor), paymentsRequired: PAYMENTS_REQUIRED }), {
         "cache-control": "public, max-age=300",
         "vercel-cdn-cache-control": "max-age=3600, stale-while-revalidate=86400",
       });
     }
     if (req.method === "GET" && url.pathname === "/api/services") {
-      return sendJson(res, 200, { ok: true, services: serviceRegistry.publicList().map((service) => ({
-        ...service,
-        endpoint: `/api/invoke/${service.slug}`,
-        policyId: serviceContext(service).policyId,
-        policyFingerprint: serviceContext(service).fingerprint,
-        payment: publicPaymentConfig(service),
-      })) }, {
+      return sendJson(res, 200, { ok: true, services: serviceRegistry.publicList().map(publicServiceDescriptor) }, {
         "cache-control": "public, max-age=60",
         "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
@@ -994,28 +1175,14 @@ const server = http.createServer(async (req, res) => {
         deployment,
         serviceId: SERVICE_ID,
         service: PRIMARY_SERVICE.slug,
-        services: serviceRegistry.publicList().map((service) => ({
-          ...service,
-          endpoint: `/api/invoke/${service.slug}`,
-          policyId: serviceContext(service).policyId,
-          policyFingerprint: serviceContext(service).fingerprint,
-          payment: publicPaymentConfig(service),
-        })),
+        services: serviceRegistry.publicList().map(publicServiceDescriptor),
         enablePublicIssue: ENABLE_PUBLIC_ISSUE,
         trustedIssuerId: TRUSTED_ISSUER_ID,
         trustedIssuerIds: TRUSTED_ISSUER_IDS,
-        servicePolicy: {
-          id: SERVICE_POLICY_ID,
-          fingerprint: SERVICE_POLICY_FINGERPRINT,
-          serviceId: SERVICE_ID,
-          trustedIssuerId: TRUSTED_ISSUER_ID,
-          trustedIssuerIds: TRUSTED_ISSUER_IDS,
-          transferableRequired: true,
-          termsHash: SERVICE_TERMS_HASH || null,
-          url: SERVICE_POLICY_URL || null,
-        },
+        servicePolicy: publicPolicyFor(PRIMARY_SERVICE),
         limits: { maxInputChars: PRIMARY_SERVICE.maxInputChars },
-        delegation: { enabled: true, maxLifetimeSeconds: 86400, model: "owner-signed-grant", versions: [1, 2], usageLimits: { maxUses: true, maxSpendAtomic: true, productionLedger: STATE_BACKEND !== "local" } },
+        delegation: { enabled: [...serviceContexts.values()].some((context) => context.policy.delegationAllowed), maxLifetimeSeconds: 86400, model: "owner-signed-grant", versions: [1, 2], usageLimits: { maxUses: true, maxSpendAtomic: true, productionLedger: STATE_BACKEND !== "local" } },
+        providerAdministration: { revocationSupported: HAS_LICENSE_POLICIES, endpoint: HAS_LICENSE_POLICIES ? "/api/admin/revocations" : null },
         payments: publicPaymentConfig(),
       }, {
         "cache-control": "public, max-age=60",
@@ -1061,9 +1228,10 @@ const server = http.createServer(async (req, res) => {
       const body = await jsonBody(req);
       const outPoint = outPointFromJson(body.outPoint);
       await rateLimit(req, "capability-status", CAPABILITY_STATUS_RATE_LIMIT, GLOBAL_CAPABILITY_STATUS_RATE_LIMIT);
-      const inspected = await inspectLiveCapability({ outPoint });
+      const requestedService = body.service ? serviceContext(body.service).service : null;
+      const inspected = await inspectLiveCapability({ outPoint, service: requestedService });
       const proof = {
-        schemaVersion: "1.0",
+        schemaVersion: "1.1",
         network: "ckb-testnet",
         source: "live-ckb-cell",
         checkedAt: inspected.checkedAt,
@@ -1073,16 +1241,67 @@ const server = http.createServer(async (req, res) => {
           capabilityId: inspected.capability.capabilityId,
           serviceId: inspected.capability.serviceId,
           service: inspected.service.slug,
+          acceptedByServices: inspected.acceptedByServices,
           issuerId: inspected.capability.issuerId,
           expiry: inspected.capability.expiry.toString(),
           currentOwnerLockHash: inspected.currentOwnerLockHash,
-          transferable: true,
+          transferable: hasFlag(inspected.capability, FLAG_TRANSFERABLE),
+          delegatable: hasFlag(inspected.capability, FLAG_DELEGATABLE),
+          revocable: hasFlag(inspected.capability, FLAG_REVOCABLE),
+          rightMode: inspected.policy.rightMode,
+          bundleId: inspected.policy.bundleId || null,
+          entitlementIds: inspected.policy.entitlementIds,
           policyId: inspected.policyId,
           policyFingerprint: inspected.policyFingerprint,
         },
       };
       const proofHash = createHash("sha256").update(canonicalJson(proof)).digest("hex");
       return sendJson(res, 200, { ok: true, ...proof, proofHash });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/admin/revocations") {
+      requireProviderAdmin(req);
+      const serviceSlug = String(url.searchParams.get("service") || "").trim();
+      if (!serviceSlug) throw Object.assign(new Error("service query parameter is required"), { status: 400, code: "SERVICE_REQUIRED" });
+      const context = licenseContext(serviceSlug);
+      const rawLimit = Number(url.searchParams.get("limit") || 100);
+      const limit = Number.isSafeInteger(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 100;
+      const revocations = await serviceState.listRevocations(context.service.slug, { limit });
+      return sendJson(res, 200, { ok: true, service: context.service.slug, policy: publicPolicyFor(context.service), revocations });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/admin/revocations") {
+      requireProviderAdmin(req);
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      const body = await jsonBody(req);
+      const action = String(body.action || "").trim().toLowerCase();
+      const context = licenseContext(String(body.service || "").trim());
+      if (action === "revoke") {
+        const outPoint = outPointFromJson(body.outPoint);
+        const inspected = await inspectLiveCapability({ outPoint, service: context.service, skipRevocation: true });
+        const record = await serviceState.setRevocation(context.service.slug, inspected.capability.capabilityId, {
+          service: context.service.slug,
+          capabilityId: inspected.capability.capabilityId.toLowerCase(),
+          issuerId: inspected.capability.issuerId.toLowerCase(),
+          entitlementServiceId: inspected.capability.serviceId.toLowerCase(),
+          policyId: context.policyId,
+          policyFingerprint: context.fingerprint,
+          outPoint: { txHash: String(outPoint.txHash).toLowerCase(), index: String(outPoint.index) },
+          reason: cleanAdminReason(body.reason),
+          revokedAt: Date.now(),
+        });
+        return sendJson(res, 200, { ok: true, action: "revoke", revocation: record });
+      }
+      if (action === "restore") {
+        let capabilityId;
+        try { capabilityId = normalizeHex32(String(body.capabilityId || ""), "capabilityId").toLowerCase(); }
+        catch { throw Object.assign(new Error("capabilityId must be a 32-byte hex value"), { status: 400, code: "INVALID_CAPABILITY_ID" }); }
+        const existed = await serviceState.getRevocation(context.service.slug, capabilityId);
+        const restored = await serviceState.deleteRevocation(context.service.slug, capabilityId);
+        return sendJson(res, 200, { ok: true, action: "restore", service: context.service.slug, capabilityId, restored, previous: existed });
+      }
+      throw Object.assign(new Error("action must be revoke or restore"), { status: 400, code: "INVALID_ADMIN_ACTION" });
     }
 
     if (req.method === "POST" && url.pathname === "/api/challenge") {

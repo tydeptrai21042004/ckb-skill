@@ -338,3 +338,9 @@ ccc-connector {
 @media (max-width: 720px) {
   .delegation-limit-grid { grid-template-columns: 1fr; }
 }
+
+/* v1.3 provider-policy and shared-entitlement controls */
+.service-meta-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; align-items: center; }
+.bundle-service-picker { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 10px; color: var(--muted); }
+.bundle-service-picker select { min-width: 190px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 9px; background: #fff; color: var(--ink); font-size: 10px; }
+.transfer-form.disabled-policy { border-style: dashed; opacity: .82; }

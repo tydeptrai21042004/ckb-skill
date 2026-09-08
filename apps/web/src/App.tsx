@@ -8,7 +8,7 @@ import {
   sendAndWait,
   type Deployment,
 } from "@skillpass/ckb-client/live";
-import { FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
+import { FLAG_DELEGATABLE, FLAG_REVOCABLE, FLAG_TRANSFERABLE, hasFlag } from "@skillpass/capability-codec";
 import { canonicalJson } from "@skillpass/service-gateway";
 import { buildDelegationMessage, type DelegationCredential, type DelegationGrant } from "@skillpass/delegation";
 
@@ -23,6 +23,15 @@ type ServiceDescriptor = {
   endpoint: string;
   policyId: string;
   policyFingerprint?: string;
+  entitlementIds?: Array<`0x${string}`>;
+  issuanceEntitlementId?: `0x${string}`;
+  bundleId?: string | null;
+  rightMode?: "owned" | "license";
+  transferableRequired?: boolean;
+  delegationAllowed?: boolean;
+  delegatableRequired?: boolean;
+  trustedIssuerId?: `0x${string}`;
+  trustedIssuerIds?: Array<`0x${string}`>;
 };
 
 type RuntimeConfig = {
@@ -39,9 +48,15 @@ type RuntimeConfig = {
     id: string;
     fingerprint?: string;
     serviceId: `0x${string}`;
+    entitlementIds?: Array<`0x${string}`>;
+    issuanceEntitlementId?: `0x${string}`;
+    bundleId?: string | null;
     trustedIssuerId: `0x${string}`;
     trustedIssuerIds?: Array<`0x${string}`>;
+    rightMode?: "owned" | "license";
     transferableRequired: boolean;
+    delegationAllowed?: boolean;
+    delegatableRequired?: boolean;
     termsHash?: string | null;
     url?: string | null;
   };
@@ -165,6 +180,12 @@ type CapabilityStatus = {
     expiry: string;
     currentOwnerLockHash: string;
     transferable: boolean;
+    delegatable?: boolean;
+    revocable?: boolean;
+    rightMode?: "owned" | "license";
+    bundleId?: string | null;
+    entitlementIds?: string[];
+    acceptedByServices?: string[];
     policyId: string;
     policyFingerprint: string;
   };
@@ -343,6 +364,17 @@ async function api<T>(path: string, body?: unknown): Promise<T> {
   return readApiResponse<T>(res);
 }
 
+function serviceAcceptsCapability(service: ServiceDescriptor, capability: Found["capability"]) {
+  const entitlementIds = service.entitlementIds?.length ? service.entitlementIds : [service.id];
+  if (!entitlementIds.some((id) => id.toLowerCase() === String(capability.serviceId).toLowerCase())) return false;
+  const trusted = service.trustedIssuerIds?.length ? service.trustedIssuerIds : (service.trustedIssuerId ? [service.trustedIssuerId] : []);
+  if (trusted.length && !trusted.some((id) => id.toLowerCase() === String(capability.issuerId).toLowerCase())) return false;
+  if (service.transferableRequired && !hasFlag(capability, FLAG_TRANSFERABLE)) return false;
+  if (service.delegatableRequired && !hasFlag(capability, FLAG_DELEGATABLE)) return false;
+  if (service.rightMode === "license" && !hasFlag(capability, FLAG_REVOCABLE)) return false;
+  return true;
+}
+
 export default function App() {
   const { open, disconnect, wallet, signerInfo } = ccc.useCcc();
   const signer = ccc.useSigner();
@@ -359,6 +391,7 @@ export default function App() {
   const [text, setText] = useState(loadDraft);
   const [issueDays, setIssueDays] = useState(7);
   const [issueServiceSlug, setIssueServiceSlug] = useState("");
+  const [selectedServiceSlug, setSelectedServiceSlug] = useState("");
   const [pendingPayment, setPendingPayment] = useState<PendingPayment>();
   const [paymentPreimage, setPaymentPreimage] = useState("");
   const [result, setResult] = useState<AnalysisResult>();
@@ -389,13 +422,32 @@ export default function App() {
       endpoint: "/api/analyze",
       policyId: config.servicePolicy?.id ?? "skillpass-default",
       policyFingerprint: config.servicePolicy?.fingerprint,
+      entitlementIds: config.servicePolicy?.entitlementIds ?? [config.serviceId],
+      issuanceEntitlementId: config.servicePolicy?.issuanceEntitlementId ?? config.serviceId,
+      bundleId: config.servicePolicy?.bundleId ?? null,
+      rightMode: config.servicePolicy?.rightMode ?? "owned",
+      transferableRequired: config.servicePolicy?.transferableRequired ?? true,
+      delegationAllowed: config.servicePolicy?.delegationAllowed ?? true,
+      delegatableRequired: config.servicePolicy?.delegatableRequired ?? false,
+      trustedIssuerId: config.servicePolicy?.trustedIssuerId ?? config.trustedIssuerId,
+      trustedIssuerIds: config.servicePolicy?.trustedIssuerIds ?? config.trustedIssuerIds,
     }];
   }, [config]);
 
-  const selectedService = useMemo(() => {
-    if (!selectedCap) return services[0];
-    return services.find((service) => service.id.toLowerCase() === String(selectedCap.capability.serviceId).toLowerCase()) ?? services[0];
+  const compatibleServices = useMemo(() => {
+    if (!selectedCap) return services;
+    return services.filter((service) => serviceAcceptsCapability(service, selectedCap.capability));
   }, [selectedCap, services]);
+
+  const selectedService = useMemo(() => {
+    if (!compatibleServices.length) return undefined;
+    return compatibleServices.find((service) => service.slug === selectedServiceSlug) ?? compatibleServices[0];
+  }, [compatibleServices, selectedServiceSlug]);
+
+  useEffect(() => {
+    if (!compatibleServices.length) { setSelectedServiceSlug(""); return; }
+    setSelectedServiceSlug((current) => compatibleServices.some((service) => service.slug === current) ? current : compatibleServices[0].slug);
+  }, [compatibleServices]);
 
   const issueService = services.find((service) => service.slug === issueServiceSlug) ?? services[0];
 
@@ -469,15 +521,16 @@ export default function App() {
     if (!signer || !config) return;
     setBusy("refresh");
     try {
-      const found = await discoverOwnedCapabilities({
+      const expectedServiceIds = [...new Set(services.flatMap((service) => (service.entitlementIds?.length ? service.entitlementIds : [service.id])).map((id) => id.toLowerCase()))] as Array<`0x${string}`>;
+      const trustedIssuerIds = [...new Set(services.flatMap((service) => service.trustedIssuerIds?.length ? service.trustedIssuerIds : (service.trustedIssuerId ? [service.trustedIssuerId] : [])).map((id) => id.toLowerCase()))] as Array<`0x${string}`>;
+      const discovered = await discoverOwnedCapabilities({
         signer,
         deployment: config.deployment,
-        expectedServiceId: config.serviceId,
-        expectedServiceIds: services.map((service) => service.id),
-        trustedIssuerId: config.trustedIssuerId,
-        trustedIssuerIds: config.trustedIssuerIds,
-        requireTransferable: true,
+        expectedServiceIds,
+        trustedIssuerIds: trustedIssuerIds.length ? trustedIssuerIds : config.trustedIssuerIds,
+        requireTransferable: false,
       });
+      const found = discovered.filter((cap) => services.some((service) => serviceAcceptsCapability(service, cap.capability)));
       setCaps(found);
       setSelectedKey((current) => {
         if (found.some((cap) => capabilityKey(cap) === current)) return current;
@@ -505,18 +558,27 @@ export default function App() {
     try {
       const issuerAddress = await signer.getRecommendedAddressObj();
       const issuerId = issuerAddress.script.hash().toLowerCase();
-      const trustedIssuers = (config.trustedIssuerIds?.length ? config.trustedIssuerIds : [config.trustedIssuerId]).map((value) => value.toLowerCase());
+      const trustedIssuers = (issueService?.trustedIssuerIds?.length
+        ? issueService.trustedIssuerIds
+        : issueService?.trustedIssuerId
+          ? [issueService.trustedIssuerId]
+          : (config.trustedIssuerIds?.length ? config.trustedIssuerIds : [config.trustedIssuerId]))
+        .map((value) => value.toLowerCase());
       if (!trustedIssuers.includes(issuerId)) {
-        throw new Error("Connected wallet is not configured as a trusted SkillPass provider issuer.");
+        throw new Error("Connected wallet is not configured as a trusted issuer for the selected service policy.");
       }
+      let flags = 0;
+      if (issueService?.transferableRequired ?? true) flags |= FLAG_TRANSFERABLE;
+      if (issueService?.delegationAllowed ?? true) flags |= FLAG_DELEGATABLE;
+      if (issueService?.rightMode === "license") flags |= FLAG_REVOCABLE;
       const expiry = BigInt(Math.floor(Date.now() / 1000) + Math.max(1, issueDays) * 86_400);
       const { tx, capabilityId } = await buildIssueCapabilityTx({
         signer,
         deployment: config.deployment,
         recipientAddress: issueRecipient.trim(),
-        serviceId: issueService?.id ?? config.serviceId,
+        serviceId: issueService?.issuanceEntitlementId ?? issueService?.id ?? config.serviceId,
         expiry,
-        flags: FLAG_TRANSFERABLE,
+        flags,
       });
       const { txHash } = await sendAndWait(signer, tx);
       setNotice({ tone: "success", message: `Provider-issued ${issueService?.name ?? "SkillPass"} pass confirmed: ${short(txHash, 10)} · ${short(capabilityId, 10)} → ${short(issueRecipient.trim(), 8)}` });
@@ -553,7 +615,7 @@ export default function App() {
   async function verifyLiveOwner(cap: Found) {
     setBusy("capability-status");
     try {
-      const value = await api<CapabilityStatus>("/api/capability/status", { outPoint: outPointJson(cap.cell) });
+      const value = await api<CapabilityStatus>("/api/capability/status", { outPoint: outPointJson(cap.cell), service: selectedService?.slug });
       setCapabilityStatus(value);
       setNotice({
         tone: "success",
@@ -694,6 +756,8 @@ export default function App() {
     if (!signer || !address || !selectedService || !delegateAddress.trim()) return;
     setBusy("delegate");
     try {
+      if (selectedService.delegationAllowed === false) throw new Error("The selected provider policy disables agent delegation.");
+      if (!hasFlag(cap.capability, FLAG_DELEGATABLE)) throw new Error("This Capability does not permit agent delegation.");
       const bytes = crypto.getRandomValues(new Uint8Array(16));
       const grantId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
       const issuedAt = Date.now();
@@ -758,6 +822,10 @@ export default function App() {
   }
   const serviceName = selectedService?.name ?? formatServiceName(config?.service);
   const selectedActive = selectedCap ? isCapabilityActive(selectedCap) : false;
+  const selectedTransferable = Boolean(selectedCap && hasFlag(selectedCap.capability, FLAG_TRANSFERABLE));
+  const selectedDelegatableFlag = Boolean(selectedCap && hasFlag(selectedCap.capability, FLAG_DELEGATABLE));
+  const selectedDelegatable = Boolean(selectedDelegatableFlag && selectedService?.delegationAllowed !== false);
+  const selectedRevocable = Boolean(selectedCap && hasFlag(selectedCap.capability, FLAG_REVOCABLE));
   const ckbReady = Boolean(health?.dependencies?.ckb?.ok);
   const fiberReady = !config?.payments?.required || Boolean(health?.dependencies?.facilitator?.ok);
   const systemReady = Boolean(config) && (!health || (ckbReady && fiberReady));
@@ -877,7 +945,7 @@ export default function App() {
                         onClick={() => { setSelectedKey(key); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); setRecipient(""); }}
                       >
                         <span className={`pass-state ${active ? "active" : "expired"}`}><span />{active ? "Active" : "Expired"}</span>
-                        <strong>{services.find((service) => service.id.toLowerCase() === String(cap.capability.serviceId).toLowerCase())?.name ?? "SkillPass"}</strong>
+                        <strong>{services.find((service) => serviceAcceptsCapability(service, cap.capability))?.name ?? "SkillPass"}</strong>
                         <small>{short(cap.capability.capabilityId, 5)} · {formatExpiry(cap.capability.expiry)}</small>
                       </button>
                     );
@@ -923,8 +991,20 @@ export default function App() {
                   <span className="eyebrow">Protected service</span>
                   <h1>{serviceName}</h1>
                   <p>{selectedService?.description || "Access is verified from the live CKB Cell when you run the service."}</p>
+                  {compatibleServices.length > 1 && (
+                    <label className="bundle-service-picker">
+                      <span>Use this shared entitlement with</span>
+                      <select value={selectedService?.slug ?? ""} onChange={(e) => { setSelectedServiceSlug(e.target.value); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); }}>
+                        {compatibleServices.map((service) => <option key={service.slug} value={service.slug}>{service.name}</option>)}
+                      </select>
+                    </label>
+                  )}
                 </div>
-                {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
+                <div className="service-meta-chips">
+                  {selectedService?.bundleId && <span className="meta-chip">Bundle: {selectedService.bundleId}</span>}
+                  {selectedService?.rightMode === "license" && <span className="meta-chip">Revocable license</span>}
+                  {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
+                </div>
               </div>
 
               {!selectedCap ? (
@@ -1049,16 +1129,23 @@ export default function App() {
                         </div>
                       )}
 
-                      <div className="transfer-form">
-                        <label htmlFor="recipient">Transfer to CKB address</label>
-                        <div>
-                          <input id="recipient" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
-                          <button className="button secondary" disabled={!recipient.trim() || Boolean(busy)} onClick={() => transfer(selectedCap)}>Transfer</button>
+                      {selectedTransferable ? (
+                        <div className="transfer-form">
+                          <label htmlFor="recipient">Transfer to CKB address</label>
+                          <div>
+                            <input id="recipient" value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
+                            <button className="button secondary" disabled={!recipient.trim() || Boolean(busy)} onClick={() => transfer(selectedCap)}>Transfer</button>
+                          </div>
+                          <p>After confirmation, this wallet no longer owns the service right. Any grant bound to the consumed outpoint becomes invalid.</p>
                         </div>
-                        <p>After confirmation, this wallet no longer owns the service right.</p>
-                      </div>
+                      ) : (
+                        <div className="transfer-form disabled-policy">
+                          <strong>Non-transferable license</strong>
+                          <p>This Capability intentionally does not carry the TRANSFERABLE flag.</p>
+                        </div>
+                      )}
 
-                      {config?.delegation?.enabled !== false && selectedActive && (
+                      {config?.delegation?.enabled !== false && selectedActive && selectedDelegatable && (
                         <div className="delegation-box">
                           <div>
                             <strong>Delegate to an agent</strong>
@@ -1107,6 +1194,12 @@ export default function App() {
                           )}
                         </div>
                       )}
+                      {selectedActive && !selectedDelegatable && (
+                        <div className="transfer-form disabled-policy">
+                          <strong>Agent delegation unavailable</strong>
+                          <p>{selectedService?.delegationAllowed === false ? "The selected provider policy disables delegation." : "This Capability does not carry the DELEGATABLE flag."}</p>
+                        </div>
+                      )}
 
                       <details className="technical-details">
                         <summary>Technical details</summary>
@@ -1114,7 +1207,9 @@ export default function App() {
                           <div><span>Capability ID</span><code>{selectedCap.capability.capabilityId}</code></div>
                           <div><span>Owner</span><code>{address}</code></div>
                           <div><span>Provider</span><code>{selectedCap.capability.issuerId}</code></div>
-                          <div><span>Service ID</span><code>{selectedCap.capability.serviceId}</code></div>
+                          <div><span>Entitlement ID</span><code>{selectedCap.capability.serviceId}</code></div>
+                          <div><span>Policy mode</span><code>{selectedService?.rightMode ?? "owned"}</code></div>
+                          <div><span>Flags</span><code>{selectedTransferable ? "TRANSFERABLE " : ""}{selectedDelegatableFlag ? "DELEGATABLE " : ""}{selectedRevocable ? "REVOCABLE" : ""}</code></div>
                           <div><span>Out point</span><code>{selectedCap.cell.outPoint.txHash}:{selectedCap.cell.outPoint.index.toString()}</code></div>
                         </div>
                       </details>

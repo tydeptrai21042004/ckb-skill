@@ -75,3 +75,21 @@ test("expired binding pointer never resurrects an old payment quote", async () =
   now += 11;
   assert.equal(await state.getQuoteByBinding("expiring-request"), null);
 });
+
+test("provider license revocations persist and remain service-local", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "skillpass-revocations-"));
+  const file = join(dir, "state.json");
+  const capabilityId = `0x${"77".repeat(32)}`;
+  try {
+    const state = new LiveServiceState({ file });
+    await state.setRevocation("provider-a", capabilityId, { reason: "abuse", revokedAt: 123 });
+    const restarted = new LiveServiceState({ file });
+    assert.equal((await restarted.getRevocation("provider-a", capabilityId)).reason, "abuse");
+    assert.equal(await restarted.getRevocation("provider-b", capabilityId), null);
+    assert.equal((await restarted.listRevocations("provider-a")).length, 1);
+    assert.equal(await restarted.deleteRevocation("provider-a", capabilityId), true);
+    assert.equal(await restarted.getRevocation("provider-a", capabilityId), null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

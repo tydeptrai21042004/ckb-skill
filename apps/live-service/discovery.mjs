@@ -16,9 +16,9 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
   const issuers = Array.isArray(trustedIssuerIds) && trustedIssuerIds.length ? trustedIssuerIds : (trustedIssuerId ? [trustedIssuerId] : []);
   const list = normalizeServices({ services, serviceId, maxInputChars });
   return Object.freeze({
-    schemaVersion: "2.0",
+    schemaVersion: "2.1",
     product: "SkillPass",
-    positioning: "portable CKB service rights + optional Fiber/x402 usage settlement",
+    positioning: "portable CKB entitlements for services, agents, and digital assets + optional Fiber/x402 usage settlement",
     service: {
       id: list[0]?.id,
       name: list[0]?.slug || "paper-analyzer-v1",
@@ -38,6 +38,15 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       kind: service.kind,
       policyId: service.policyId,
       policyFingerprint: service.policyFingerprint,
+      entitlementIds: service.entitlementIds || [service.id],
+      issuanceEntitlementId: service.issuanceEntitlementId || service.id,
+      bundleId: service.bundleId || null,
+      rightMode: service.rightMode || "owned",
+      transferableRequired: service.transferableRequired !== false,
+      delegationAllowed: service.delegationAllowed !== false,
+      delegatableRequired: service.delegatableRequired !== false,
+      trustedIssuerId: service.trustedIssuerId || null,
+      trustedIssuerIds: service.trustedIssuerIds || (service.trustedIssuerId ? [service.trustedIssuerId] : []),
       payment: service.payment || { required: false },
     })),
     chain: {
@@ -50,7 +59,13 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       providerPolicy: policy ? {
         id: policy.id,
         fingerprint: policy.fingerprint || null,
+        entitlementIds: policy.entitlementIds || [policy.serviceId],
+        issuanceEntitlementId: policy.issuanceEntitlementId || policy.serviceId,
+        bundleId: policy.bundleId || null,
+        rightMode: policy.rightMode || "owned",
         transferableRequired: Boolean(policy.transferableRequired),
+        delegationAllowed: policy.delegationAllowed !== false,
+        delegatableRequired: Boolean(policy.delegatableRequired),
         termsHash: policy.termsHash || null,
         url: policy.url || null,
       } : undefined,
@@ -116,8 +131,8 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
     "/api/capability/status": {
       post: {
         summary: "Inspect a SkillPass capability from fresh CKB state and return an evidence bundle",
-        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outPoint"], properties: { outPoint: outPointSchema } } } } },
-        responses: { "200": { description: "Capability is live and satisfies its registered provider policy" }, "403": { description: "Capability is consumed or violates service policy" } },
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outPoint"], properties: { outPoint: outPointSchema, service: { type: "string", description: "Optional endpoint service slug when one entitlement is accepted by multiple providers" } } } } } },
+        responses: { "200": { description: "Capability is live and satisfies its registered provider policy" }, "403": { description: "Capability is consumed, provider-revoked, or violates service policy" } },
       },
     },
     "/api/challenge": {
@@ -159,7 +174,7 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
           "200": { description: "Authorized protected result" },
           ...(paymentsRequired ? { "402": { description: "Fiber/x402 payment required" } } : {}),
           "401": { description: "Owner/delegate signature, challenge, or delegation rejected" },
-          "403": { description: "Capability missing, expired, wrong service, untrusted issuer, non-portable, or current owner invalid" },
+          "403": { description: "Capability missing, expired, wrong service, untrusted issuer, incompatible entitlement policy, provider-revoked license, or current owner invalid" },
         },
       },
     };
@@ -174,8 +189,8 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
     openapi: "3.1.0",
     info: {
       title: "SkillPass protected service gateway API",
-      version: "1.2.0",
-      description: "Multi-service portable CKB service-right authorization with owner-signed budgeted agent delegation and optional Fiber/x402 per-use payment.",
+      version: "1.3.0",
+      description: "Multi-service CKB entitlement authorization with shared bundle entitlements, owned-right/revocable-license policies, owner-signed budgeted agent delegation, and optional Fiber/x402 per-use payment.",
     },
     paths,
   });
@@ -184,10 +199,10 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
 
 export function buildAgentSpec({ services = [], paymentsRequired = false } = {}) {
   const lines = [
-    "SkillPass Agent Protocol v1.2",
-    "Purpose: invoke services protected by a live transferable CKB Capability without giving the service or agent custody of the owner private key.",
+    "SkillPass Agent Protocol v1.3",
+    "Purpose: invoke services protected by a live CKB Capability without giving the service or agent custody of the owner private key.",
     "Discovery: GET /.well-known/skillpass.json and GET /api/services.",
-    "1. Select a service and a live Capability whose serviceId matches it.",
+    "1. Select a service and a live Capability whose entitlement serviceId is accepted by that service policy. A shared bundle entitlement may be accepted by multiple independent services.",
     "2. Hash the exact service input with SHA-256 (stable canonical JSON for JSON inputs).",
     "3. POST /api/challenge with acting CKB address, capability outPoint, requestHash, service slug, and delegationId when delegated.",
     "4. Sign the returned challenge message with the acting wallet. Never reuse a nonce.",
@@ -196,7 +211,7 @@ export function buildAgentSpec({ services = [], paymentsRequired = false } = {})
     paymentsRequired
       ? "7. If HTTP 402 is returned, pay the supplied Fiber/x402 requirement, obtain a FRESH wallet challenge, then retry with PAYMENT-SIGNATURE."
       : "7. This deployment does not require Fiber/x402 payment.",
-    "Authorization order: fresh intent signature -> live CKB Cell/policy -> delegation scope/budget -> optional Fiber payment -> protected service.",
+    "Authorization order: fresh intent signature -> live CKB Cell/provider policy -> provider-local license revocation (license mode) -> delegation scope/budget -> optional Fiber payment -> protected service.",
     "Do not send private keys. Treat exported delegation credentials as bearer-sensitive authorization material until expiry or Capability transfer.",
   ];
   if (services.length) lines.push(`Services: ${services.map((service) => `${service.slug} (${service.endpoint || `/api/invoke/${service.slug}`})`).join(", ")}.`);

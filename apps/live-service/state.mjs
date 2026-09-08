@@ -9,6 +9,12 @@ export class LiveServiceState {
   quoteKey(hash) { return `quote:${String(hash).toLowerCase()}`; }
   quoteBindingKey(binding) { return `quote-binding:${String(binding).toLowerCase()}`; }
   receiptKey(hash) { return `receipt:${String(hash).toLowerCase()}`; }
+  revocationKey(serviceSlug, capabilityId) {
+    const service = String(serviceSlug || "").trim().toLowerCase();
+    const capability = String(capabilityId || "").trim().toLowerCase();
+    return `revocation:${service}:${capability}`;
+  }
+  revocationPrefix(serviceSlug) { return `revocation:${String(serviceSlug || "").trim().toLowerCase()}:`; }
 
   async setQuote(hash, quote) {
     const normalizedHash = String(hash).toLowerCase();
@@ -56,6 +62,29 @@ export class LiveServiceState {
 
   async setReceipt(hash, receipt) { return this.store.set(this.receiptKey(hash), receipt); }
   async getReceipt(hash) { return this.store.get(this.receiptKey(hash)); }
+
+  async setRevocation(serviceSlug, capabilityId, record = {}) {
+    const key = this.revocationKey(serviceSlug, capabilityId);
+    return this.store.set(key, {
+      service: String(serviceSlug || "").trim().toLowerCase(),
+      capabilityId: String(capabilityId || "").trim().toLowerCase(),
+      revokedAt: Number(record.revokedAt || this.now()),
+      ...record,
+    });
+  }
+
+  async getRevocation(serviceSlug, capabilityId) {
+    return this.store.get(this.revocationKey(serviceSlug, capabilityId));
+  }
+
+  async deleteRevocation(serviceSlug, capabilityId) {
+    return this.store.delete(this.revocationKey(serviceSlug, capabilityId));
+  }
+
+  async listRevocations(serviceSlug, { limit = 100 } = {}) {
+    if (typeof this.store.listPrefix !== "function") throw new Error("record store does not support prefix listing");
+    return this.store.listPrefix(this.revocationPrefix(serviceSlug), { limit });
+  }
 
   async pruneExpiredQuotes() {
     const now = this.now();

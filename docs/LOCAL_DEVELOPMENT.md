@@ -18,7 +18,7 @@ node --version
 npm --version
 ```
 
-Use Node.js 22 or newer. The repository includes `.nvmrc` with `22` for version managers that support it.
+Use Node.js 24 LTS or newer. The repository includes `.nvmrc` with `24.20.0` for version managers that support it.
 
 ## 3. One-time setup
 
