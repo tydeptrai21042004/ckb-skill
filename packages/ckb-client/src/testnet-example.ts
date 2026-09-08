@@ -11,11 +11,13 @@ import { buildIssueCapabilityTx, sendAndWait, type Deployment } from "./live.js"
 export async function issuePaperAnalyzerPass(
   signer: ccc.Signer,
   deployment: Deployment,
+  recipientAddress: string,
   expiresAtUnix: bigint,
 ) {
   const built = await buildIssueCapabilityTx({
     signer,
     deployment,
+    recipientAddress,
     serviceId: PAPER_ANALYZER_V1_SERVICE_ID,
     expiry: expiresAtUnix,
     flags: FLAG_TRANSFERABLE,

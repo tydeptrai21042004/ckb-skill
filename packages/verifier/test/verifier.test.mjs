@@ -31,28 +31,48 @@ function issue(chain, { serviceId = SERVICE, expiry = 200n } = {}) {
 test("current owner succeeds", () => {
   const chain = new InMemoryChain();
   const cell = issue(chain);
-  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   assert.equal(verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER }).capability.capabilityId, CAP_ID);
 });
 
 test("unrelated wallet fails", () => {
   const chain = new InMemoryChain();
   const cell = issue(chain);
-  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   assert.throws(() => verifier.verify({ outPoint: cell.outPoint, requesterLockHash: STRANGER }), /does not control/);
 });
 
+
+
+test("capability from an untrusted issuer fails even when requester is current owner", () => {
+  const chain = new InMemoryChain();
+  const fakeIssuer = `0x${"55".repeat(32)}`;
+  const cell = chain.issue({
+    ownerLockHash: OWNER,
+    issuerInputLockHash: fakeIssuer,
+    data: encodeCapabilityHex({
+      version: 1,
+      flags: FLAG_TRANSFERABLE,
+      serviceId: SERVICE,
+      issuerId: fakeIssuer,
+      capabilityId: `0x${"66".repeat(32)}`,
+      expiry: 200n,
+    }),
+  });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
+  assert.throws(() => verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER }), (error) => error.code === "UNTRUSTED_ISSUER");
+});
 test("expired capability fails at boundary", () => {
   const chain = new InMemoryChain();
   const cell = issue(chain, { expiry: 100n });
-  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   assert.throws(() => verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER }), /expired/);
 });
 
 test("wrong-service capability fails", () => {
   const chain = new InMemoryChain();
   const cell = issue(chain, { serviceId: stableId32("other-service") });
-  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   assert.throws(() => verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER }), /different service/);
 });
 
@@ -60,7 +80,7 @@ test("consumed old capability fails", () => {
   const chain = new InMemoryChain();
   const cell = issue(chain);
   chain.consumeUnsafeForTest(cell.outPoint);
-  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, clock: () => 100n });
+  const verifier = new CapabilityVerifier({ chain, expectedServiceId: SERVICE, expectedIssuerId: ISSUER, clock: () => 100n });
   assert.throws(() => verifier.verify({ outPoint: cell.outPoint, requesterLockHash: OWNER }), /missing or already consumed/);
 });
 

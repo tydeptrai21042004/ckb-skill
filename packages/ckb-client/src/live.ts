@@ -18,8 +18,11 @@ export type Deployment = {
 };
 
 export type IssueParams = {
+  /** Provider/issuer wallet. This signer funds and authorizes issuance. */
   signer: ccc.Signer;
   deployment: Deployment;
+  /** Recipient that becomes the first service-right owner (for example Alice). */
+  recipientAddress: string;
   serviceId: `0x${string}`;
   expiry: bigint;
   flags: number;
@@ -81,9 +84,17 @@ function addCapabilityCellDep(tx: ccc.Transaction, deployment: Deployment): void
 }
 
 export async function buildIssueCapabilityTx(params: IssueParams) {
-  const ownerAddress = await params.signer.getRecommendedAddressObj();
-  const ownerLock = ownerAddress.script;
-  const issuerId = normalizeHex32(ownerLock.hash(), "issuerId");
+  validateDeployment(params.deployment);
+  if (!String(params.recipientAddress || "").trim()) throw new Error("recipientAddress is required");
+  if (!hasFlag(params.flags, FLAG_TRANSFERABLE)) throw new Error("Week 9 portable service-right issuance requires FLAG_TRANSFERABLE");
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  if (params.expiry <= now) throw new Error("capability expiry must be in the future");
+
+  const issuerAddress = await params.signer.getRecommendedAddressObj();
+  const issuerLock = issuerAddress.script;
+  const issuerId = normalizeHex32(issuerLock.hash(), "issuerId");
+  const recipient = await ccc.Address.fromString(params.recipientAddress.trim(), params.signer.client);
+  const ownerLock = recipient.script;
 
   // First create an output with same-size placeholder args/data. This allows
   // CCC to select the first funding input. Once tx.inputs[0] exists, derive the
@@ -128,7 +139,14 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
     throw new Error("first transaction input changed while completing fee");
   }
 
-  return { tx, issuerId, capabilityId, data };
+  return {
+    tx,
+    issuerId,
+    capabilityId,
+    data,
+    recipientAddress: params.recipientAddress.trim(),
+    recipientLockHash: normalizeHex32(ownerLock.hash(), "recipientLockHash"),
+  };
 }
 
 export async function buildTransferCapabilityTx(params: {
@@ -150,6 +168,10 @@ export async function buildTransferCapabilityTx(params: {
   const capability = decodeCapability(cell.outputData);
   if (cell.cellOutput.type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
     throw new Error("Capability data does not match Type Script identity args");
+  }
+  const signerAddress = await params.signer.getRecommendedAddressObj();
+  if (!cell.cellOutput.lock.eq(signerAddress.script)) {
+    throw new Error("connected signer is not the current capability owner");
   }
   if (!hasFlag(capability, FLAG_TRANSFERABLE)) {
     throw new Error("Capability is non-transferable");
@@ -181,6 +203,9 @@ export async function sendAndWait(signer: ccc.Signer, tx: ccc.Transaction, timeo
 export async function discoverOwnedCapabilities(params: {
   signer: ccc.Signer;
   deployment: Deployment;
+  expectedServiceId?: `0x${string}`;
+  trustedIssuerId?: `0x${string}`;
+  requireTransferable?: boolean;
 }) {
   validateDeployment(params.deployment);
   const found: Array<{ cell: ccc.Cell; capability: ReturnType<typeof decodeCapability> }> = [];
@@ -194,12 +219,29 @@ export async function discoverOwnedCapabilities(params: {
     try {
       const capability = decodeCapability(cell.outputData);
       if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) continue;
+      if (params.expectedServiceId && capability.serviceId.toLowerCase() !== normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()) continue;
+      if (params.trustedIssuerId && capability.issuerId.toLowerCase() !== normalizeHex32(params.trustedIssuerId, "trustedIssuerId").toLowerCase()) continue;
+      if ((params.requireTransferable ?? false) && !hasFlag(capability, FLAG_TRANSFERABLE)) continue;
       found.push({ cell, capability });
     } catch {
       // Discovery stays robust even if a foreign malformed cell is indexed.
     }
   }
   return found;
+}
+
+/** Resolve the current live owner without consulting a provider database. */
+export async function findCurrentOwner(params: {
+  client: ccc.Client;
+  outPoint: ccc.OutPointLike;
+}) {
+  const cell = await params.client.getCellLive(params.outPoint, true, true);
+  if (!cell) throw new Error("capability cell is missing or already consumed");
+  return {
+    cell,
+    lock: cell.cellOutput.lock,
+    lockHash: normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+  };
 }
 
 /** Verify service authorization directly against the current live CKB cell. */
@@ -209,7 +251,9 @@ export async function verifyLiveCapability(params: {
   outPoint: ccc.OutPointLike;
   requesterAddress: string;
   expectedServiceId: `0x${string}`;
+  trustedIssuerId: `0x${string}`;
   nowUnixSeconds: bigint;
+  requireTransferable?: boolean;
 }) {
   const cell = await params.client.getCellLive(params.outPoint, true, true);
   if (!cell) throw new Error("capability cell is missing or already consumed");
@@ -226,6 +270,12 @@ export async function verifyLiveCapability(params: {
   }
   if (capability.serviceId.toLowerCase() !== normalizeHex32(params.expectedServiceId, "expectedServiceId").toLowerCase()) {
     throw new Error("capability is for a different service");
+  }
+  if (capability.issuerId.toLowerCase() !== normalizeHex32(params.trustedIssuerId, "trustedIssuerId").toLowerCase()) {
+    throw new Error("capability was not issued by the trusted service provider");
+  }
+  if ((params.requireTransferable ?? true) && !hasFlag(capability, FLAG_TRANSFERABLE)) {
+    throw new Error("service policy requires a transferable capability");
   }
   if (!isActive(capability, params.nowUnixSeconds)) {
     throw new Error("capability is expired");
