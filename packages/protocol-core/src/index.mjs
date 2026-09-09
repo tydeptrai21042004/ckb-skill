@@ -41,16 +41,25 @@ export function validateTransition({ inputData, outputData, inputLockHash, outpu
   const after = decodeCapability(outputData);
   const args = decodeTypeArgs(typeArgs);
 
-  for (const [field, label] of [
+  const immutableFields = [
     ["version", "version"],
     ["flags", "flags"],
     ["serviceId", "service_id"],
     ["issuerId", "issuer_id"],
     ["capabilityId", "capability_id"],
     ["expiry", "expiry"],
-  ]) {
+  ];
+  if (before.version === 2 || after.version === 2) {
+    immutableFields.push(
+      ["subjectType", "subject_type"],
+      ["bindingMode", "binding_mode"],
+      ["subjectId", "subject_id"],
+      ["policyHash", "policy_hash"],
+    );
+  }
+  for (const [field, label] of immutableFields) {
     if (before[field] !== after[field]) {
-      throw new ProtocolError("IMMUTABLE_FIELD_CHANGED", `${label} is immutable in capability v1 transitions`);
+      throw new ProtocolError("IMMUTABLE_FIELD_CHANGED", `${label} is immutable in capability transitions`);
     }
   }
 

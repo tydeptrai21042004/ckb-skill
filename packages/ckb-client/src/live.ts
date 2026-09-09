@@ -7,6 +7,7 @@ import {
   normalizeHex32,
   hasFlag,
   FLAG_TRANSFERABLE,
+  BINDING_ATOMIC,
 } from "@skillpass/capability-codec";
 
 export type Deployment = {
@@ -26,6 +27,12 @@ export type IssueParams = {
   serviceId: `0x${string}`;
   expiry: bigint;
   flags: number;
+  /** Optional Capability v2 fields. Omit for the deployed v1 format. */
+  version?: 1 | 2;
+  subjectType?: number;
+  bindingMode?: number;
+  subjectId?: `0x${string}`;
+  policyHash?: `0x${string}`;
 };
 
 const ZERO32 = `0x${"00".repeat(32)}` as `0x${string}`;
@@ -112,6 +119,15 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
   const now = BigInt(Math.floor(Date.now() / 1000));
   if (params.expiry <= now) throw new Error("capability expiry must be in the future");
 
+  const capabilityVersion = params.version ?? 1;
+  if (![1, 2].includes(capabilityVersion)) throw new Error("capability version must be 1 or 2");
+  const v2Fields = capabilityVersion === 2 ? {
+    subjectType: params.subjectType,
+    bindingMode: params.bindingMode,
+    subjectId: params.subjectId,
+    policyHash: params.policyHash,
+  } : {};
+
   const issuerAddress = await params.signer.getRecommendedAddressObj();
   const issuerLock = issuerAddress.script;
   const issuerId = normalizeHex32(issuerLock.hash(), "issuerId");
@@ -123,7 +139,8 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
   // singleton capability ID from that input exactly like CKB Type ID.
   const placeholderType = capabilityTypeScript(params.deployment, issuerId, ZERO32);
   const placeholderData = encodeCapabilityHex({
-    version: 1,
+    version: capabilityVersion,
+    ...v2Fields,
     flags: params.flags,
     serviceId: params.serviceId,
     issuerId,
@@ -143,7 +160,8 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
   const capabilityId = deriveCapabilityId(tx.inputs[0], 0);
   const type = capabilityTypeScript(params.deployment, issuerId, capabilityId);
   const data = encodeCapabilityHex({
-    version: 1,
+    version: capabilityVersion,
+    ...v2Fields,
     flags: params.flags,
     serviceId: params.serviceId,
     issuerId,
@@ -202,6 +220,9 @@ export async function buildTransferCapabilityTx(params: {
   }
   if (!hasFlag(capability, FLAG_TRANSFERABLE)) {
     throw new Error("Capability is non-transferable");
+  }
+  if (capability.version === 2 && capability.bindingMode === BINDING_ATOMIC) {
+    throw new Error("atomic-bound Capability v2 must be transferred with its subject through a subject adapter");
   }
   if (!isActive(capability, BigInt(Math.floor(Date.now() / 1000)))) {
     throw new Error("refusing to transfer an expired capability");

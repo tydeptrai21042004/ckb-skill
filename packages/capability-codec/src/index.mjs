@@ -1,5 +1,17 @@
 export const CAPABILITY_VERSION = 1;
+export const CAPABILITY_VERSION_V2 = 2;
 export const CAPABILITY_DATA_LENGTH = 106;
+export const CAPABILITY_V2_DATA_LENGTH = 172;
+export const SUBJECT_NONE = 0;
+export const SUBJECT_SPORE = 1;
+export const SUBJECT_DOB = 2;
+export const SUBJECT_AGENT = 3;
+export const SUBJECT_DEVICE = 4;
+export const SUBJECT_CUSTOM = 255;
+export const BINDING_HOLDER = 0;
+export const BINDING_SUBJECT_OWNER = 1;
+export const BINDING_ATOMIC = 2;
+export const BINDING_LICENSE = 3;
 export const FLAG_TRANSFERABLE = 1 << 0;
 export const FLAG_DELEGATABLE = 1 << 1;
 export const FLAG_REVOCABLE = 1 << 2;
@@ -84,8 +96,37 @@ function validateFlags(flags) {
 
 export function normalizeCapability(input) {
   const version = input?.version ?? CAPABILITY_VERSION;
-  if (version !== CAPABILITY_VERSION) {
+  if (version === CAPABILITY_VERSION) {
+    return Object.freeze({
+      version,
+      flags: validateFlags(input?.flags ?? 0),
+      serviceId: normalizeHex32(input?.serviceId, "serviceId"),
+      issuerId: normalizeHex32(input?.issuerId, "issuerId"),
+      capabilityId: normalizeHex32(input?.capabilityId, "capabilityId"),
+      expiry: normalizeExpiry(input?.expiry),
+    });
+  }
+  if (version !== CAPABILITY_VERSION_V2) {
     throw new CapabilityCodecError("UNSUPPORTED_VERSION", `unsupported version ${version}`);
+  }
+  const subjectType = Number(input?.subjectType ?? SUBJECT_NONE);
+  if (!Number.isInteger(subjectType) || subjectType < 0 || subjectType > 0xff) {
+    throw new CapabilityCodecError("INVALID_SUBJECT_TYPE", "subjectType must be an unsigned byte");
+  }
+  const bindingMode = Number(input?.bindingMode ?? BINDING_HOLDER);
+  if (![BINDING_HOLDER, BINDING_SUBJECT_OWNER, BINDING_ATOMIC, BINDING_LICENSE].includes(bindingMode)) {
+    throw new CapabilityCodecError("INVALID_BINDING_MODE", "bindingMode is not supported");
+  }
+  const subjectId = normalizeHex32(input?.subjectId ?? `0x${"00".repeat(32)}`, "subjectId");
+  const policyHash = normalizeHex32(input?.policyHash ?? `0x${"00".repeat(32)}`, "policyHash");
+  if (subjectType === SUBJECT_NONE && subjectId !== `0x${"00".repeat(32)}`) {
+    throw new CapabilityCodecError("INVALID_SUBJECT", "subjectId must be zero when subjectType is SUBJECT_NONE");
+  }
+  if (subjectType !== SUBJECT_NONE && subjectId === `0x${"00".repeat(32)}`) {
+    throw new CapabilityCodecError("INVALID_SUBJECT", "subjectId is required for a bound Capability v2");
+  }
+  if (bindingMode !== BINDING_HOLDER && subjectType === SUBJECT_NONE) {
+    throw new CapabilityCodecError("INVALID_BINDING_MODE", "subject-bound modes require a subject");
   }
   return Object.freeze({
     version,
@@ -94,18 +135,28 @@ export function normalizeCapability(input) {
     issuerId: normalizeHex32(input?.issuerId, "issuerId"),
     capabilityId: normalizeHex32(input?.capabilityId, "capabilityId"),
     expiry: normalizeExpiry(input?.expiry),
+    subjectType,
+    bindingMode,
+    subjectId,
+    policyHash,
   });
 }
 
 export function encodeCapability(input) {
   const cap = normalizeCapability(input);
-  const out = new Uint8Array(CAPABILITY_DATA_LENGTH);
+  const out = new Uint8Array(cap.version === CAPABILITY_VERSION_V2 ? CAPABILITY_V2_DATA_LENGTH : CAPABILITY_DATA_LENGTH);
   out[0] = cap.version;
   out[1] = cap.flags;
   out.set(hexToBytes(cap.serviceId, 32, "serviceId"), 2);
   out.set(hexToBytes(cap.issuerId, 32, "issuerId"), 34);
   out.set(hexToBytes(cap.capabilityId, 32, "capabilityId"), 66);
   new DataView(out.buffer, out.byteOffset, out.byteLength).setBigUint64(98, cap.expiry, true);
+  if (cap.version === CAPABILITY_VERSION_V2) {
+    out[106] = cap.subjectType;
+    out[107] = cap.bindingMode;
+    out.set(hexToBytes(cap.subjectId, 32, "subjectId"), 108);
+    out.set(hexToBytes(cap.policyHash, 32, "policyHash"), 140);
+  }
   return out;
 }
 
@@ -121,23 +172,36 @@ export function decodeCapability(data) {
       : data instanceof Uint8Array || ArrayBuffer.isView(data)
         ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
         : new Uint8Array();
-  if (bytes.length !== CAPABILITY_DATA_LENGTH) {
+  if (bytes.length === CAPABILITY_DATA_LENGTH) {
+    if (bytes[0] !== CAPABILITY_VERSION) {
+      throw new CapabilityCodecError("UNSUPPORTED_VERSION", `unsupported version ${bytes[0]}`);
+    }
+  } else if (bytes.length === CAPABILITY_V2_DATA_LENGTH) {
+    if (bytes[0] !== CAPABILITY_VERSION_V2) {
+      throw new CapabilityCodecError("UNSUPPORTED_VERSION", `unsupported version ${bytes[0]}`);
+    }
+  } else {
     throw new CapabilityCodecError(
       "INVALID_LENGTH",
-      `expected ${CAPABILITY_DATA_LENGTH} bytes, got ${bytes.length}`,
+      `expected ${CAPABILITY_DATA_LENGTH} bytes (v1) or ${CAPABILITY_V2_DATA_LENGTH} bytes (v2), got ${bytes.length}`,
     );
   }
-  if (bytes[0] !== CAPABILITY_VERSION) {
-    throw new CapabilityCodecError("UNSUPPORTED_VERSION", `unsupported version ${bytes[0]}`);
-  }
   validateFlags(bytes[1]);
-  return Object.freeze({
+  const base = {
     version: bytes[0],
     flags: bytes[1],
     serviceId: bytesToHex(bytes.subarray(2, 34)),
     issuerId: bytesToHex(bytes.subarray(34, 66)),
     capabilityId: bytesToHex(bytes.subarray(66, 98)),
     expiry: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(98, true),
+  };
+  if (bytes[0] === CAPABILITY_VERSION) return Object.freeze(base);
+  return normalizeCapability({
+    ...base,
+    subjectType: bytes[106],
+    bindingMode: bytes[107],
+    subjectId: bytesToHex(bytes.subarray(108, 140)),
+    policyHash: bytesToHex(bytes.subarray(140, 172)),
   });
 }
 
