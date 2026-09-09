@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import DisconnectedHome from "./DisconnectedHome";
 import { ccc } from "@ckb-ccc/connector-react";
 import QRCode from "react-qr-code";
 import {
@@ -896,22 +897,7 @@ export default function App() {
             </div>
           </section>
         ) : !connected ? (
-          <section className="connect-view">
-            <div className="connect-copy">
-              <div className="eyebrow">Portable service rights</div>
-              <h1>Use the service with your CKB pass.</h1>
-              <p>Connect your wallet. SkillPass verifies the current on-chain owner before each protected request.</p>
-              <button className="button primary large" disabled={!config} onClick={() => open()}>
-                <Icon name="wallet" size={18} />
-                {config ? "Connect wallet" : "Loading service…"}
-              </button>
-              <div className="trust-row" aria-label="Security notes">
-                <span><Icon name="shield" size={14} /> Wallet signs locally</span>
-                <span>CKB Testnet</span>
-                <span>No private keys requested</span>
-              </div>
-            </div>
-          </section>
+          <DisconnectedHome ready={Boolean(config)} onConnect={() => open()} />
         ) : (
           <div className="workspace">
             <aside className="sidebar">

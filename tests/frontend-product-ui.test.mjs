@@ -57,3 +57,16 @@ test("product frontend dev command starts the live API alongside Vite", () => {
   assert.match(viteConfig, /process\.env\.SKILLPASS_API_ORIGIN/);
   assert.match(viteConfig, /"\/.well-known": apiOrigin/);
 });
+
+test("disconnected home explains the real portable-right lifecycle before wallet connection", () => {
+  const home = readFileSync("apps/web/src/DisconnectedHome.tsx", "utf8");
+  assert.match(liveApp, /<DisconnectedHome ready=\{Boolean\(config\)\} onConnect=\{\(\) => open\(\)\} \/>/);
+  assert.match(home, /Own the service right, not another account\./);
+  assert.match(home, /Receive a service right/);
+  assert.match(home, /Delegate to an agent/);
+  assert.match(home, /Transfer the right/);
+  assert.match(home, /Agent Pro Pass/);
+  assert.match(home, /Alice transfers the pass to Bob/);
+  assert.match(home, /Issuance remains a provider action/);
+  assert.match(home, /Entitlement and payment are separate/);
+});
