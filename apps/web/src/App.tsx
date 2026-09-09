@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import DisconnectedHome from "./DisconnectedHome";
+import ConnectedNoPass from "./ConnectedNoPass";
 import { ccc } from "@ckb-ccc/connector-react";
 import QRCode from "react-qr-code";
 import {
@@ -276,10 +277,24 @@ function formatServiceName(value?: string) {
 
 function loadDraft() {
   try {
-    return localStorage.getItem("skillpass.paperDraft") || "";
+    return localStorage.getItem("skillpass.serviceDraft") || localStorage.getItem("skillpass.paperDraft") || "";
   } catch {
     return "";
   }
+}
+
+function serviceInputLabel(service?: ServiceDescriptor) {
+  if (service?.slug === "model-api-v1") return "Model request";
+  if (service?.slug === "private-data-api-v1") return "Data query (JSON)";
+  if (service?.slug === "compute-api-v1") return "Compute request (JSON)";
+  return service?.inputKind === "json" ? "JSON request" : "Protected input";
+}
+
+function serviceInputPlaceholder(service?: ServiceDescriptor) {
+  if (service?.slug === "model-api-v1") return "Summarize the protected context available to this client.";
+  if (service?.slug === "private-data-api-v1") return '{"query":"available pro assets","limit":3}';
+  if (service?.slug === "compute-api-v1") return '{"task":"inference-job","cpu":2,"memoryMb":2048}';
+  return service?.inputKind === "json" ? '{"query":"example"}' : "Enter a protected service request…";
 }
 
 function outPointJson(cell: Found["cell"]) {
@@ -499,7 +514,7 @@ export default function App() {
   }, [config]);
 
   useEffect(() => {
-    try { localStorage.setItem("skillpass.paperDraft", text); } catch {}
+    try { localStorage.setItem("skillpass.serviceDraft", text); } catch {}
   }, [text]);
 
   useEffect(() => {
@@ -757,8 +772,8 @@ export default function App() {
     if (!signer || !address || !selectedService || !delegateAddress.trim()) return;
     setBusy("delegate");
     try {
-      if (selectedService.delegationAllowed === false) throw new Error("The selected provider policy disables agent delegation.");
-      if (!hasFlag(cap.capability, FLAG_DELEGATABLE)) throw new Error("This Capability does not permit agent delegation.");
+      if (selectedService.delegationAllowed === false) throw new Error("The selected provider policy disables delegation.");
+      if (!hasFlag(cap.capability, FLAG_DELEGATABLE)) throw new Error("This Capability does not permit delegation.");
       const bytes = crypto.getRandomValues(new Uint8Array(16));
       const grantId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
       const issuedAt = Date.now();
@@ -832,6 +847,10 @@ export default function App() {
   const systemReady = Boolean(config) && (!health || (ckbReady && fiberReady));
   const paymentRequirement = pendingPayment?.required.accepts[0];
   const markerEntries = (Object.entries(result?.markerHits ?? {}) as Array<[string, number]>).filter(([, count]) => count > 0);
+  const resultMessage = typeof result?.response === "string" ? result.response : typeof result?.note === "string" ? result.note : "";
+  const resultRows = Array.isArray(result?.rows) ? result.rows : [];
+  const resultState = typeof result?.state === "string" ? result.state : "";
+  const resultJobId = typeof result?.jobId === "string" ? result.jobId : "";
 
   return (
     <div className="app-shell">
@@ -972,35 +991,36 @@ export default function App() {
             </aside>
 
             <section className="service-workspace">
-              <div className="service-header">
-                <div>
-                  <span className="eyebrow">Protected service</span>
-                  <h1>{serviceName}</h1>
-                  <p>{selectedService?.description || "Access is verified from the live CKB Cell when you run the service."}</p>
-                  {compatibleServices.length > 1 && (
-                    <label className="bundle-service-picker">
-                      <span>Use this shared entitlement with</span>
-                      <select value={selectedService?.slug ?? ""} onChange={(e) => { setSelectedServiceSlug(e.target.value); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); }}>
-                        {compatibleServices.map((service) => <option key={service.slug} value={service.slug}>{service.name}</option>)}
-                      </select>
-                    </label>
-                  )}
-                </div>
-                <div className="service-meta-chips">
-                  {selectedService?.bundleId && <span className="meta-chip">Bundle: {selectedService.bundleId}</span>}
-                  {selectedService?.rightMode === "license" && <span className="meta-chip">Revocable license</span>}
-                  {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
-                </div>
-              </div>
-
               {!selectedCap ? (
-                <div className="workspace-empty">
-                  <div className="empty-icon large"><Icon name="key" size={25} /></div>
-                  <h2>No active access pass</h2>
-                  <p>This wallet does not currently own a matching SkillPass service right.</p>
-                </div>
+                <ConnectedNoPass
+                  address={address}
+                  services={services}
+                  refreshing={busy === "refresh"}
+                  onRefresh={refresh}
+                />
               ) : (
                 <>
+                  <div className="service-header">
+                    <div>
+                      <span className="eyebrow">Protected service</span>
+                      <h1>{serviceName}</h1>
+                      <p>{selectedService?.description || "Access is verified from the live CKB Cell when you run the service."}</p>
+                      {compatibleServices.length > 1 && (
+                        <label className="bundle-service-picker">
+                          <span>Included services</span>
+                          <select value={selectedService?.slug ?? ""} onChange={(e) => { setSelectedServiceSlug(e.target.value); setText(""); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); }}>
+                            {compatibleServices.map((service) => <option key={service.slug} value={service.slug}>{service.name}</option>)}
+                          </select>
+                        </label>
+                      )}
+                    </div>
+                    <div className="service-meta-chips">
+                      {selectedService?.bundleId && <span className="meta-chip">Bundle: {selectedService.bundleId}</span>}
+                      {selectedService?.rightMode === "license" && <span className="meta-chip">Revocable license</span>}
+                      {config?.payments?.required && <span className="meta-chip paid">Usage payment required</span>}
+                    </div>
+                  </div>
+
                   <section className="editor-card">
                     <div className="selected-pass-line">
                       <div>
@@ -1009,14 +1029,14 @@ export default function App() {
                       <span>Valid until {formatExpiry(selectedCap.capability.expiry)}</span>
                     </div>
 
-                    <label className="editor-label" htmlFor="paper-input">{selectedService?.inputKind === "json" ? "JSON request" : "Protected input"}</label>
+                    <label className="editor-label" htmlFor="service-input">{serviceInputLabel(selectedService)}</label>
                     <textarea
-                      id="paper-input"
+                      id="service-input"
                       className="editor"
                       maxLength={maxInputChars}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      placeholder={selectedService?.inputKind === "json" ? '{"query":"example"}' : "Paste text to process…"}
+                      placeholder={serviceInputPlaceholder(selectedService)}
                       rows={13}
                       spellCheck={selectedService?.inputKind !== "json"}
                     />
@@ -1060,6 +1080,24 @@ export default function App() {
                         )}
 
                         {result.preview && <div className="result-block"><h3>Preview</h3><p>{result.preview}</p></div>}
+                        {resultMessage && <div className="result-block"><h3>Service response</h3><p>{resultMessage}</p></div>}
+                        {(resultState || resultJobId) && (
+                          <div className="result-block">
+                            <h3>Compute authorization</h3>
+                            <div className="marker-list">
+                              {resultState && <span>Status<strong>{resultState}</strong></span>}
+                              {resultJobId && <span>Job<strong>{resultJobId}</strong></span>}
+                            </div>
+                          </div>
+                        )}
+                        {resultRows.length > 0 && (
+                          <div className="result-block">
+                            <h3>Protected data</h3>
+                            <div className="data-row-list">
+                              {resultRows.slice(0, 8).map((row, index) => <code key={index}>{JSON.stringify(row)}</code>)}
+                            </div>
+                          </div>
+                        )}
                         {markerEntries.length > 0 && (
                           <div className="result-block">
                             <h3>Structure markers</h3>
@@ -1134,11 +1172,11 @@ export default function App() {
                       {config?.delegation?.enabled !== false && selectedActive && selectedDelegatable && (
                         <div className="delegation-box">
                           <div>
-                            <strong>Delegate to an agent</strong>
-                            <p>Create a short-lived, owner-signed credential. Your Capability Cell stays in this wallet, and transferring the pass invalidates the credential automatically.</p>
+                            <strong>Delegate access</strong>
+                            <p>Create a short-lived, owner-signed credential for another wallet, app, automation, device, or agent. Your Capability Cell stays in this wallet, and transfer invalidates the old credential automatically.</p>
                           </div>
                           <label>
-                            <span>Agent / delegate CKB address</span>
+                            <span>Delegate CKB address</span>
                             <input value={delegateAddress} onChange={(e) => setDelegateAddress(e.target.value)} placeholder="ckt1…" spellCheck={false} autoComplete="off" />
                           </label>
                           <label>
@@ -1182,7 +1220,7 @@ export default function App() {
                       )}
                       {selectedActive && !selectedDelegatable && (
                         <div className="transfer-form disabled-policy">
-                          <strong>Agent delegation unavailable</strong>
+                          <strong>Delegation unavailable</strong>
                           <p>{selectedService?.delegationAllowed === false ? "The selected provider policy disables delegation." : "This Capability does not carry the DELEGATABLE flag."}</p>
                         </div>
                       )}

@@ -9,7 +9,7 @@ test("agent discovery advertises capability authorization without private-key cu
     deployment,
     serviceId: `0x${"33".repeat(32)}`,
     trustedIssuerId: `0x${"44".repeat(32)}`,
-    policy: { id: "paper-analyzer-v1", transferableRequired: true, termsHash: null, url: null },
+    policy: { id: "service-bundle-v1", transferableRequired: true, termsHash: null, url: null },
     maxInputChars: 1234,
     payments: { required: true, amount: "100000", asset: "CKB", network: "fiber-testnet", proofMode: "invoice-status" },
   });
@@ -32,7 +32,7 @@ test("OpenAPI discovery accurately advertises 402 only when payment is enabled",
 
 test("agent spec is compact and explains fresh-challenge paid retry and budgeted delegation", async () => {
   const { buildAgentSpec } = await import("./discovery.mjs");
-  const text = buildAgentSpec({ services: [{ slug: "paper-analyzer-v1", endpoint: "/api/analyze" }], paymentsRequired: true });
+  const text = buildAgentSpec({ services: [{ slug: "model-api-v1", endpoint: "/api/analyze" }], paymentsRequired: true });
   assert.match(text, /FRESH wallet challenge/);
   assert.match(text, /maximum calls/);
   assert.match(text, /private keys/i);

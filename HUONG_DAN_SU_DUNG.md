@@ -72,7 +72,7 @@ và để provider phát hành pass theo business logic riêng.
 2. Nhập text cần phân tích.
 3. Draft được lưu trong `localStorage` của chính browser để tránh mất nội dung khi reload.
 4. Giới hạn hiện tại là 20.000 ký tự hoặc giá trị server trả trong `/api/config`.
-5. Nhấn **Use paper-analyzer-v1** hoặc **Request paid analysis**.
+5. Nhấn **Use Model API** hoặc **Request paid service**.
 
 Server sẽ tạo challenge một lần và wallet ký message. Sau đó server kiểm tra lại live Cell.
 
@@ -161,9 +161,9 @@ Gửi thêm:
 - transaction hash nếu lỗi liên quan CKB;
 - payment hash nếu lỗi liên quan Fiber;
 - log đã loại bỏ secret.
-## 9. Dùng SkillPass từ AI agent hoặc tool khác
+## 9. Tích hợp SkillPass từ app, automation, device hoặc agent (tùy chọn)
 
-Không cần scrape giao diện web. Agent/tool nên bắt đầu bằng:
+Không cần scrape giao diện web. Client tự động nên bắt đầu bằng:
 
 ```text
 GET /.well-known/skillpass.json
@@ -182,5 +182,5 @@ Flow chuẩn:
 7. retry đúng request với PAYMENT-SIGNATURE
 ```
 
-Không đưa private key vào agent/server. Agent chỉ điều phối; chữ ký CKB phải đến từ wallet/người giữ khóa. Nếu payment quote được tạo cho một request, không sửa nội dung rồi tái sử dụng invoice đó vì SkillPass bind payment vào protected request.
+Không đưa private key vào client/server. Client chỉ điều phối; chữ ký CKB phải đến từ wallet/người giữ khóa. Nếu payment quote được tạo cho một request, không sửa nội dung rồi tái sử dụng invoice đó vì SkillPass bind payment vào protected request.
 

@@ -2,9 +2,9 @@ function normalizeServices({ services, serviceId, maxInputChars = 20_000 } = {})
   if (Array.isArray(services) && services.length) return services;
   return [{
     id: serviceId,
-    slug: "paper-analyzer-v1",
-    name: "Paper Analyzer",
-    description: "Protected paper analysis",
+    slug: "model-api-v1",
+    name: "Model API",
+    description: "Protected model inference access",
     endpoint: "/api/analyze",
     inputKind: "text",
     maxInputChars,
@@ -18,10 +18,10 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
   return Object.freeze({
     schemaVersion: "2.1",
     product: "SkillPass",
-    positioning: "portable CKB entitlements for services, agents, and digital assets + optional Fiber/x402 usage settlement",
+    positioning: "portable CKB service entitlements for people, teams, apps, devices, digital assets, and automated clients + optional Fiber/x402 usage settlement",
     service: {
       id: list[0]?.id,
-      name: list[0]?.slug || "paper-analyzer-v1",
+      name: list[0]?.slug || "model-api-v1",
       endpoint: list[0]?.endpoint || "/api/analyze",
       method: "POST",
       maxInputChars: list[0]?.maxInputChars || maxInputChars,
@@ -180,9 +180,9 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
     };
   }
 
-  // Preserve the original v1 alias for existing clients.
+  // Preserve the original generic v1 route for older clients.
   if (!paths["/api/analyze"]) {
-    paths["/api/analyze"] = { post: { summary: "Backward-compatible alias for paper-analyzer-v1", responses: { "200": { description: "Authorized analysis" } } } };
+    paths["/api/analyze"] = { post: { summary: "Backward-compatible alias for the primary protected service", responses: { "200": { description: "Authorized service result" } } } };
   }
 
   return Object.freeze({
@@ -190,7 +190,7 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
     info: {
       title: "SkillPass protected service gateway API",
       version: "1.3.0",
-      description: "Multi-service CKB entitlement authorization with shared bundle entitlements, owned-right/revocable-license policies, owner-signed budgeted agent delegation, and optional Fiber/x402 per-use payment.",
+      description: "Multi-service CKB entitlement authorization with shared bundle entitlements, owned-right/revocable-license policies, optional owner-signed bounded delegation, and optional Fiber/x402 per-use payment.",
     },
     paths,
   });

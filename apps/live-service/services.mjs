@@ -1,12 +1,75 @@
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
-  PAPER_ANALYZER_V1_SERVICE_ID,
+  COMPUTE_API_V1_SERVICE_ID,
+  MODEL_API_V1_SERVICE_ID,
+  PRIVATE_DATA_API_V1_SERVICE_ID,
   PRIVATE_JSON_GATEWAY_V1_SERVICE_ID,
-  RESEARCH_INSIGHTS_V1_SERVICE_ID,
 } from "@skillpass/capability-codec/service-ids";
 import { createServiceRegistry, normalizeServiceSlug, validateServiceInput } from "@skillpass/service-gateway";
-import { analyzePaper, MAX_INPUT_CHARS } from "../demo-service/src/paper-analyzer.mjs";
-import { analyzeResearchText, MAX_RESEARCH_INPUT_CHARS } from "../demo-service/src/research-insights.mjs";
+
+const DEFAULT_MAX_INPUT_CHARS = 20_000;
+
+function requestFingerprint(value) {
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
+}
+
+function executeModelDemo(input) {
+  const text = String(input).trim();
+  const words = text ? text.split(/\s+/u).filter(Boolean).length : 0;
+  return {
+    mode: "demo",
+    service: "model-api-v1",
+    provider: "SkillPass demo provider",
+    requestFingerprint: requestFingerprint(text),
+    inputCharacters: text.length,
+    inputWords: words,
+    response: "Authorized model request accepted. Replace this built-in demo handler with a real provider upstream for production inference.",
+  };
+}
+
+function executePrivateDataDemo(input) {
+  const query = typeof input?.query === "string" ? input.query.trim().slice(0, 160) : "recent records";
+  const limitRaw = Number(input?.limit ?? 3);
+  const limit = Number.isSafeInteger(limitRaw) ? Math.max(1, Math.min(5, limitRaw)) : 3;
+  const rows = [
+    { id: "asset-001", tier: "pro", region: "apac", status: "available" },
+    { id: "asset-002", tier: "pro", region: "eu", status: "available" },
+    { id: "asset-003", tier: "standard", region: "us", status: "archived" },
+    { id: "asset-004", tier: "pro", region: "apac", status: "available" },
+    { id: "asset-005", tier: "standard", region: "eu", status: "available" },
+  ].slice(0, limit);
+  return {
+    mode: "demo",
+    service: "private-data-api-v1",
+    provider: "SkillPass demo provider",
+    query,
+    requestFingerprint: requestFingerprint(input),
+    rows,
+    note: "Sample protected data only. Configure an upstream JSON service for real private datasets.",
+  };
+}
+
+function executeComputeDemo(input) {
+  const task = typeof input?.task === "string" ? input.task.trim().slice(0, 120) : "inference-job";
+  const cpuRaw = Number(input?.cpu ?? 2);
+  const memoryRaw = Number(input?.memoryMb ?? 2048);
+  const cpu = Number.isFinite(cpuRaw) ? Math.max(1, Math.min(32, Math.round(cpuRaw))) : 2;
+  const memoryMb = Number.isFinite(memoryRaw) ? Math.max(256, Math.min(131072, Math.round(memoryRaw))) : 2048;
+  const fingerprint = requestFingerprint(input);
+  return {
+    mode: "demo",
+    service: "compute-api-v1",
+    provider: "SkillPass demo provider",
+    accepted: true,
+    jobId: `demo-${fingerprint}`,
+    task,
+    resources: { cpu, memoryMb },
+    state: "authorized",
+    note: "Authorization demo only; no real compute job is launched by the built-in handler.",
+  };
+}
 
 function isPrivateLiteral(hostname) {
   const host = String(hostname || "").replace(/^\[|\]$/g, "").toLowerCase();
@@ -158,26 +221,37 @@ function parseConfiguredUpstreams(env, options) {
 export function buildServiceRegistry({ env = process.env, production = false, timeoutMs = 8_000 } = {}) {
   const services = [
     {
-      slug: "paper-analyzer-v1",
-      id: PAPER_ANALYZER_V1_SERVICE_ID,
-      name: "Paper Analyzer",
-      description: "Fast protected text statistics and structure-marker analysis.",
+      slug: "model-api-v1",
+      id: MODEL_API_V1_SERVICE_ID,
+      name: "Model API",
+      description: "Protected model inference access. The built-in handler is a deterministic demo; providers can attach a real inference upstream.",
       inputKind: "text",
-      maxInputChars: MAX_INPUT_CHARS,
+      maxInputChars: DEFAULT_MAX_INPUT_CHARS,
       kind: "builtin",
       operationMode: "read",
-      async execute(input) { return analyzePaper(validateServiceInput(this, input)); },
+      async execute(input) { return executeModelDemo(validateServiceInput(this, input)); },
     },
     {
-      slug: "research-insights-v1",
-      id: RESEARCH_INSIGHTS_V1_SERVICE_ID,
-      name: "Research Insights",
-      description: "Protected manuscript structure, readability, citation-like, equation-like and completeness signals.",
-      inputKind: "text",
-      maxInputChars: MAX_RESEARCH_INPUT_CHARS,
+      slug: "private-data-api-v1",
+      id: PRIVATE_DATA_API_V1_SERVICE_ID,
+      name: "Private Data API",
+      description: "Protected access to provider-controlled datasets or read/query endpoints.",
+      inputKind: "json",
+      maxInputChars: DEFAULT_MAX_INPUT_CHARS,
       kind: "builtin",
       operationMode: "read",
-      async execute(input) { return analyzeResearchText(validateServiceInput(this, input)); },
+      async execute(input) { return executePrivateDataDemo(validateServiceInput(this, input)); },
+    },
+    {
+      slug: "compute-api-v1",
+      id: COMPUTE_API_V1_SERVICE_ID,
+      name: "Compute API",
+      description: "Protected compute-job admission for authorized clients that hold an accepted SkillPass entitlement.",
+      inputKind: "json",
+      maxInputChars: DEFAULT_MAX_INPUT_CHARS,
+      kind: "builtin",
+      operationMode: "read",
+      async execute(input) { return executeComputeDemo(validateServiceInput(this, input)); },
     },
   ];
 

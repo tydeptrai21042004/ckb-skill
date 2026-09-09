@@ -1,8 +1,8 @@
-# SkillPass v1.3 — Portable Entitlements for CKB Services, Agents, and Digital Assets
+# SkillPass v1.5 — Portable Service Rights on CKB
 
-SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or agent-delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
+SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or optionally delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
 
-The strongest SkillPass use case is **service rights that should follow ownership of a CKB asset or AI agent, or be recognized by independent providers without synchronizing entitlement databases**. It is not positioned as a generic replacement for OAuth, API keys, x402, or ordinary SaaS subscriptions. Fiber/x402 remains an optional usage-payment layer; it never replaces entitlement authorization.
+The strongest SkillPass use case is **a service right that should move with its owner or be recognized by independent providers without synchronizing entitlement databases**. The owner may be a person, team, application, device, digital asset, or automated client. It is not positioned as a generic replacement for OAuth, API keys, x402, or ordinary SaaS subscriptions. Fiber/x402 remains an optional usage-payment layer; it never replaces entitlement authorization.
 
 > **Production deploy:** start with [`HUONG_DAN_DEPLOY_MULTI_USER_VI.md`](HUONG_DAN_DEPLOY_MULTI_USER_VI.md), then run `./deploy-production.sh init`, `doctor`, and `up`.
 
@@ -16,16 +16,16 @@ The strongest SkillPass use case is **service rights that should follow ownershi
 
 > **Product/market validation:** read [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md), [`docs/MULTI_PROVIDER_PILOT.md`](docs/MULTI_PROVIDER_PILOT.md), and [`docs/PROVIDER_POLICY_MODES.md`](docs/PROVIDER_POLICY_MODES.md). These documents define the target customer, the strongest cross-provider demo, explicit kill/pivot criteria, and the owned-right vs revocable-license policy model.
 
-> **Funding/product foundation:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md), [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md).
+> **Funding/product foundation:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
 
 
-## What v1.3 adds
+## What v1.5 includes
 
 - **Per-service provider trust** — each protected service can accept a different issuer allowlist instead of sharing one global trust decision.
 - **Shared bundle entitlements** — multiple independent service policies can accept the same immutable Capability entitlement ID through `entitlementIds`, so one live Cell can unlock an opt-in provider bundle without entitlement-database synchronization.
 - **Owned right vs revocable license** — `rightMode=owned` keeps provider revocation disabled; `rightMode=license` requires explicit `FLAG_REVOCABLE` opt-in and supports a provider deny/restore record.
 - **Transferable or non-transferable products** — providers can require portable rights or issue conventional owner-bound licenses.
-- **Provider-controlled agent delegation** — a service can require delegation, allow it optionally, or disable it entirely. A transferable Capability is no longer automatically delegatable.
+- **Provider-controlled optional delegation** — a service can require delegation, allow it optionally, or disable it entirely. A transferable Capability is no longer automatically delegatable.
 - **Transfer-aware UI** — non-transferable licenses no longer show a misleading transfer action; delegation controls reflect both Cell flags and provider policy.
 - **Provider operations CLI** — list, revoke, and restore revocable licenses with `npm run provider:admin`; admin secrets stay out of browser code.
 - **Persistent revocation listing** — local and PostgreSQL record stores can enumerate current service revocations for provider operations.
@@ -35,16 +35,16 @@ The strongest SkillPass use case is **service rights that should follow ownershi
 
 | Strong fit | Usually a poor default fit |
 | --- | --- |
-| AI agents or digital assets whose service rights should move with ownership | Ordinary account-bound monthly SaaS with no reason to transfer access |
+| Service bundles, memberships, devices, digital assets, or application rights that should move with ownership | Ordinary account-bound monthly SaaS with no reason to transfer access |
 | Multiple independent providers honoring a shared entitlement model | A single provider whose existing database already solves the whole workflow |
-| Scoped, budgeted machine delegation tied to a live CKB outpoint | Pure pay-per-request APIs where x402 alone is sufficient |
+| Optional scoped delegation tied to a live CKB outpoint | Pure pay-per-request APIs where x402 alone is sufficient |
 | Transferable memberships, model/data/API bundles, CKB game/DOB/device rights | Workflows where OAuth/Biscuit/signed receipts are simpler and portability adds no value |
 
 ### Provider policy example
 
 ```dotenv
 SERVICE_RIGHT_MODE=owned
-SKILLPASS_SERVICE_POLICIES_JSON={"paper-analyzer-v1":{"entitlementIds":["0xSHARED_BUNDLE_ID"],"issuanceEntitlementId":"0xSHARED_BUNDLE_ID","bundleId":"research-agent-pack-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]},"research-insights-v1":{"entitlementIds":["0xSHARED_BUNDLE_ID"],"issuanceEntitlementId":"0xSHARED_BUNDLE_ID","bundleId":"research-agent-pack-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]}}
+SKILLPASS_SERVICE_POLICIES_JSON={"model-api-v1":{"entitlementIds":["0xSERVICE_BUNDLE_ID"],"issuanceEntitlementId":"0xSERVICE_BUNDLE_ID","bundleId":"service-bundle-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]},"private-data-api-v1":{"entitlementIds":["0xSERVICE_BUNDLE_ID"],"issuanceEntitlementId":"0xSERVICE_BUNDLE_ID","bundleId":"service-bundle-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]},"compute-api-v1":{"entitlementIds":["0xSERVICE_BUNDLE_ID"],"issuanceEntitlementId":"0xSERVICE_BUNDLE_ID","bundleId":"service-bundle-v1","rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xBUNDLE_ISSUER_LOCK_HASH"]}}
 ```
 
 For a shared bundle, every participating provider must explicitly trust the bundle issuer; providers remain independent service operators even though they opt into a common entitlement authority. When any service uses `rightMode=license`, configure a strong `SKILLPASS_ADMIN_TOKEN`. Provider revocation is a service-layer policy deny; it does **not** burn or seize the user's CKB Cell.
@@ -79,17 +79,17 @@ If a valid `deployments/testnet.json` already exists, `collect-vercel-env.sh` re
 - **Service Gateway** — protect operator-configured read/query APIs without changing the upstream application.
 - **Multi-upstream catalog** — register up to 12 external protected services with independent IDs, bounds, timeouts, and prices.
 - **SSRF/config hardening** — production upstream gateways require HTTPS + an exact hostname allowlist and reject private literal targets/redirects.
-- **Research Insights** — a second built-in protected service with manuscript/readability/structure signals.
-- **Agent delegation** — owner-signed, short-lived, service-scoped credentials bound to a live Capability outpoint.
+- **Service Bundle demo catalog** — Model API, Private Data API, and Compute API are built-in authorization demos that accept one shared Service Bundle entitlement by default.
+- **Optional delegation** — owner-signed, short-lived, service-scoped credentials can be given to another wallet, app, automation, device, or agent while ownership remains in the Capability Cell.
 - **Budgeted delegation v2** — optionally sign maximum call count and total Fiber atomic-unit spend; production counters are serialized in PostgreSQL.
 - **Backward-compatible delegation v1** — existing unlimited short-lived grants keep their original signed-message format.
 - **Automatic delegation invalidation on transfer** — old grants fail when the bound Cell is consumed.
 - **Evidence export** — live-owner proof bundles + deterministic proof hash.
 - **Authorization receipts** — UI exposes request/entitlement/payment verification evidence.
 - **Dynamic OpenAPI/discovery** — service catalog and delegation model are machine-readable.
-- **Agent SDK** — discover services and create signed owner/delegate invocations while surfacing x402/Fiber payment requirements.
-- **Agent payment adapter** — optional SDK helper pays via a caller-supplied adapter and obtains a fresh one-time challenge before retrying.
-- **LLM-friendly agent spec** — `/.well-known/skillpass-agent.txt` gives agents a compact protocol description.
+- **Client SDK** — the existing agent-oriented SDK can be used by automated clients to discover services and create signed owner/delegate invocations while surfacing x402/Fiber payment requirements.
+- **Automated-client payment adapter** — optional SDK helper pays via a caller-supplied adapter and obtains a fresh one-time challenge before retrying.
+- **Optional machine-client spec** — `/.well-known/skillpass-agent.txt` remains as a backward-compatible compact protocol description for automated clients.
 - **Per-service Fiber pricing** — keep a global default while overriding atomic payment amounts by protected service slug.
 
 ### Existing production foundation
@@ -249,7 +249,7 @@ request with fresh wallet challenge/signature
   -> consume challenge + verify signature/identity
   -> verify live Capability ownership or owner-signed delegation
   -> 402 + Fiber invoice when payment is still required
-  -> user/agent pays invoice
+  -> requester pays invoice
   -> retry with PAYMENT-SIGNATURE + a fresh intent-bound challenge
   -> re-verify live Capability/delegation
   -> facilitator verifies payment proof
@@ -319,7 +319,7 @@ npm run verify:contract
 npm run verify:full
 ```
 
-## Agent/tool discovery
+## Automated-client discovery (optional)
 
 The live service publishes read-only machine-readable metadata:
 
@@ -396,8 +396,8 @@ The release deliberately remains CKB/Fiber **testnet-only**. Do not switch to ma
 
 ## Capability v2: rights bound to agents and digital assets
 
-SkillPass now includes an **experimental, backward-compatible Capability v2** for the narrower product problem where a provider-issued service right must be associated with a transferable AI agent, Spore/DOB, device, or other CKB asset. V2 commits to `subjectType`, `subjectId`, `bindingMode`, and `policyHash` while retaining the V1 issuer/capability identity model.
+SkillPass also includes an **experimental, backward-compatible Capability v2** for the narrower case where a provider-issued service right must be associated with a transferable Spore/DOB, device, application identity, automated client, or other CKB asset. V2 commits to `subjectType`, `subjectId`, `bindingMode`, and `policyHash` while retaining the V1 issuer/capability identity model.
 
 Provider code can require subject binding and verify that the live subject owner still matches the live Capability owner. The generic transfer helper refuses `ATOMIC` bindings unless a subject-aware transfer adapter is used; this prevents the SDK from silently transferring the right without its subject. See `docs/CAPABILITY_V2.md` and `MARKET_VALIDATION_PLAN.md`.
 
-The product boundary is deliberate: SkillPass does **not** try to replace OAuth/OpenFGA-style SaaS authorization, DID/agent identity, or Fiber/x402 payment. It focuses on portable **service-right ownership + bounded delegation + independent payment**.
+The product boundary is deliberate: SkillPass does **not** try to replace OAuth/OpenFGA-style SaaS authorization, identity systems, or Fiber/x402 payment. It focuses on portable **service-right ownership + bounded delegation + independent payment**.

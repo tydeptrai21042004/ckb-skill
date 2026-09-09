@@ -16,6 +16,7 @@ import {
   isActive,
   normalizeHex32,
 } from "@skillpass/capability-codec";
+import { SERVICE_BUNDLE_V1_ENTITLEMENT_ID } from "@skillpass/capability-codec/service-ids";
 import {
   FacilitatorHttpClient,
   FIBER_MAINNET,
@@ -62,7 +63,7 @@ const TRUST_PROXY = process.env.TRUST_PROXY === "true";
 const SERVICE_STATE_FILE = process.env.SERVICE_STATE_FILE || join(process.cwd(), ".runtime", "service-state.json");
 const STATE_BACKEND = String(process.env.STATE_BACKEND || (process.env.VERCEL ? "postgres" : "local")).trim();
 const SERVICE_RECEIPT_TTL_SECONDS = Number(process.env.SERVICE_RECEIPT_TTL_SECONDS || 86400);
-const SERVICE_POLICY_ID = String(process.env.SERVICE_POLICY_ID || "paper-analyzer-v1").trim();
+const SERVICE_POLICY_ID = String(process.env.SERVICE_POLICY_ID || "service-bundle-v1").trim();
 const SERVICE_POLICY_URL = String(process.env.SERVICE_POLICY_URL || "").trim();
 const SERVICE_TERMS_HASH_RAW = String(process.env.SERVICE_TERMS_HASH || "").trim();
 const STARTED_AT = Date.now();
@@ -72,7 +73,7 @@ const MAX_BODY = Number(process.env.MAX_REQUEST_BODY_BYTES || 36 * 1024);
 const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 12 * 1024);
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
 const serviceRegistry = buildServiceRegistry({ env: process.env, production: IS_PUBLIC_PRODUCTION, timeoutMs: UPSTREAM_TIMEOUT_MS });
-const PRIMARY_SERVICE = serviceRegistry.getBySlug("paper-analyzer-v1");
+const PRIMARY_SERVICE = serviceRegistry.getBySlug("model-api-v1");
 const SERVICE_ID = PRIMARY_SERVICE.id; // backward-compatible primary service id
 const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
 const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
@@ -233,11 +234,17 @@ function parseServicePolicyOverrides() {
   try { value = JSON.parse(raw); }
   catch { throw new Error("SKILLPASS_SERVICE_POLICIES_JSON must be a JSON object"); }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SKILLPASS_SERVICE_POLICIES_JSON must be a JSON object");
+  const normalized = {};
   for (const [slug, item] of Object.entries(value)) {
+    // Old public demos used research-oriented service names. Ignore those stale
+    // entries during migration so an existing Vercel environment does not fail
+    // to boot after the Service Bundle catalog replaces them.
+    if (["paper-analyzer-v1", "research-insights-v1"].includes(slug)) continue;
     if (!serviceRegistry.getBySlug(slug)) throw new Error(`SKILLPASS_SERVICE_POLICIES_JSON contains unknown service ${slug}`);
     if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`service policy for ${slug} must be an object`);
+    normalized[slug] = item;
   }
-  return value;
+  return normalized;
 }
 
 const TRUSTED_ISSUER_IDS = parseTrustedIssuerIds();
@@ -258,7 +265,9 @@ const serviceContexts = new Map(serviceRegistry.services.map((service) => {
   const policyId = String(override.policyId || (service.slug === PRIMARY_SERVICE.slug ? SERVICE_POLICY_ID : `${SERVICE_POLICY_ID}:${service.slug}`)).trim();
   if (!policyId || policyId.length > 128) throw new Error(`policyId for ${service.slug} must be 1..128 characters`);
   const trustedIssuerSource = override.trustedIssuerIds ?? override.trustedIssuerId ?? TRUSTED_ISSUER_IDS;
-  const rawEntitlementIds = override.entitlementIds ?? override.acceptedEntitlementIds ?? [service.id];
+  const isDefaultBundleService = ["model-api-v1", "private-data-api-v1", "compute-api-v1"].includes(service.slug);
+  const defaultEntitlementIds = isDefaultBundleService ? [SERVICE_BUNDLE_V1_ENTITLEMENT_ID] : [service.id];
+  const rawEntitlementIds = override.entitlementIds ?? override.acceptedEntitlementIds ?? defaultEntitlementIds;
   const entitlementIds = (Array.isArray(rawEntitlementIds) ? rawEntitlementIds : [rawEntitlementIds])
     .map((value, index) => requireHex32(`${service.slug}.entitlementIds[${index}]`, value).toLowerCase());
   const issuanceEntitlementId = requireHex32(`${service.slug}.issuanceEntitlementId`, override.issuanceEntitlementId || entitlementIds[0]).toLowerCase();
@@ -268,7 +277,7 @@ const serviceContexts = new Map(serviceRegistry.services.map((service) => {
     serviceId: service.id,
     entitlementIds,
     issuanceEntitlementId,
-    bundleId: override.bundleId || "",
+    bundleId: override.bundleId ?? (isDefaultBundleService ? "service-bundle-v1" : ""),
     trustedIssuerIds: trustedIssuerSource,
     requireTransferable: parseBooleanPolicy(override.requireTransferable, true, `${service.slug}.requireTransferable`),
     delegationAllowed: parseBooleanPolicy(override.delegationAllowed, true, `${service.slug}.delegationAllowed`),

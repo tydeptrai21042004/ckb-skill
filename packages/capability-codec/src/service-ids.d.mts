@@ -1,3 +1,9 @@
+export declare const MODEL_API_V1_SERVICE_ID: `0x${string}`;
+export declare const PRIVATE_DATA_API_V1_SERVICE_ID: `0x${string}`;
+export declare const COMPUTE_API_V1_SERVICE_ID: `0x${string}`;
+export declare const SERVICE_BUNDLE_V1_ENTITLEMENT_ID: `0x${string}`;
+/** @deprecated Use SERVICE_BUNDLE_V1_ENTITLEMENT_ID. */
+export declare const AGENT_PRO_BUNDLE_V1_ENTITLEMENT_ID: `0x${string}`;
 export declare const PAPER_ANALYZER_V1_SERVICE_ID: `0x${string}`;
 export declare const RESEARCH_INSIGHTS_V1_SERVICE_ID: `0x${string}`;
 export declare const PRIVATE_JSON_GATEWAY_V1_SERVICE_ID: `0x${string}`;

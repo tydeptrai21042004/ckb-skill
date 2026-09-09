@@ -58,15 +58,27 @@ test("product frontend dev command starts the live API alongside Vite", () => {
   assert.match(viteConfig, /"\/.well-known": apiOrigin/);
 });
 
-test("disconnected home explains the real portable-right lifecycle before wallet connection", () => {
+test("disconnected home explains the portable-right lifecycle before wallet connection", () => {
   const home = readFileSync("apps/web/src/DisconnectedHome.tsx", "utf8");
   assert.match(liveApp, /<DisconnectedHome ready=\{Boolean\(config\)\} onConnect=\{\(\) => open\(\)\} \/>/);
   assert.match(home, /Own the service right, not another account\./);
   assert.match(home, /Receive a service right/);
-  assert.match(home, /Delegate to an agent/);
-  assert.match(home, /Transfer the right/);
-  assert.match(home, /Agent Pro Pass/);
-  assert.match(home, /Alice transfers the pass to Bob/);
+  assert.match(home, /Delegate when useful/);
+  assert.match(home, /Transfer ownership/);
+  assert.match(home, /Service Bundle Pass/);
+  assert.match(home, /A service bundle changes owner without three providers updating account records/);
   assert.match(home, /Issuance remains a provider action/);
   assert.match(home, /Entitlement and payment are separate/);
+});
+
+test("connected no-pass state guides new wallets instead of showing an empty protected-service panel", () => {
+  const empty = readFileSync("apps/web/src/ConnectedNoPass.tsx", "utf8");
+  assert.match(liveApp, /<ConnectedNoPass/);
+  assert.match(empty, /You are connected\. Now add a service right\./);
+  assert.match(empty, /Model API/);
+  assert.match(empty, /Private Data API/);
+  assert.match(empty, /Compute API/);
+  assert.match(empty, /Alice → Bob, across several providers/);
+  assert.match(empty, /provider action/i);
+  assert.doesNotMatch(liveApp, /Paper Analyzer|Research Insights/);
 });

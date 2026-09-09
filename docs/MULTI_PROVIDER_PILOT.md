@@ -11,7 +11,7 @@ This is the strongest v1.3 demonstration because it makes the CKB-specific value
           +------------+------------+
           |                         |
    Provider A service        Provider B service
-   Paper Analyzer            Research Insights
+   Model API                 Private Data API
    own policy/payment        own policy/payment
           |                         |
           +-- both explicitly trust the bundle issuer --+
@@ -25,22 +25,22 @@ Replace the example identifiers with real 32-byte values. Both providers deliber
 
 ```json
 {
-  "paper-analyzer-v1": {
+  "model-api-v1": {
     "trustedIssuerIds": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     "entitlementIds": ["0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
     "issuanceEntitlementId": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "bundleId": "research-agent-pack-v1",
+    "bundleId": "service-bundle-v1",
     "rightMode": "owned",
     "requireTransferable": true,
     "delegationAllowed": true,
     "requireDelegatable": true,
     "policyId": "provider-a-bundle-v1"
   },
-  "research-insights-v1": {
+  "private-data-api-v1": {
     "trustedIssuerIds": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
     "entitlementIds": ["0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
     "issuanceEntitlementId": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "bundleId": "research-agent-pack-v1",
+    "bundleId": "service-bundle-v1",
     "rightMode": "owned",
     "requireTransferable": true,
     "delegationAllowed": true,
@@ -55,11 +55,11 @@ Set this object as `SKILLPASS_SERVICE_POLICIES_JSON`.
 ## Flow to prove
 
 1. The trusted bundle issuer creates one `TRANSFERABLE + DELEGATABLE` Capability whose immutable `serviceId` is the shared bundle entitlement ID.
-2. Alice owns the live Capability and successfully invokes both Provider A and Provider B.
-3. Alice delegates Provider A to Agent X with a call/spend limit. Provider B may independently accept or reject that delegation according to its own policy.
+2. Alice owns the live Capability and successfully invokes Model API and Private Data API. Compute API can join the same bundle as a third provider/service.
+3. Alice may delegate Provider A to a bounded client such as a team tool, automation, device, or agent. Provider B may independently accept or reject delegation according to its own policy.
 4. Alice transfers the Capability to Bob, consuming Alice's old outpoint.
 5. Alice immediately fails against both providers because she no longer owns the live Cell.
-6. Agent X's grant bound to the consumed outpoint fails automatically.
+6. Any old delegated grant bound to the consumed outpoint fails automatically.
 7. Bob succeeds against both providers from the new live outpoint.
 8. Neither provider updates a shared entitlement database during the ownership transition.
 
