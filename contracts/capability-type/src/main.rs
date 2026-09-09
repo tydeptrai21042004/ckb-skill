@@ -14,9 +14,14 @@ use ckb_std::{
 default_alloc!();
 entry!(program_entry);
 
-const DATA_LEN: usize = 106;
+const DATA_LEN_V1: usize = 106;
+const DATA_LEN_V2: usize = 172;
 const ARGS_LEN: usize = 64;
 const VERSION_V1: u8 = 1;
+const VERSION_V2: u8 = 2;
+const SUBJECT_NONE: u8 = 0;
+const BINDING_HOLDER: u8 = 0;
+const BINDING_LICENSE: u8 = 3;
 const FLAG_TRANSFERABLE: u8 = 1 << 0;
 const KNOWN_FLAGS_MASK: u8 = (1 << 0) | (1 << 1) | (1 << 2);
 
@@ -69,14 +74,31 @@ fn copy32(data: &[u8], start: usize) -> [u8; 32] {
 }
 
 fn parse_capability(data: &[u8]) -> Result<CapabilityData, Error> {
-    if data.len() != DATA_LEN {
+    if data.is_empty() {
         return Err(Error::MalformedData);
     }
-    if data[0] != VERSION_V1 {
-        return Err(Error::UnsupportedVersion);
+    match data[0] {
+        VERSION_V1 if data.len() == DATA_LEN_V1 => {}
+        VERSION_V2 if data.len() == DATA_LEN_V2 => {}
+        VERSION_V1 | VERSION_V2 => return Err(Error::MalformedData),
+        _ => return Err(Error::UnsupportedVersion),
     }
     if data[1] & !KNOWN_FLAGS_MASK != 0 {
         return Err(Error::UnknownFlags);
+    }
+    if data[0] == VERSION_V2 {
+        let subject_type = data[106];
+        let binding_mode = data[107];
+        if binding_mode > BINDING_LICENSE {
+            return Err(Error::MalformedData);
+        }
+        let subject_is_zero = data[108..140].iter().all(|byte| *byte == 0);
+        if (subject_type == SUBJECT_NONE) != subject_is_zero {
+            return Err(Error::MalformedData);
+        }
+        if binding_mode != BINDING_HOLDER && subject_type == SUBJECT_NONE {
+            return Err(Error::MalformedData);
+        }
     }
 
     let mut expiry_bytes = [0u8; 8];
@@ -149,10 +171,9 @@ fn verify_transition(
     enforce_identity(&before, issuer_arg, capability_arg)?;
     enforce_identity(&after, issuer_arg, capability_arg)?;
 
-    // v1 policy: CapabilityData is immutable during transfer. Ownership is
-    // represented only by the cell lock, so the successor cannot mutate the
-    // service, issuer, identity, flags, or expiry while moving the pass.
-    if before != after {
+    // Capability data is immutable during transfer for both v1 and v2.
+    // For v2 this also protects subject binding and policy commitments.
+    if input != output || before != after {
         return Err(Error::ImmutableFieldChanged);
     }
 
