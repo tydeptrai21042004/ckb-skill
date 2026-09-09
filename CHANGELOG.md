@@ -159,3 +159,14 @@
 ## v0.3.0 — 2026-08-28
 
 - Added portable Node/Rust bootstrap, optional OffCKB/FNN installation, x402/Fiber compatibility layer, combined payment + capability tests, benchmark, and CI scaffolding.
+
+## Unreleased — Capability v2 / asset-bound direction
+
+- Added backward-compatible Capability v2 codec with subject type, subject id, binding mode, and policy-hash commitments.
+- Updated the on-chain Capability contract parser to accept v2 while preserving all v2 bytes across transitions.
+- Added subject-owner verification primitives and fail-closed subject mismatch errors.
+- Added federated provider acceptance manifests for independently managed provider policies.
+- Added privacy-preserving authorization evidence records based on hashes and identifiers.
+- Extended CKB issuance helpers for Capability v2 and blocked generic transfer of `ATOMIC` rights unless a subject-aware adapter is used.
+- Restored missing release/security assets from the uploaded archive and added security CI defaults.
+- Added focused market-validation and Capability v2 documentation/tests.

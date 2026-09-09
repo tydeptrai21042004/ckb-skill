@@ -1,0 +1,28 @@
+Core V2 / market-direction implementation:
+- packages/capability-codec/src/index.mjs
+- packages/capability-codec/src/index.d.mts
+- packages/capability-codec/src/index.d.ts
+- packages/service-rights/src/index.mjs
+- packages/protocol-core/src/index.mjs
+- packages/ckb-client/src/live.ts
+- contracts/capability-type/src/main.rs
+- tests/capability-v2-market-direction.test.mjs
+
+Release/readiness restoration:
+- .env.example
+- .env.testnet.example
+- .env.live.example
+- .env.production.example
+- .env.vercel.example
+- .dockerignore
+- .gitignore
+- .github/workflows/security-readiness.yml
+- docs/CONG_DONG_CKB_FIBER_VI.md
+
+Documentation:
+- docs/CAPABILITY_V2.md
+- MARKET_VALIDATION_PLAN.md
+- RELEASE_NOTES_V1_5.md
+- CHANGELOG.md
+- README.md
+- package.json

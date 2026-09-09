@@ -393,3 +393,11 @@ The release deliberately remains CKB/Fiber **testnet-only**. Do not switch to ma
 - [`docs/PROVIDER_POLICY_MODES.md`](docs/PROVIDER_POLICY_MODES.md) — owned rights, revocable licenses, transfer/delegation controls, and provider admin commands.
 - [`docs/MULTI_PROVIDER_PILOT.md`](docs/MULTI_PROVIDER_PILOT.md) — recommended cross-provider proof-of-value demo.
 - [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md) — customer hypotheses, metrics, success gates, and pivot criteria.
+
+## Capability v2: rights bound to agents and digital assets
+
+SkillPass now includes an **experimental, backward-compatible Capability v2** for the narrower product problem where a provider-issued service right must be associated with a transferable AI agent, Spore/DOB, device, or other CKB asset. V2 commits to `subjectType`, `subjectId`, `bindingMode`, and `policyHash` while retaining the V1 issuer/capability identity model.
+
+Provider code can require subject binding and verify that the live subject owner still matches the live Capability owner. The generic transfer helper refuses `ATOMIC` bindings unless a subject-aware transfer adapter is used; this prevents the SDK from silently transferring the right without its subject. See `docs/CAPABILITY_V2.md` and `MARKET_VALIDATION_PLAN.md`.
+
+The product boundary is deliberate: SkillPass does **not** try to replace OAuth/OpenFGA-style SaaS authorization, DID/agent identity, or Fiber/x402 payment. It focuses on portable **service-right ownership + bounded delegation + independent payment**.
