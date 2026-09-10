@@ -7,9 +7,9 @@ function response(status, body, headers = {}) {
 }
 
 test("agent SDK discovers and selects a service", async () => {
-  const fetchImpl = async () => response(200, { services: [{ slug: "research-insights-v1", id: `0x${"11".repeat(32)}` }] });
+  const fetchImpl = async () => response(200, { services: [{ slug: "private-data-api-v1", id: `0x${"11".repeat(32)}` }] });
   const discovery = await discoverSkillPass("https://skill.example/", { fetchImpl });
-  assert.equal(resolveService(discovery, "research-insights-v1").slug, "research-insights-v1");
+  assert.equal(resolveService(discovery, "private-data-api-v1").slug, "private-data-api-v1");
 });
 
 test("agent SDK challenge binds service, request hash and delegation id", async () => {
@@ -24,13 +24,13 @@ test("agent SDK challenge binds service, request hash and delegation id", async 
     baseUrl: "https://skill.example",
     signer,
     outPoint: { txHash: `0x${"22".repeat(32)}`, index: "0" },
-    service: { slug: "research-insights-v1", id: `0x${"11".repeat(32)}`, endpoint: "/api/invoke/research-insights-v1", inputKind: "json" },
+    service: { slug: "private-data-api-v1", id: `0x${"11".repeat(32)}`, endpoint: "/api/invoke/private-data-api-v1", inputKind: "json" },
     input: { b: 2, a: 1 },
     delegation,
     fetchImpl,
   });
   const challengeBody = JSON.parse(calls[0].init.body);
-  assert.equal(challengeBody.service, "research-insights-v1");
+  assert.equal(challengeBody.service, "private-data-api-v1");
   assert.equal(challengeBody.delegationId, "12".repeat(16));
   assert.match(challengeBody.requestHash, /^[0-9a-f]{64}$/);
   assert.equal(signed.body.delegation, delegation);
@@ -63,7 +63,7 @@ test("agent SDK paid helper obtains a fresh challenge before retrying with payme
     async getRecommendedAddress() { return "ckt1agent-address"; },
     async signMessage(message) { return { identity: "ckt1agent-address", signature: `sig:${message.length}` }; },
   };
-  const service = { slug: "paper-analyzer-v1", inputKind: "text", endpoint: "/api/invoke/paper-analyzer-v1" };
+  const service = { slug: "model-api-v1", inputKind: "text", endpoint: "/api/invoke/model-api-v1" };
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/api/challenge")) {
@@ -92,4 +92,31 @@ test("agent SDK paid helper obtains a fresh challenge before retrying with payme
   assert.equal(result.paidRetry, true);
   assert.equal(challengeCount, 2);
   assert.equal(calls.filter((item) => String(item.url).endsWith("/api/challenge")).length, 2);
+});
+
+
+test("idempotent-action invocation binds a caller-stable operation id into challenge and request", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return response(200, { nonce: "cd".repeat(24), message: "action-challenge", expiresAt: Date.now() + 60000 });
+  };
+  const signer = {
+    getRecommendedAddress: async () => "ckt1-action-address",
+    signMessage: async () => ({ identity: "ckt1-action-address", signature: "sig" }),
+  };
+  const operationId = "job-client-0001";
+  const signed = await buildSignedInvocation({
+    baseUrl: "https://skill.example",
+    signer,
+    outPoint: { txHash: `0x${"33".repeat(32)}`, index: "0x0" },
+    service: { slug: "compute-api-v1", id: `0x${"44".repeat(32)}`, endpoint: "/api/invoke/compute-api-v1", inputKind: "json", operationMode: "idempotent-action" },
+    input: { values: [3, 4] },
+    operationId,
+    fetchImpl,
+  });
+  const challengeBody = JSON.parse(calls[0].init.body);
+  assert.equal(challengeBody.operationId, operationId);
+  assert.equal(signed.body.operationId, operationId);
+  assert.equal(signed.operationId, operationId);
 });

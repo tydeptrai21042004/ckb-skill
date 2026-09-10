@@ -61,6 +61,16 @@ export function createServiceRegistry(services = []) {
     if (bySlug.has(slug)) throw new Error(`duplicate service slug ${slug}`);
     if (byId.has(id)) throw new Error(`duplicate service id ${id}`);
     if (typeof raw.execute !== "function") throw new Error(`service ${slug} is missing execute()`);
+    const operationMode = String(raw.operationMode || "read").trim().toLowerCase();
+    if (!["read", "idempotent-action"].includes(operationMode)) {
+      throw new Error(`service ${slug} operationMode must be read or idempotent-action`);
+    }
+    const idempotencyMode = operationMode === "idempotent-action" ? String(raw.idempotencyMode || "").trim().toLowerCase() : null;
+    if (operationMode === "idempotent-action" && idempotencyMode !== "invocation-key") {
+      throw new Error(`service ${slug} idempotencyMode must be invocation-key for idempotent-action services`);
+    }
+    const providerId = String(raw.providerId || "skillpass-reference-provider").trim();
+    if (!/^[a-z0-9][a-z0-9_.:-]{0,127}$/i.test(providerId)) throw new Error(`service ${slug} providerId is invalid`);
     const item = Object.freeze({
       slug,
       id,
@@ -69,7 +79,10 @@ export function createServiceRegistry(services = []) {
       inputKind: raw.inputKind === "text" ? "text" : "json",
       maxInputChars: Number(raw.maxInputChars || 20_000),
       kind: String(raw.kind || "builtin"),
-      operationMode: raw.operationMode === "read" ? "read" : "read",
+      operationMode,
+      idempotencyMode,
+      providerId,
+      providerName: String(raw.providerName || providerId).slice(0, 120),
       execute: raw.execute,
     });
     if (!Number.isSafeInteger(item.maxInputChars) || item.maxInputChars < 1 || item.maxInputChars > 256_000) {

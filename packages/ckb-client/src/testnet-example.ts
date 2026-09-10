@@ -3,12 +3,12 @@
  * and supply the signer + SkillPass deployment. No private key is accepted.
  */
 import { ccc } from "@ckb-ccc/connector-react";
-import { FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
-import { PAPER_ANALYZER_V1_SERVICE_ID } from "@skillpass/capability-codec/service-ids";
+import { FLAG_DELEGATABLE, FLAG_TRANSFERABLE } from "@skillpass/capability-codec";
+import { SERVICE_BUNDLE_V1_ENTITLEMENT_ID } from "@skillpass/capability-codec/service-ids";
 import { buildIssueCapabilityTx, sendAndWait, type Deployment } from "./live.js";
 
-// SHA-256("paper-analyzer-v1"), fixed as the v1 application-level service ID.
-export async function issuePaperAnalyzerPass(
+/** Issue the default portable Service Bundle right used by Model/Data/Compute providers. */
+export async function issueServiceBundlePass(
   signer: ccc.Signer,
   deployment: Deployment,
   recipientAddress: string,
@@ -18,9 +18,9 @@ export async function issuePaperAnalyzerPass(
     signer,
     deployment,
     recipientAddress,
-    serviceId: PAPER_ANALYZER_V1_SERVICE_ID,
+    serviceId: SERVICE_BUNDLE_V1_ENTITLEMENT_ID,
     expiry: expiresAtUnix,
-    flags: FLAG_TRANSFERABLE,
+    flags: FLAG_TRANSFERABLE | FLAG_DELEGATABLE,
   });
   return sendAndWait(signer, built.tx);
 }

@@ -18,37 +18,144 @@ function normalized(input) {
   return { grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic, expiresAt };
 }
 
+function error(message, status, code) {
+  return Object.assign(new Error(message), { status, code });
+}
+
 export class LocalDelegationUsageLedger {
   #grants = new Map();
-  constructor({ now = () => Date.now() } = {}) { this.now = now; }
-  async consume(input) {
-    const v = normalized(input);
-    if (this.now() >= v.expiresAt) throw Object.assign(new Error("delegation is expired"), { status: 403, code: "DELEGATION_EXPIRED" });
+
+  constructor({ now = () => Date.now(), reservationTtlMs = 120_000 } = {}) {
+    this.now = now;
+    this.reservationTtlMs = Number(reservationTtlMs);
+    if (!Number.isSafeInteger(this.reservationTtlMs) || this.reservationTtlMs < 10_000 || this.reservationTtlMs > 10 * 60_000) {
+      throw new Error("delegation reservationTtlMs must be 10000..600000");
+    }
+  }
+
+  #row(v) {
     let row = this.#grants.get(v.grantId);
     if (!row) {
-      row = { expiresAt: v.expiresAt, usedCalls: 0, usedSpendAtomic: 0n, invocations: new Set() };
+      row = {
+        expiresAt: v.expiresAt,
+        usedCalls: 0,
+        usedSpendAtomic: 0n,
+        reservedCalls: 0,
+        reservedSpendAtomic: 0n,
+        invocations: new Map(),
+      };
       this.#grants.set(v.grantId, row);
     }
-    if (row.expiresAt !== v.expiresAt) throw Object.assign(new Error("delegation grantId collision detected"), { status: 403, code: "DELEGATION_GRANT_COLLISION" });
-    if (row.invocations.has(v.invocationKey)) return this.#result(row, v, true);
-    const nextCalls = row.usedCalls + 1;
-    const nextSpend = row.usedSpendAtomic + BigInt(v.spendAtomic);
-    if (v.maxUses != null && nextCalls > v.maxUses) throw Object.assign(new Error("delegation use limit exhausted"), { status: 403, code: "DELEGATION_USE_LIMIT_EXHAUSTED" });
-    if (v.maxSpendAtomic != null && nextSpend > BigInt(v.maxSpendAtomic)) throw Object.assign(new Error("delegation spend limit exhausted"), { status: 403, code: "DELEGATION_SPEND_LIMIT_EXHAUSTED" });
-    row.usedCalls = nextCalls;
-    row.usedSpendAtomic = nextSpend;
-    row.invocations.add(v.invocationKey);
-    return this.#result(row, v, false);
+    if (row.expiresAt !== v.expiresAt) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+    return row;
   }
-  #result(row, v, replayed) {
+
+  #assertActive(v) {
+    if (this.now() >= v.expiresAt) throw error("delegation is expired", 403, "DELEGATION_EXPIRED");
+  }
+
+  #releaseReservation(row, invocation) {
+    row.reservedCalls = Math.max(0, row.reservedCalls - 1);
+    row.reservedSpendAtomic = row.reservedSpendAtomic >= invocation.spendAtomic
+      ? row.reservedSpendAtomic - invocation.spendAtomic
+      : 0n;
+    invocation.status = "released";
+    invocation.updatedAt = this.now();
+  }
+
+  #reclaimStaleReservation(row, invocation) {
+    if (invocation.status !== "reserved") return false;
+    if (this.now() - invocation.updatedAt < this.reservationTtlMs) return false;
+    this.#releaseReservation(row, invocation);
+    return true;
+  }
+
+  async reserve(input) {
+    const v = normalized(input);
+    this.#assertActive(v);
+    const row = this.#row(v);
+    let invocation = row.invocations.get(v.invocationKey);
+
+    if (invocation && invocation.spendAtomic !== BigInt(v.spendAtomic)) {
+      throw error("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
+    }
+    if (invocation?.status === "committed") return this.#result(row, v, { replayed: true, status: "committed" });
+    if (invocation?.status === "reserved" && !this.#reclaimStaleReservation(row, invocation)) {
+      throw error("delegation invocation is already in progress", 409, "DELEGATION_INVOCATION_IN_PROGRESS");
+    }
+
+    const nextReservedCalls = row.reservedCalls + 1;
+    const nextReservedSpend = row.reservedSpendAtomic + BigInt(v.spendAtomic);
+    const effectiveCalls = row.usedCalls + nextReservedCalls;
+    const effectiveSpend = row.usedSpendAtomic + nextReservedSpend;
+    if (v.maxUses != null && effectiveCalls > v.maxUses) throw error("delegation use limit exhausted", 403, "DELEGATION_USE_LIMIT_EXHAUSTED");
+    if (v.maxSpendAtomic != null && effectiveSpend > BigInt(v.maxSpendAtomic)) throw error("delegation spend limit exhausted", 403, "DELEGATION_SPEND_LIMIT_EXHAUSTED");
+
+    row.reservedCalls = nextReservedCalls;
+    row.reservedSpendAtomic = nextReservedSpend;
+    invocation = { status: "reserved", spendAtomic: BigInt(v.spendAtomic), updatedAt: this.now() };
+    row.invocations.set(v.invocationKey, invocation);
+    return this.#result(row, v, { replayed: false, status: "reserved" });
+  }
+
+  async commit(input) {
+    const v = normalized(input);
+    this.#assertActive(v);
+    const row = this.#row(v);
+    const invocation = row.invocations.get(v.invocationKey);
+    if (!invocation) throw error("delegation reservation not found", 409, "DELEGATION_RESERVATION_NOT_FOUND");
+    if (invocation.spendAtomic !== BigInt(v.spendAtomic)) throw error("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
+    if (invocation.status === "committed") return this.#result(row, v, { replayed: true, status: "committed" });
+    if (invocation.status !== "reserved") throw error("delegation reservation was released", 409, "DELEGATION_RESERVATION_RELEASED");
+
+    row.reservedCalls = Math.max(0, row.reservedCalls - 1);
+    row.reservedSpendAtomic = row.reservedSpendAtomic >= invocation.spendAtomic
+      ? row.reservedSpendAtomic - invocation.spendAtomic
+      : 0n;
+    row.usedCalls += 1;
+    row.usedSpendAtomic += invocation.spendAtomic;
+    invocation.status = "committed";
+    invocation.updatedAt = this.now();
+    return this.#result(row, v, { replayed: false, status: "committed" });
+  }
+
+  async release(input) {
+    const v = normalized(input);
+    const row = this.#grants.get(v.grantId);
+    if (!row) return null;
+    if (row.expiresAt !== v.expiresAt) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+    const invocation = row.invocations.get(v.invocationKey);
+    if (!invocation) return this.#result(row, v, { replayed: false, status: "missing" });
+    if (invocation.spendAtomic !== BigInt(v.spendAtomic)) throw error("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
+    if (invocation.status === "reserved") this.#releaseReservation(row, invocation);
+    return this.#result(row, v, { replayed: invocation.status === "committed", status: invocation.status });
+  }
+
+  // Backward-compatible atomic consume used by older integrations/tests.
+  // New protected service flows should reserve before execution and commit only
+  // after successful delivery/settlement.
+  async consume(input) {
+    const reserved = await this.reserve(input);
+    if (reserved.status === "committed") return reserved;
+    return this.commit(input);
+  }
+
+  #result(row, v, { replayed, status }) {
+    const maxSpend = v.maxSpendAtomic == null ? null : BigInt(v.maxSpendAtomic);
+    const effectiveSpend = row.usedSpendAtomic + row.reservedSpendAtomic;
+    const effectiveCalls = row.usedCalls + row.reservedCalls;
     return Object.freeze({
       usedCalls: row.usedCalls,
       usedSpendAtomic: row.usedSpendAtomic.toString(),
-      remainingUses: v.maxUses == null ? null : Math.max(0, v.maxUses - row.usedCalls),
-      remainingSpendAtomic: v.maxSpendAtomic == null ? null : (BigInt(v.maxSpendAtomic) > row.usedSpendAtomic ? BigInt(v.maxSpendAtomic) - row.usedSpendAtomic : 0n).toString(),
-      replayed,
+      reservedCalls: row.reservedCalls,
+      reservedSpendAtomic: row.reservedSpendAtomic.toString(),
+      remainingUses: v.maxUses == null ? null : Math.max(0, v.maxUses - effectiveCalls),
+      remainingSpendAtomic: maxSpend == null ? null : (maxSpend > effectiveSpend ? maxSpend - effectiveSpend : 0n).toString(),
+      replayed: Boolean(replayed),
+      status,
     });
   }
+
   async pruneExpired() {
     const now = this.now();
     let count = 0;

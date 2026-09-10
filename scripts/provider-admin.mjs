@@ -23,7 +23,7 @@ function argMap(argv) {
 }
 
 function usage() {
-  console.log(`SkillPass provider administration\n\nUsage:\n  npm run provider:admin -- list --service research-insights-v1 [--limit 100]\n  npm run provider:admin -- revoke --service research-insights-v1 --tx-hash 0x... --index 0x0 --reason "abuse investigation"\n  npm run provider:admin -- restore --service research-insights-v1 --capability-id 0x...\n\nEnvironment:\n  SKILLPASS_BASE_URL=http://127.0.0.1:8787\n  SKILLPASS_ADMIN_TOKEN=<32+ random characters>\n  # or SKILLPASS_ADMIN_TOKEN_FILE=/run/secrets/skillpass_admin_token\n\nThe token is read locally and is never printed.`);
+  console.log(`SkillPass provider administration\n\nUsage:\n  npm run provider:admin -- list --service private-data-api-v1 [--limit 100]\n  npm run provider:admin -- revoke --service private-data-api-v1 --tx-hash 0x... --index 0x0 --reason "abuse investigation"\n  npm run provider:admin -- restore --service private-data-api-v1 --capability-id 0x...\n\nEnvironment:\n  SKILLPASS_BASE_URL=http://127.0.0.1:8787\n  SKILLPASS_ADMIN_TOKEN=<32+ random characters>\n  # or SKILLPASS_ADMIN_TOKEN_FILE=/run/secrets/skillpass_admin_token\n\nThe token is read locally and is never printed.`);
 }
 
 function requireValue(args, name) {

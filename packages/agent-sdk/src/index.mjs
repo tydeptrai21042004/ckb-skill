@@ -38,6 +38,19 @@ async function sha256Hex(value) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function newOperationId() {
+  const cryptoApi = globalThis.crypto;
+  if (!cryptoApi?.randomUUID) throw new Error("Web Crypto randomUUID() is required for idempotent-action services unless operationId is supplied");
+  return cryptoApi.randomUUID();
+}
+
+function operationIdFor(service, supplied) {
+  if (service?.operationMode !== "idempotent-action") return "";
+  const value = String(supplied || newOperationId()).trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(value)) throw new Error("operationId must be 8..128 safe identifier characters");
+  return value;
+}
+
 export async function discoverSkillPass(baseUrl, { fetchImpl = globalThis.fetch } = {}) {
   if (typeof fetchImpl !== "function") throw new Error("fetch implementation is required");
   const response = await fetchImpl(`${base(baseUrl)}/.well-known/skillpass.json`, { headers: { accept: "application/json" } });
@@ -61,6 +74,7 @@ export async function buildSignedInvocation({
   service,
   input,
   delegation,
+  operationId: suppliedOperationId = "",
   fetchImpl = globalThis.fetch,
 }) {
   if (!signer || typeof signer.signMessage !== "function" || typeof signer.getRecommendedAddress !== "function") {
@@ -69,6 +83,7 @@ export async function buildSignedInvocation({
   const address = await signer.getRecommendedAddress();
   const requestMaterial = service.inputKind === "text" ? String(input) : canonicalJson(input);
   const requestHash = await sha256Hex(requestMaterial);
+  const operationId = operationIdFor(service, suppliedOperationId);
   const challengeResponse = await fetchImpl(`${base(baseUrl)}/api/challenge`, {
     method: "POST",
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -78,6 +93,7 @@ export async function buildSignedInvocation({
       requestHash,
       service: service.slug,
       delegationId: delegation?.grant?.grantId || "",
+      ...(operationId ? { operationId } : {}),
     }),
   });
   const challenge = await jsonResponse(challengeResponse);
@@ -86,7 +102,8 @@ export async function buildSignedInvocation({
   if (signature?.identity !== address) throw new Error("signer identity does not match the acting CKB address");
   return {
     endpoint: `${base(baseUrl)}${service.endpoint || `/api/invoke/${service.slug}`}`,
-    body: { address, nonce: challenge.nonce, signature, outPoint, input, ...(delegation ? { delegation } : {}) },
+    body: { address, nonce: challenge.nonce, signature, outPoint, input, ...(operationId ? { operationId } : {}), ...(delegation ? { delegation } : {}) },
+    operationId: operationId || null,
     challengeExpiresAt: challenge.expiresAt,
   };
 }
@@ -106,10 +123,11 @@ export async function invokeSkillPass(options) {
       paymentRequired: true,
       requirement: response.headers?.get?.("payment-required") || null,
       response: value,
+      operationId: signed.operationId,
     };
   }
   if (!response.ok) throw Object.assign(new Error(value.message || "SkillPass invocation failed"), { status: response.status, body: value });
-  return { ok: true, paymentRequired: false, response: value };
+  return { ok: true, paymentRequired: false, response: value, operationId: signed.operationId };
 }
 
 
@@ -145,7 +163,7 @@ export async function invokeSkillPassWithPayment(options) {
 
   // A paid retry always obtains a fresh one-time wallet challenge. This avoids
   // reusing the intent nonce that was consumed by the initial 402 request.
-  const signed = await buildSignedInvocation({ ...options, fetchImpl });
+  const signed = await buildSignedInvocation({ ...options, operationId: options.operationId || first.operationId || "", fetchImpl });
   const response = await fetchImpl(signed.endpoint, {
     method: "POST",
     headers: {
@@ -164,8 +182,9 @@ export async function invokeSkillPassWithPayment(options) {
       paidRetry: true,
       requirement: response.headers?.get?.("payment-required") || null,
       response: value,
+      operationId: signed.operationId,
     };
   }
   if (!response.ok) throw Object.assign(new Error(value.message || "SkillPass paid invocation failed"), { status: response.status, body: value });
-  return { ok: true, paymentRequired: false, paidRetry: true, response: value };
+  return { ok: true, paymentRequired: false, paidRetry: true, response: value, operationId: signed.operationId };
 }

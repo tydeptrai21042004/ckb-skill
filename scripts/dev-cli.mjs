@@ -74,7 +74,7 @@ async function setup() {
   log(`Using Node ${process.version}`);
   await bootstrapConfig();
   await install();
-  log("Setup complete. Run `npm run dev` for the deterministic demo or `npm run dev:web` for the React/CCC frontend.");
+  log("Setup complete. Run `npm run dev` for the current Model/Data/Compute product. Use `npm run dev:demo` only for the isolated deterministic compatibility simulator.");
 }
 
 async function check() {
@@ -109,7 +109,7 @@ async function dockerDemo() {
 }
 
 function help() {
-  console.log(`SkillPass developer CLI\n\nUsage:\n  node scripts/dev-cli.mjs <command>\n\nCommands:\n  setup        create safe local config + install JS dependencies\n  demo         run deterministic local demo on http://127.0.0.1:8787\n  web          run live API + React/CCC Vite frontend on http://127.0.0.1:5173\n  facilitator  run local Fiber/x402 facilitator\n  live         run live CKB service (requires valid env/deployment metadata)\n  doctor       print environment/readiness report\n  test         run Node tests\n  check        doctor + tests + typecheck + web production build\n  docker-demo  reproducible demo using Docker only\n  clean        remove JS dependencies/build output; preserve config/state\n  help         show this message\n\nRecommended first run:\n  npm run setup\n  npm run dev\n\nDocker-only first run:\n  docker compose -f deploy/compose.demo.yaml up --build\n`);
+  console.log(`SkillPass developer CLI\n\nUsage:\n  node scripts/dev-cli.mjs <command>\n\nCommands:\n  setup        create safe local config + install JS dependencies\n  demo         run isolated deterministic compatibility simulator on http://127.0.0.1:8787\n  web          run the current live API + React/CCC frontend on http://127.0.0.1:5173\n  facilitator  run local Fiber/x402 facilitator\n  live         run live CKB service (requires valid env/deployment metadata)\n  doctor       print environment/readiness report\n  test         run Node tests\n  check        doctor + tests + typecheck + web production build\n  docker-demo  reproducible demo using Docker only\n  clean        remove JS dependencies/build output; preserve config/state\n  help         show this message\n\nRecommended first run:\n  npm run setup\n  npm run dev\n\nDocker-only first run:\n  docker compose -f deploy/compose.demo.yaml up --build\n`);
 }
 
 const command = process.argv[2] || "help";

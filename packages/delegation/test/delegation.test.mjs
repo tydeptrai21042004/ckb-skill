@@ -10,7 +10,7 @@ const grant = {
   grantId: "aa".repeat(16),
   ownerAddress: "ckt1owner-address",
   delegateAddress: "ckt1delegate-address",
-  serviceSlug: "paper-analyzer-v1",
+  serviceSlug: "model-api-v1",
   serviceId: H1,
   capabilityId: H2,
   capabilityOutPoint: { txHash: H1, index: "0" },

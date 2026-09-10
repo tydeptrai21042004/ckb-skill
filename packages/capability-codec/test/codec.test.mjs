@@ -83,8 +83,8 @@ test("type args encode issuer and capability identity", () => {
 });
 
 test("stableId32 is deterministic and 32 bytes", () => {
-  const a = stableId32("paper-analyzer-v1");
-  const b = stableId32("paper-analyzer-v1");
+  const a = stableId32("model-api-v1");
+  const b = stableId32("model-api-v1");
   assert.equal(a, b);
   assert.match(a, /^0x[0-9a-f]{64}$/);
 });

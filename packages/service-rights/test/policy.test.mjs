@@ -23,7 +23,7 @@ function cap({ issuerId = ISSUER, serviceId = SERVICE, flags = FLAG_TRANSFERABLE
   return decodeCapability(encodeCapabilityHex({ version: 1, flags, serviceId, issuerId, capabilityId: CAPABILITY_ID, expiry }));
 }
 
-const policy = createServicePolicy({ serviceId: SERVICE, trustedIssuerId: ISSUER, requireTransferable: true, policyId: "paper-analyzer-v1" });
+const policy = createServicePolicy({ serviceId: SERVICE, trustedIssuerId: ISSUER, requireTransferable: true, policyId: "model-api-v1" });
 
 test("trusted provider-issued transferable service right passes policy", () => {
   assert.equal(verifyServicePolicy({ capability: cap(), policy, nowUnixSeconds: 100n }).capability.issuerId, ISSUER);

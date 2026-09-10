@@ -77,6 +77,27 @@ const MIGRATIONS = [
         ON skillpass_delegation_invocations (created_at);
     `,
   },
+  {
+    version: 4,
+    sql: `
+      ALTER TABLE skillpass_delegation_usage
+        ADD COLUMN IF NOT EXISTS reserved_calls BIGINT NOT NULL DEFAULT 0 CHECK (reserved_calls >= 0);
+      ALTER TABLE skillpass_delegation_usage
+        ADD COLUMN IF NOT EXISTS reserved_spend NUMERIC(78,0) NOT NULL DEFAULT 0 CHECK (reserved_spend >= 0);
+
+      ALTER TABLE skillpass_delegation_invocations
+        ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'committed';
+      ALTER TABLE skillpass_delegation_invocations
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp();
+      ALTER TABLE skillpass_delegation_invocations
+        DROP CONSTRAINT IF EXISTS skillpass_delegation_invocations_status_check;
+      ALTER TABLE skillpass_delegation_invocations
+        ADD CONSTRAINT skillpass_delegation_invocations_status_check
+        CHECK (status IN ('reserved', 'committed', 'released'));
+      CREATE INDEX IF NOT EXISTS skillpass_delegation_invocations_status_time_idx
+        ON skillpass_delegation_invocations (status, updated_at);
+    `,
+  },
 ];
 
 export function createPostgresPool(env = process.env) {

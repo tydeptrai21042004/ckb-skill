@@ -28,3 +28,18 @@ test("service input validation handles text and JSON bounds", () => {
   assert.throws(() => validateServiceInput(registry.getBySlug("text"), "toolong"), /exceeds/i);
   assert.deepEqual(validateServiceInput(registry.getBySlug("json"), { a: 1 }), { a: 1 });
 });
+
+
+test("service registry requires an explicit invocation-key contract for action services", () => {
+  assert.throws(() => createServiceRegistry([{
+    slug: "action", id: ID1, operationMode: "idempotent-action", execute() {},
+  }]), /idempotencyMode must be invocation-key/);
+  const registry = createServiceRegistry([{
+    slug: "action", id: ID1, operationMode: "idempotent-action", idempotencyMode: "invocation-key", execute() {},
+  }]);
+  assert.equal(registry.getBySlug("action").operationMode, "idempotent-action");
+  assert.equal(registry.getBySlug("action").idempotencyMode, "invocation-key");
+  assert.throws(() => createServiceRegistry([{
+    slug: "unsafe", id: ID2, operationMode: "write", execute() {},
+  }]), /operationMode must be read or idempotent-action/);
+});

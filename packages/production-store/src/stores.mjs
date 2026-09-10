@@ -309,88 +309,315 @@ function normalizeDelegationUsageInput({ grantId, invocationKey, maxUses, maxSpe
   return { grantId: id, invocationKey: key, maxUses: uses, maxSpendAtomic: maxSpend, spendAtomic: spend, expiresAt: expiry };
 }
 
-function usageResult({ usedCalls, usedSpendAtomic, maxUses, maxSpendAtomic, replayed }) {
+function usageResult({
+  usedCalls,
+  usedSpendAtomic,
+  reservedCalls = 0,
+  reservedSpendAtomic = "0",
+  maxUses,
+  maxSpendAtomic,
+  replayed,
+  status = "committed",
+}) {
   const calls = Number(usedCalls);
   const spend = BigInt(String(usedSpendAtomic || "0"));
+  const reserved = Number(reservedCalls || 0);
+  const reservedSpend = BigInt(String(reservedSpendAtomic || "0"));
   const maxSpend = maxSpendAtomic == null ? null : BigInt(maxSpendAtomic);
+  const effectiveCalls = calls + reserved;
+  const effectiveSpend = spend + reservedSpend;
   return Object.freeze({
     usedCalls: calls,
     usedSpendAtomic: spend.toString(),
-    remainingUses: maxUses == null ? null : Math.max(0, maxUses - calls),
-    remainingSpendAtomic: maxSpend == null ? null : (maxSpend > spend ? maxSpend - spend : 0n).toString(),
+    reservedCalls: reserved,
+    reservedSpendAtomic: reservedSpend.toString(),
+    remainingUses: maxUses == null ? null : Math.max(0, maxUses - effectiveCalls),
+    remainingSpendAtomic: maxSpend == null ? null : (maxSpend > effectiveSpend ? maxSpend - effectiveSpend : 0n).toString(),
     replayed: Boolean(replayed),
+    status,
   });
 }
 
+function delegationError(message, status, code) {
+  return Object.assign(new Error(message), { status, code });
+}
+
 export class PostgresDelegationUsageLedger {
-  constructor({ pool, now = () => Date.now() } = {}) {
+  constructor({ pool, now = () => Date.now(), reservationTtlMs = 120_000 } = {}) {
     if (!pool) throw new Error("PostgresDelegationUsageLedger requires pool");
     this.pool = pool;
     this.now = now;
+    this.reservationTtlMs = Number(reservationTtlMs);
+    if (!Number.isSafeInteger(this.reservationTtlMs) || this.reservationTtlMs < 10_000 || this.reservationTtlMs > 10 * 60_000) {
+      throw new Error("delegation reservationTtlMs must be 10000..600000");
+    }
   }
 
-  async consume(input) {
+  #assertActive(normalized) {
+    if (this.now() >= normalized.expiresAt) throw delegationError("delegation is expired", 403, "DELEGATION_EXPIRED");
+  }
+
+  async #lockUsage(client, normalized) {
+    await client.query(
+      `INSERT INTO skillpass_delegation_usage(
+         grant_id, used_calls, used_spend, reserved_calls, reserved_spend, expires_at, updated_at
+       ) VALUES ($1, 0, 0, 0, 0, to_timestamp($2::double precision / 1000.0), clock_timestamp())
+       ON CONFLICT (grant_id) DO NOTHING`,
+      [normalized.grantId, normalized.expiresAt],
+    );
+    const { rows } = await client.query(
+      `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+              reserved_calls::text AS reserved_calls, reserved_spend::text AS reserved_spend,
+              extract(epoch from expires_at) * 1000 AS expires_ms
+         FROM skillpass_delegation_usage
+        WHERE grant_id = $1 FOR UPDATE`,
+      [normalized.grantId],
+    );
+    if (!rows.length) throw new Error("delegation usage row is missing");
+    const row = rows[0];
+    if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt) {
+      throw delegationError("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+    }
+    return row;
+  }
+
+  #result(row, normalized, options = {}) {
+    return usageResult({
+      usedCalls: row.used_calls,
+      usedSpendAtomic: row.used_spend,
+      reservedCalls: row.reserved_calls,
+      reservedSpendAtomic: row.reserved_spend,
+      maxUses: normalized.maxUses,
+      maxSpendAtomic: normalized.maxSpendAtomic,
+      replayed: options.replayed,
+      status: options.status,
+    });
+  }
+
+  async reserve(input) {
     const normalized = normalizeDelegationUsageInput(input);
-    if (this.now() >= normalized.expiresAt) throw Object.assign(new Error("delegation is expired"), { status: 403, code: "DELEGATION_EXPIRED" });
+    this.#assertActive(normalized);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        `INSERT INTO skillpass_delegation_usage(grant_id, used_calls, used_spend, expires_at, updated_at)
-         VALUES ($1, 0, 0, to_timestamp($2::double precision / 1000.0), clock_timestamp())
-         ON CONFLICT (grant_id) DO NOTHING`,
-        [normalized.grantId, normalized.expiresAt],
-      );
-      const { rows } = await client.query(
-        `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
-                extract(epoch from expires_at) * 1000 AS expires_ms
-           FROM skillpass_delegation_usage
-          WHERE grant_id = $1 FOR UPDATE`,
-        [normalized.grantId],
-      );
-      if (!rows.length) throw new Error("delegation usage row is missing");
-      const row = rows[0];
-      const storedExpiry = Math.trunc(Number(row.expires_ms));
-      if (storedExpiry !== normalized.expiresAt) {
-        throw Object.assign(new Error("delegation grantId collision detected"), { status: 403, code: "DELEGATION_GRANT_COLLISION" });
-      }
-      const replay = await client.query(
-        `SELECT spend::text AS spend FROM skillpass_delegation_invocations WHERE grant_id = $1 AND invocation_key = $2`,
+      let row = await this.#lockUsage(client, normalized);
+      const invocationResult = await client.query(
+        `SELECT spend::text AS spend, status,
+                extract(epoch from updated_at) * 1000 AS updated_ms
+           FROM skillpass_delegation_invocations
+          WHERE grant_id = $1 AND invocation_key = $2 FOR UPDATE`,
         [normalized.grantId, normalized.invocationKey],
       );
-      if (replay.rows.length) {
-        await client.query("COMMIT");
-        return usageResult({ usedCalls: row.used_calls, usedSpendAtomic: row.used_spend, maxUses: normalized.maxUses, maxSpendAtomic: normalized.maxSpendAtomic, replayed: true });
+      const invocation = invocationResult.rows[0] || null;
+      if (invocation && BigInt(String(invocation.spend || "0")) !== BigInt(normalized.spendAtomic)) {
+        throw delegationError("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
       }
+      if (invocation?.status === "committed") {
+        await client.query("COMMIT");
+        return this.#result(row, normalized, { replayed: true, status: "committed" });
+      }
+      if (invocation?.status === "reserved") {
+        const updatedAt = Number(invocation.updated_ms || 0);
+        if (this.now() - updatedAt < this.reservationTtlMs) {
+          throw delegationError("delegation invocation is already in progress", 409, "DELEGATION_INVOCATION_IN_PROGRESS");
+        }
+        await client.query(
+          `UPDATE skillpass_delegation_usage
+              SET reserved_calls = GREATEST(0, reserved_calls - 1),
+                  reserved_spend = GREATEST(0::numeric, reserved_spend - $2::numeric),
+                  updated_at = clock_timestamp()
+            WHERE grant_id = $1`,
+          [normalized.grantId, normalized.spendAtomic],
+        );
+        row = (await client.query(
+          `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+                  reserved_calls::text AS reserved_calls, reserved_spend::text AS reserved_spend,
+                  extract(epoch from expires_at) * 1000 AS expires_ms
+             FROM skillpass_delegation_usage WHERE grant_id = $1 FOR UPDATE`,
+          [normalized.grantId],
+        )).rows[0];
+      }
+
       const usedCalls = Number(row.used_calls || 0);
       const usedSpend = BigInt(String(row.used_spend || "0"));
-      const nextCalls = usedCalls + 1;
-      const nextSpend = usedSpend + BigInt(normalized.spendAtomic);
-      if (normalized.maxUses != null && nextCalls > normalized.maxUses) {
-        throw Object.assign(new Error("delegation use limit exhausted"), { status: 403, code: "DELEGATION_USE_LIMIT_EXHAUSTED" });
+      const reservedCalls = Number(row.reserved_calls || 0);
+      const reservedSpend = BigInt(String(row.reserved_spend || "0"));
+      const nextReservedCalls = reservedCalls + 1;
+      const nextReservedSpend = reservedSpend + BigInt(normalized.spendAtomic);
+      if (normalized.maxUses != null && usedCalls + nextReservedCalls > normalized.maxUses) {
+        throw delegationError("delegation use limit exhausted", 403, "DELEGATION_USE_LIMIT_EXHAUSTED");
       }
-      if (normalized.maxSpendAtomic != null && nextSpend > BigInt(normalized.maxSpendAtomic)) {
-        throw Object.assign(new Error("delegation spend limit exhausted"), { status: 403, code: "DELEGATION_SPEND_LIMIT_EXHAUSTED" });
+      if (normalized.maxSpendAtomic != null && usedSpend + nextReservedSpend > BigInt(normalized.maxSpendAtomic)) {
+        throw delegationError("delegation spend limit exhausted", 403, "DELEGATION_SPEND_LIMIT_EXHAUSTED");
       }
+
       await client.query(
         `UPDATE skillpass_delegation_usage
-            SET used_calls = $2, used_spend = $3::numeric, updated_at = clock_timestamp()
+            SET reserved_calls = $2, reserved_spend = $3::numeric, updated_at = clock_timestamp()
           WHERE grant_id = $1`,
-        [normalized.grantId, nextCalls, nextSpend.toString()],
+        [normalized.grantId, nextReservedCalls, nextReservedSpend.toString()],
       );
       await client.query(
-        `INSERT INTO skillpass_delegation_invocations(grant_id, invocation_key, spend, created_at)
-         VALUES ($1, $2, $3::numeric, clock_timestamp())`,
+        `INSERT INTO skillpass_delegation_invocations(grant_id, invocation_key, spend, status, created_at, updated_at)
+         VALUES ($1, $2, $3::numeric, 'reserved', clock_timestamp(), clock_timestamp())
+         ON CONFLICT (grant_id, invocation_key) DO UPDATE
+         SET spend = EXCLUDED.spend, status = 'reserved', updated_at = clock_timestamp()`,
         [normalized.grantId, normalized.invocationKey, normalized.spendAtomic],
       );
       await client.query("COMMIT");
-      return usageResult({ usedCalls: nextCalls, usedSpendAtomic: nextSpend, maxUses: normalized.maxUses, maxSpendAtomic: normalized.maxSpendAtomic, replayed: false });
+      return usageResult({
+        usedCalls,
+        usedSpendAtomic: usedSpend,
+        reservedCalls: nextReservedCalls,
+        reservedSpendAtomic: nextReservedSpend,
+        maxUses: normalized.maxUses,
+        maxSpendAtomic: normalized.maxSpendAtomic,
+        replayed: false,
+        status: "reserved",
+      });
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       throw error;
     } finally {
       client.release();
     }
+  }
+
+  async commit(input) {
+    const normalized = normalizeDelegationUsageInput(input);
+    this.#assertActive(normalized);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const row = await this.#lockUsage(client, normalized);
+      const invocationResult = await client.query(
+        `SELECT spend::text AS spend, status
+           FROM skillpass_delegation_invocations
+          WHERE grant_id = $1 AND invocation_key = $2 FOR UPDATE`,
+        [normalized.grantId, normalized.invocationKey],
+      );
+      const invocation = invocationResult.rows[0];
+      if (!invocation) throw delegationError("delegation reservation not found", 409, "DELEGATION_RESERVATION_NOT_FOUND");
+      if (BigInt(String(invocation.spend || "0")) !== BigInt(normalized.spendAtomic)) {
+        throw delegationError("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
+      }
+      if (invocation.status === "committed") {
+        await client.query("COMMIT");
+        return this.#result(row, normalized, { replayed: true, status: "committed" });
+      }
+      if (invocation.status !== "reserved") throw delegationError("delegation reservation was released", 409, "DELEGATION_RESERVATION_RELEASED");
+
+      const usedCalls = Number(row.used_calls || 0) + 1;
+      const usedSpend = BigInt(String(row.used_spend || "0")) + BigInt(normalized.spendAtomic);
+      const reservedCalls = Math.max(0, Number(row.reserved_calls || 0) - 1);
+      const reservedSpend = BigInt(String(row.reserved_spend || "0"));
+      const nextReservedSpend = reservedSpend >= BigInt(normalized.spendAtomic)
+        ? reservedSpend - BigInt(normalized.spendAtomic)
+        : 0n;
+      await client.query(
+        `UPDATE skillpass_delegation_usage
+            SET used_calls = $2, used_spend = $3::numeric,
+                reserved_calls = $4, reserved_spend = $5::numeric,
+                updated_at = clock_timestamp()
+          WHERE grant_id = $1`,
+        [normalized.grantId, usedCalls, usedSpend.toString(), reservedCalls, nextReservedSpend.toString()],
+      );
+      await client.query(
+        `UPDATE skillpass_delegation_invocations
+            SET status = 'committed', updated_at = clock_timestamp()
+          WHERE grant_id = $1 AND invocation_key = $2`,
+        [normalized.grantId, normalized.invocationKey],
+      );
+      await client.query("COMMIT");
+      return usageResult({
+        usedCalls,
+        usedSpendAtomic: usedSpend,
+        reservedCalls,
+        reservedSpendAtomic: nextReservedSpend,
+        maxUses: normalized.maxUses,
+        maxSpendAtomic: normalized.maxSpendAtomic,
+        replayed: false,
+        status: "committed",
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async release(input) {
+    const normalized = normalizeDelegationUsageInput(input);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const rowResult = await client.query(
+        `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+                reserved_calls::text AS reserved_calls, reserved_spend::text AS reserved_spend,
+                extract(epoch from expires_at) * 1000 AS expires_ms
+           FROM skillpass_delegation_usage WHERE grant_id = $1 FOR UPDATE`,
+        [normalized.grantId],
+      );
+      if (!rowResult.rows.length) { await client.query("COMMIT"); return null; }
+      const row = rowResult.rows[0];
+      if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt) {
+        throw delegationError("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+      }
+      const invocationResult = await client.query(
+        `SELECT spend::text AS spend, status FROM skillpass_delegation_invocations
+          WHERE grant_id = $1 AND invocation_key = $2 FOR UPDATE`,
+        [normalized.grantId, normalized.invocationKey],
+      );
+      const invocation = invocationResult.rows[0];
+      if (!invocation) { await client.query("COMMIT"); return this.#result(row, normalized, { replayed: false, status: "missing" }); }
+      if (BigInt(String(invocation.spend || "0")) !== BigInt(normalized.spendAtomic)) {
+        throw delegationError("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");
+      }
+      if (invocation.status !== "reserved") {
+        await client.query("COMMIT");
+        return this.#result(row, normalized, { replayed: invocation.status === "committed", status: invocation.status });
+      }
+      const reservedCalls = Math.max(0, Number(row.reserved_calls || 0) - 1);
+      const reservedSpend = BigInt(String(row.reserved_spend || "0"));
+      const nextReservedSpend = reservedSpend >= BigInt(normalized.spendAtomic)
+        ? reservedSpend - BigInt(normalized.spendAtomic)
+        : 0n;
+      await client.query(
+        `UPDATE skillpass_delegation_usage
+            SET reserved_calls = $2, reserved_spend = $3::numeric, updated_at = clock_timestamp()
+          WHERE grant_id = $1`,
+        [normalized.grantId, reservedCalls, nextReservedSpend.toString()],
+      );
+      await client.query(
+        `UPDATE skillpass_delegation_invocations
+            SET status = 'released', updated_at = clock_timestamp()
+          WHERE grant_id = $1 AND invocation_key = $2`,
+        [normalized.grantId, normalized.invocationKey],
+      );
+      await client.query("COMMIT");
+      return usageResult({
+        usedCalls: row.used_calls,
+        usedSpendAtomic: row.used_spend,
+        reservedCalls,
+        reservedSpendAtomic: nextReservedSpend,
+        maxUses: normalized.maxUses,
+        maxSpendAtomic: normalized.maxSpendAtomic,
+        replayed: false,
+        status: "released",
+      });
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consume(input) {
+    const reserved = await this.reserve(input);
+    if (reserved.status === "committed") return reserved;
+    return this.commit(input);
   }
 
   async pruneExpired() {
@@ -406,3 +633,4 @@ export class PostgresDelegationUsageLedger {
     return result.rowCount;
   }
 }
+
