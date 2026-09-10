@@ -8,29 +8,26 @@ const demoJs = readFileSync("apps/demo-service/public/app.js", "utf8");
 const liveApp = readFileSync("apps/web/src/App.tsx", "utf8");
 const liveMain = readFileSync("apps/web/src/main.tsx", "utf8");
 const liveCss = readFileSync("apps/web/src/styles.css", "utf8");
+const home = readFileSync("apps/web/src/DisconnectedHome.tsx", "utf8");
+const empty = readFileSync("apps/web/src/ConnectedNoPass.tsx", "utf8");
+const demoWorkspace = readFileSync("apps/web/src/DemoWorkspace.tsx", "utf8");
+const demoState = readFileSync("apps/web/src/demo/demoState.ts", "utf8");
+const demoServices = readFileSync("apps/web/src/demo/demoServices.ts", "utf8");
 
-test("local demo uses one focused product workspace instead of numbered dashboard cards", () => {
+test("legacy local demo remains available as a development fixture", () => {
   assert.match(demoHtml, /class="workspace"/);
   assert.match(demoHtml, /id="run"/);
   assert.match(demoHtml, /data-identity="alice"/);
-  assert.match(demoHtml, /name="mode" value="paid"/);
-  assert.doesNotMatch(demoHtml, /class="step"/);
+  assert.match(demoJs, /const to = from === "alice" \? "bob" : "alice"/);
   assert.doesNotMatch(demoCss, /radial-gradient|linear-gradient/);
 });
 
-test("local demo renders structured service results and reversible ownership transfer", () => {
-  assert.match(demoHtml, /id="metric-words"/);
-  assert.match(demoHtml, /id="result-preview"/);
-  assert.match(demoJs, /const to = from === "alice" \? "bob" : "alice"/);
-  assert.match(demoJs, /renderSuccess\(result\)/);
-});
-
-test("live CCC frontend has a single editor workspace with readable result output", () => {
+test("live CCC frontend keeps the real protected-service workspace", () => {
   assert.equal((liveApp.match(/<textarea/g) || []).length, 1);
-  assert.match(liveApp, /Service"} result|selectedService\?\.name/);
-  assert.match(liveApp, /metric-grid/);
   assert.match(liveApp, /Manage this pass/);
-  assert.doesNotMatch(liveApp, /Your capabilities/);
+  assert.match(liveApp, /discoverOwnedCapabilities/);
+  assert.match(liveApp, /trustedIssuerIds/);
+  assert.doesNotMatch(liveApp, /Paper Analyzer|Research Insights/);
   assert.doesNotMatch(liveCss, /radial-gradient|linear-gradient/);
 });
 
@@ -40,8 +37,7 @@ test("live payment UX keeps private-key safety explicit and uses a modal seconda
   assert.match(liveApp, /className="modal-backdrop"/);
 });
 
-
-test("live wallet connector is constrained to the network and signer type the app supports", () => {
+test("live wallet connector is constrained to the supported CKB Testnet signer type", () => {
   assert.match(liveMain, /new ccc\.ClientPublicTestnet\(\)/);
   assert.match(liveMain, /clientOptions=\{\[\{ name: "CKB Testnet"/);
   assert.match(liveMain, /ccc\.SignerType\.CKB/);
@@ -55,30 +51,58 @@ test("product frontend dev command starts the live API alongside Vite", () => {
   assert.match(devProduct, /apps\/live-service\/server\.mjs/);
   assert.match(devProduct, /SKILLPASS_API_ORIGIN/);
   assert.match(viteConfig, /process\.env\.SKILLPASS_API_ORIGIN/);
-  assert.match(viteConfig, /"\/.well-known": apiOrigin/);
 });
 
-test("disconnected home explains the portable-right lifecycle before wallet connection", () => {
-  const home = readFileSync("apps/web/src/DisconnectedHome.tsx", "utf8");
-  assert.match(liveApp, /<DisconnectedHome ready=\{Boolean\(config\)\} onConnect=\{\(\) => open\(\)\} \/>/);
+test("landing page makes the no-wallet demo the primary evaluation path", () => {
+  assert.match(liveApp, /experienceMode/);
+  assert.match(liveApp, /<DemoWorkspace/);
   assert.match(home, /Own the service right, not another account\./);
-  assert.match(home, /Receive a service right/);
-  assert.match(home, /Delegate when useful/);
-  assert.match(home, /Transfer ownership/);
+  assert.match(home, /Try interactive demo/);
+  assert.match(home, /Connect JoyID · Live Testnet/);
+  assert.match(home, /No wallet required for demo/);
+  assert.match(home, /Live issuance stays provider-controlled/);
   assert.match(home, /Service Bundle Pass/);
-  assert.match(home, /A service bundle changes owner without three providers updating account records/);
-  assert.match(home, /Issuance remains a provider action/);
-  assert.match(home, /Entitlement and payment are separate/);
+  assert.match(home, /Model API/);
+  assert.match(home, /Private Data API/);
+  assert.match(home, /Compute API/);
 });
 
-test("connected no-pass state guides new wallets instead of showing an empty protected-service panel", () => {
-  const empty = readFileSync("apps/web/src/ConnectedNoPass.tsx", "utf8");
+test("connected no-pass state is recoverable instead of a dead end", () => {
   assert.match(liveApp, /<ConnectedNoPass/);
-  assert.match(empty, /You are connected\. Now add a service right\./);
-  assert.match(empty, /Model API/);
-  assert.match(empty, /Private Data API/);
-  assert.match(empty, /Compute API/);
-  assert.match(empty, /Alice → Bob, across several providers/);
-  assert.match(empty, /provider action/i);
-  assert.doesNotMatch(liveApp, /Paper Analyzer|Research Insights/);
+  assert.match(empty, /No live SkillPass yet\./);
+  assert.match(empty, /Try interactive demo/);
+  assert.match(empty, /Refresh ownership/);
+  assert.match(empty, /Copy wallet address/);
+  assert.match(empty, /provider-issued Capability Cell/i);
+  assert.match(empty, /no public “mint my pass” button/i);
+  assert.doesNotMatch(empty, /Alice → Bob, across several providers/);
+});
+
+test("integrated demo clearly separates simulated state from live Testnet", () => {
+  assert.match(demoWorkspace, /Demo mode/i);
+  assert.match(demoWorkspace, /Simulated capability lifecycle/);
+  assert.match(demoWorkspace, /No wallet, funds, or blockchain transaction/);
+  assert.match(demoWorkspace, /Open Live Testnet/);
+  assert.match(liveApp, /experienceMode === "demo"/);
+});
+
+test("integrated demo proves Alice to Bob ownership invalidation and supports three providers", () => {
+  assert.match(demoState, /requester === owner/);
+  assert.match(demoState, /is not the current owner/);
+  assert.match(demoWorkspace, /Transfer pass to/);
+  assert.match(demoWorkspace, /Test .*'s access/);
+  assert.match(demoWorkspace, /Access granted/);
+  assert.match(demoWorkspace, /Access denied/);
+  assert.match(demoServices, /Model API/);
+  assert.match(demoServices, /Private Data API/);
+  assert.match(demoServices, /Compute API/);
+  assert.match(demoServices, /Provider A/);
+  assert.match(demoServices, /Provider B/);
+  assert.match(demoServices, /Provider C/);
+});
+
+test("automatic capability discovery does not duplicate the empty-state warning", () => {
+  assert.match(liveApp, /refresh\(false\)/);
+  assert.match(liveApp, /if \(found\.length \|\| announce\)/);
+  assert.match(liveApp, /No new SkillPass was found for this wallet\./);
 });

@@ -1,0 +1,37 @@
+SkillPass integrated-demo / no-pass UX correction
+
+Modified:
+- apps/web/src/App.tsx
+- apps/web/src/DisconnectedHome.tsx
+- apps/web/src/ConnectedNoPass.tsx
+- apps/web/src/styles.css
+- tests/frontend-product-ui.test.mjs
+- HOW_TO_VERIFY.md
+
+Added:
+- apps/web/src/DemoWorkspace.tsx
+- apps/web/src/demo/demoState.ts
+- apps/web/src/demo/demoServices.ts
+- .env.example
+- .env.testnet.example
+- .env.live.example
+- .env.production.example
+- .env.vercel.example
+- .gitignore
+- .dockerignore
+- .github/workflows/security-readiness.yml
+
+Behavioral changes:
+- Primary no-wallet interactive demo in the production React frontend.
+- Explicit Demo vs Live Testnet mode indicator.
+- Alice -> Bob ownership transfer demonstration.
+- Old owner denial and new owner authorization demonstration.
+- Model API / Private Data API / Compute API examples under one Service Bundle Pass.
+- Connected no-pass state now offers Demo, Refresh Ownership, and Copy Wallet Address.
+- Automatic discovery no longer duplicates the no-pass empty state with an initial toast.
+- Trusted provider issuance and all live CKB authorization checks remain unchanged.
+
+Validation:
+- Security preflight: PASS
+- Repository test suite: 194/194 PASS
+- Focused TypeScript semantic check for new/rewritten React components: PASS

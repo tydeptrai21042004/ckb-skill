@@ -175,3 +175,20 @@ Do not mark the system externally verified/mainnet-ready until you have real rep
 - production frontend build and contract tests;
 - independent tester reproduction;
 - measured real network latency/error rates and a soak period.
+
+## Integrated no-pass demo flow
+
+The primary web app now includes a wallet-free interactive demo so reviewers are not blocked by provider issuance.
+
+1. Start the normal product with `npm run dev`.
+2. Open the web UI and choose **Try interactive demo**.
+3. Confirm the banner says **Demo mode** and clearly states that no wallet, funds, or blockchain transaction is used.
+4. Run **Model API** as Alice and confirm **Access granted**.
+5. Transfer **Service Bundle Pass** from Alice to Bob.
+6. Test Alice again and confirm **Access denied**.
+7. Test Bob and confirm **Access granted**.
+8. Switch to **Private Data API** and **Compute API** to confirm that the same shared entitlement is presented across three independent provider examples.
+9. Choose **Live Testnet** to return to JoyID-backed discovery.
+10. If the connected wallet has no pass, confirm the UI offers **Try interactive demo**, **Refresh ownership**, and **Copy wallet address** rather than a dead end.
+
+Live issuance remains provider-controlled. Demo Mode never creates a trusted Capability Cell and never bypasses live issuer checks.
