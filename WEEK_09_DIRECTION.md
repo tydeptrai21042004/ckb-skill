@@ -32,7 +32,7 @@ The trusted provider is configured with:
 CAPABILITY_TRUSTED_ISSUER_ID=0x...
 ```
 
-This prevents a user from self-issuing a Capability for `paper-analyzer-v1` and presenting it as a provider-issued right.
+This prevents a user from self-issuing a Capability for `model-api-v1` and presenting it as a provider-issued right.
 
 ---
 

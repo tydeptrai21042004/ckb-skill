@@ -21,8 +21,6 @@ COPY packages/x402-fiber ./packages/x402-fiber
 COPY packages/http-security ./packages/http-security
 COPY packages/production-store ./packages/production-store
 COPY apps/live-service ./apps/live-service
-COPY apps/demo-service/src/paper-analyzer.mjs ./apps/demo-service/src/paper-analyzer.mjs
-COPY apps/demo-service/src/research-insights.mjs ./apps/demo-service/src/research-insights.mjs
 COPY --from=web /repo/apps/web/dist ./apps/live-service/public
 RUN npm install --omit=dev --workspace @skillpass/live-service --include-workspace-root=false --no-audit --no-fund \
  && chown -R node:node /app

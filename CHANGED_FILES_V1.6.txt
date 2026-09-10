@@ -1,0 +1,55 @@
+# SkillPass v1.6 changed files
+
+Relative to the uploaded repository:
+
+ADDED    .dockerignore
+ADDED    .env.example
+ADDED    .env.live.example
+ADDED    .env.production.example
+ADDED    .env.testnet.example
+ADDED    .env.vercel.example
+ADDED    .github/workflows/security-readiness.yml
+ADDED    .gitignore
+MODIFIED CHANGELOG.md
+MODIFIED Dockerfile.live
+MODIFIED MARKET_VALIDATION_PLAN.md
+MODIFIED README.md
+ADDED    RELEASE_NOTES_V1_6.md
+MODIFIED WEEK_09_DIRECTION.md
+MODIFIED apps/live-service/discovery.mjs
+ADDED    apps/live-service/reference-services.mjs
+MODIFIED apps/live-service/runtime-state.mjs
+MODIFIED apps/live-service/server.mjs
+MODIFIED apps/live-service/services.mjs
+MODIFIED apps/live-service/services.test.mjs
+MODIFIED apps/web/src/App.tsx
+ADDED    deploy/compose.multi-provider-pilot.yaml
+MODIFIED docs/AGENT_DELEGATION.md
+MODIFIED docs/MARKET_VALIDATION_PLAYBOOK.md
+MODIFIED docs/MULTI_PROVIDER_PILOT.md
+MODIFIED docs/PROVIDER_POLICY_MODES.md
+MODIFIED docs/SERVICE_GATEWAY.md
+MODIFIED package.json
+MODIFIED packages/agent-sdk/src/index.mjs
+MODIFIED packages/agent-sdk/test/agent-sdk.test.mjs
+MODIFIED packages/capability-codec/test/codec.test.mjs
+MODIFIED packages/ckb-client/src/testnet-example.ts
+MODIFIED packages/delegation/src/usage-ledger.mjs
+MODIFIED packages/delegation/test/delegation.test.mjs
+MODIFIED packages/delegation/test/usage-ledger.test.mjs
+MODIFIED packages/production-store/src/postgres.mjs
+MODIFIED packages/production-store/src/stores.mjs
+MODIFIED packages/service-gateway/src/index.mjs
+MODIFIED packages/service-gateway/test/gateway.test.mjs
+MODIFIED packages/service-rights/test/policy.test.mjs
+MODIFIED scripts/dev-cli.mjs
+ADDED    scripts/pilot-check.mjs
+MODIFIED scripts/provider-admin.mjs
+MODIFIED tests/production-deployment.test.mjs
+MODIFIED tests/service-bundle-catalog.test.mjs
+ADDED    tests/v1.6-portable-service-ownership.test.mjs
+ADDED    CHANGED_FILES_V1.6.txt
+
+Total changed/added files: 47
+
+Key scope: release packaging, portable multi-provider Service Bundle proof, failure-safe delegation accounting, idempotent action retries, provider discovery, and product-facing documentation.

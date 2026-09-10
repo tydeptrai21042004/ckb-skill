@@ -1,4 +1,4 @@
-# SkillPass v1.5 — Portable Service Rights on CKB
+# SkillPass v1.6 — Portable Service Ownership on CKB
 
 SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or optionally delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
 
@@ -19,8 +19,14 @@ The strongest SkillPass use case is **a service right that should move with its 
 > **Funding/product foundation:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
 
 
-## What v1.5 includes
+## What v1.6 includes
 
+- **Three-provider ownership pilot** — Model API, Private Data API, and Compute API can run as separate provider processes with different provider identities and no shared entitlement database; `npm run pilot:check` verifies their manifests and can compare live CKB ownership evidence.
+- **Real reference service behavior** — the built-in trio now performs deterministic model-style embedding, protected dataset queries, and vector compute instead of placeholder analysis copy.
+- **Failure-safe delegation budgets** — bounded delegation uses reserve → execute/settle → commit, with release on failure and stale-reservation recovery so upstream failures do not permanently burn quota.
+- **Explicit idempotent actions** — state-changing/compute upstreams must declare `operationMode=idempotent-action` and `idempotencyMode=invocation-key`; a caller-stable `operationId` is signed into the wallet intent and reused as the upstream idempotency boundary, while arbitrary write modes remain rejected.
+- **Provider manifest/discovery** — `/api/provider-manifest` publishes provider identity, accepted services/policies, ownership source, and a canonical manifest hash.
+- **Clean release packaging** — hidden environment templates, ignore files, and security CI are part of the release artifact; the default `npm run dev` launches the current Service Bundle product.
 - **Per-service provider trust** — each protected service can accept a different issuer allowlist instead of sharing one global trust decision.
 - **Shared bundle entitlements** — multiple independent service policies can accept the same immutable Capability entitlement ID through `entitlementIds`, so one live Cell can unlock an opt-in provider bundle without entitlement-database synchronization.
 - **Owned right vs revocable license** — `rightMode=owned` keeps provider revocation disabled; `rightMode=license` requires explicit `FLAG_REVOCABLE` opt-in and supports a provider deny/restore record.

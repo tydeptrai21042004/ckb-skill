@@ -1,6 +1,6 @@
 {
   "name": "ckb-skillpass",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -10,7 +10,7 @@
     "setup": "node scripts/dev-cli.mjs setup",
     "help": "node scripts/dev-cli.mjs help",
     "doctor": "node scripts/dev-cli.mjs doctor",
-    "dev": "node scripts/dev-cli.mjs demo",
+    "dev": "node scripts/dev-cli.mjs web",
     "dev:demo": "node scripts/dev-cli.mjs demo",
     "dev:web": "node scripts/dev-cli.mjs web",
     "dev:frontend-only": "npm run dev --prefix apps/web",
@@ -20,7 +20,7 @@
     "clean": "node scripts/dev-cli.mjs clean",
     "docker:demo": "node scripts/dev-cli.mjs docker-demo",
     "bootstrap": "node scripts/bootstrap.mjs",
-    "serve": "node apps/demo-service/server.mjs",
+    "serve": "node apps/live-service/server.mjs",
     "test": "node --test",
     "smoke:http": "node scripts/smoke-http.mjs",
     "demo": "node scripts/demo-flow.mjs",
@@ -66,7 +66,11 @@
     "vercel:env:gui": "bash collect-vercel-env.sh",
     "typecheck:vercel": "tsc -p apps/live-service/tsconfig.json && tsc -p apps/fiber-facilitator/tsconfig.json",
     "verify:workspaces": "node scripts/check-workspace-deps.mjs",
-    "provider:admin": "node scripts/provider-admin.mjs"
+    "provider:admin": "node scripts/provider-admin.mjs",
+    "serve:demo": "node apps/demo-service/server.mjs",
+    "pilot:up": "docker compose --env-file .env.testnet -f deploy/compose.multi-provider-pilot.yaml up --build",
+    "pilot:down": "docker compose --env-file .env.testnet -f deploy/compose.multi-provider-pilot.yaml down --remove-orphans",
+    "pilot:check": "node scripts/pilot-check.mjs"
   },
   "workspaces": [
     "apps/*",

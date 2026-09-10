@@ -1,3 +1,14 @@
+## v1.6.0 — Portable service ownership hardening
+
+- Made the current Model/Data/Compute Service Bundle the default development product; legacy research demo is opt-in only.
+- Restored hidden release/deployment templates and security CI assets that were missing from exported ZIPs.
+- Added failure-safe delegation reservation/commit/release accounting for local and PostgreSQL backends.
+- Added explicit `idempotent-action` service mode with signed caller-stable `operationId` retry semantics.
+- Added concrete reference Model, Private Data, and Compute operations.
+- Added provider manifests, single-service provider filtering, and a three-independent-provider CKB ownership pilot.
+- Wired Capability v2 subject-policy controls through the live runtime while keeping V2/agents secondary to the core product.
+- Reworked market-validation docs around measurable project/service ownership migration pain.
+
 ## v1.4.0 — 2026-09-09 — deployment/security hardening
 
 - Updated Vite from 7.0.0 to 7.3.5 and made dev/preview loopback-only by default; LAN exposure is explicit.

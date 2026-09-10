@@ -30,7 +30,7 @@ test("production containers include shared security and shared-state packages", 
   }
   assert.match(read("Dockerfile.live"), /COPY packages\/service-gateway \.\/packages\/service-gateway/, "Dockerfile.live must include service-gateway");
   assert.match(read("Dockerfile.live"), /COPY packages\/delegation \.\/packages\/delegation/, "Dockerfile.live must include delegation");
-  assert.match(read("Dockerfile.live"), /research-insights\.mjs/, "Dockerfile.live must include the second built-in service");
+  assert.doesNotMatch(read("Dockerfile.live"), /paper-analyzer\.mjs|research-insights\.mjs/, "Dockerfile.live must not ship legacy demo services");
   for (const path of ["Dockerfile.live", "Dockerfile.facilitator"]) {
     assert.match(read(path), /COPY packages\/production-store \.\/packages\/production-store/, `${path} must include production-store`);
   }

@@ -25,5 +25,7 @@ test("default built-in services share one Service Bundle entitlement", () => {
   assert.match(server, /isDefaultBundleService/);
   assert.match(server, /defaultEntitlementIds = isDefaultBundleService \? \[SERVICE_BUNDLE_V1_ENTITLEMENT_ID\]/);
   assert.match(server, /service-bundle-v1/);
-  assert.match(server, /getBySlug\("model-api-v1"\)/);
+  assert.match(server, /CONFIGURED_PRIMARY_SERVICE_SLUG/);
+  assert.match(server, /getBySlug\("model-api-v1"\) \|\| serviceRegistry\.services\[0\]/);
+  assert.match(server, /SKILLPASS_PRIMARY_SERVICE is not enabled/);
 });
