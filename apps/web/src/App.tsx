@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import DisconnectedHome from "./DisconnectedHome";
 import ConnectedNoPass from "./ConnectedNoPass";
+import DemoWorkspace from "./DemoWorkspace";
 import { ccc } from "@ckb-ccc/connector-react";
 import QRCode from "react-qr-code";
 import {
@@ -401,6 +402,7 @@ export default function App() {
   const { open, disconnect, wallet, signerInfo } = ccc.useCcc();
   const signer = ccc.useSigner();
   const [config, setConfig] = useState<RuntimeConfig>();
+  const [experienceMode, setExperienceMode] = useState<"live" | "demo">("live");
   const [address, setAddress] = useState("");
   const [caps, setCaps] = useState<Found[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
@@ -539,7 +541,7 @@ export default function App() {
       .catch((e) => setNotice({ tone: "error", message: `Could not read wallet address: ${e.message}` }));
   }, [signer]);
 
-  async function refresh() {
+  async function refresh(announce = true) {
     if (!signer || !config) return;
     setBusy("refresh");
     try {
@@ -559,12 +561,14 @@ export default function App() {
         const firstActive = found.find(isCapabilityActive) ?? found[0];
         return firstActive ? capabilityKey(firstActive) : "";
       });
-      setNotice({
-        tone: found.length ? "success" : "info",
-        message: found.length
-          ? `${found.length} access pass${found.length === 1 ? "" : "es"} found on CKB.`
-          : "No SkillPass access pass was found for this wallet.",
-      });
+      if (found.length || announce) {
+        setNotice({
+          tone: found.length ? "success" : "info",
+          message: found.length
+            ? `${found.length} access pass${found.length === 1 ? "" : "es"} found on CKB.`
+            : "No new SkillPass was found for this wallet.",
+        });
+      }
     } catch (e) {
       setNotice({ tone: "error", message: `Could not load passes: ${(e as Error).message}` });
     } finally {
@@ -572,7 +576,7 @@ export default function App() {
     }
   }
 
-  useEffect(() => { if (signer && config) void refresh(); }, [signer, config]);
+  useEffect(() => { if (signer && config) void refresh(false); }, [signer, config]);
 
   async function issue() {
     if (!signer || !config || !config.enablePublicIssue || !issueRecipient.trim()) return;
@@ -605,7 +609,7 @@ export default function App() {
       const { txHash } = await sendAndWait(signer, tx);
       setNotice({ tone: "success", message: `Provider-issued ${issueService?.name ?? "SkillPass"} pass confirmed: ${short(txHash, 10)} · ${short(capabilityId, 10)} → ${short(issueRecipient.trim(), 8)}` });
       setIssueRecipient("");
-      await refresh();
+      await refresh(false);
     } catch (e) {
       setNotice({ tone: "error", message: `Issue failed: ${(e as Error).message}` });
     } finally {
@@ -626,7 +630,7 @@ export default function App() {
       const { txHash } = await sendAndWait(signer, tx);
       setRecipient("");
       setNotice({ tone: "success", message: `Transfer confirmed on CKB: ${short(txHash, 12)}` });
-      await refresh();
+      await refresh(false);
     } catch (e) {
       setNotice({ tone: "error", message: `Transfer failed: ${(e as Error).message}` });
     } finally {
@@ -867,14 +871,18 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="header-inner">
-          <a className="brand" href="/" aria-label="SkillPass home">
+          <a className="brand" href="/" aria-label="SkillPass home" onClick={(event) => { event.preventDefault(); setExperienceMode("live"); }}>
             <span className="brand-mark">SP</span>
             <span className="brand-name">SkillPass</span>
-            <span className="network-badge">Testnet</span>
+            <span className={`network-badge ${experienceMode === "demo" ? "demo" : ""}`}>{experienceMode === "demo" ? "Demo" : "Testnet"}</span>
           </a>
 
           <div className="header-actions">
-            {connected && config && (
+            <div className="experience-switch" aria-label="SkillPass experience mode">
+              <button type="button" className={experienceMode === "demo" ? "active" : ""} onClick={() => { setExperienceMode("demo"); setNotice(undefined); }}>Demo</button>
+              <button type="button" className={experienceMode === "live" ? "active" : ""} onClick={() => setExperienceMode("live")}>Live</button>
+            </div>
+            {experienceMode === "live" && connected && config && (
               <button
                 className={`system-indicator ${systemReady ? "ready" : "warn"}`}
                 type="button"
@@ -887,7 +895,7 @@ export default function App() {
               </button>
             )}
 
-            {connected ? (
+            {experienceMode === "live" && (connected ? (
               <div className="wallet-menu">
                 <div className="wallet-summary">
                   <span className="wallet-icon"><Icon name="wallet" size={16} /></span>
@@ -903,31 +911,44 @@ export default function App() {
                 <Icon name="wallet" size={17} />
                 Connect wallet
               </button>
-            )}
+            ))}
           </div>
         </div>
       </header>
 
       <main className="main-content">
-        {notice && (
+        {experienceMode === "live" && notice && (
           <div className={`notice ${notice.tone}`} role="status" aria-live="polite">
             <span className="notice-icon">{notice.tone === "success" ? <Icon name="check" size={16} /> : notice.tone === "error" ? "!" : "i"}</span>
             <span>{notice.message}</span>
           </div>
         )}
 
-        {!connected && configError ? (
+        {experienceMode === "demo" ? (
+          <DemoWorkspace
+            liveReady={Boolean(config)}
+            onOpenLive={() => setExperienceMode("live")}
+            onConnectLive={() => { setExperienceMode("live"); if (config) open(); }}
+          />
+        ) : !connected && configError ? (
           <section className="service-unavailable" role="alert">
             <div className="unavailable-icon">!</div>
             <div>
               <span className="eyebrow">Service unavailable</span>
               <h1>SkillPass is not ready yet.</h1>
               <p>{configError}</p>
-              <button className="button secondary" onClick={() => void loadConfig()}>Retry</button>
+              <div className="unavailable-actions">
+                <button className="button primary" onClick={() => { setExperienceMode("demo"); setNotice(undefined); }}>Try interactive demo</button>
+                <button className="button secondary" onClick={() => void loadConfig()}>Retry Live Testnet</button>
+              </div>
             </div>
           </section>
         ) : !connected ? (
-          <DisconnectedHome ready={Boolean(config)} onConnect={() => open()} />
+          <DisconnectedHome
+            ready={Boolean(config)}
+            onTryDemo={() => { setExperienceMode("demo"); setNotice(undefined); }}
+            onConnect={() => { setExperienceMode("live"); open(); }}
+          />
         ) : (
           <div className="workspace">
             <aside className="sidebar">
@@ -937,7 +958,7 @@ export default function App() {
                     <span className="eyebrow">Access</span>
                     <h2>Your passes</h2>
                   </div>
-                  <button className="icon-button" onClick={refresh} disabled={busy === "refresh" || !config} title="Refresh passes" aria-label="Refresh passes">
+                  <button className="icon-button" onClick={() => void refresh()} disabled={busy === "refresh" || !config} title="Refresh passes" aria-label="Refresh passes">
                     <Icon name="refresh" size={17} />
                   </button>
                 </div>
@@ -947,7 +968,8 @@ export default function App() {
                     <div className="sidebar-empty">
                       <div className="empty-icon"><Icon name="key" size={20} /></div>
                       <strong>No pass found</strong>
-                      <p>Ask the provider to issue or transfer a service pass to this wallet.</p>
+                      <p>A provider-issued pass is required for live access.</p>
+                      <button type="button" className="button secondary small full sidebar-demo-button" onClick={() => { setExperienceMode("demo"); setNotice(undefined); }}>Try Demo</button>
                     </div>
                   ) : caps.map((cap) => {
                     const key = capabilityKey(cap);
@@ -1007,7 +1029,9 @@ export default function App() {
                   address={address}
                   services={services}
                   refreshing={busy === "refresh"}
-                  onRefresh={refresh}
+                  onRefresh={() => void refresh()}
+                  onTryDemo={() => { setExperienceMode("demo"); setNotice(undefined); }}
+                  onCopyAddress={() => void copyText(address, "Wallet address")}
                 />
               ) : (
                 <>
