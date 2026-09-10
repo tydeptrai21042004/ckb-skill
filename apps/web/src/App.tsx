@@ -22,6 +22,10 @@ type ServiceDescriptor = {
   inputKind: "text" | "json";
   maxInputChars: number;
   kind: string;
+  operationMode?: "read" | "idempotent-action";
+  idempotencyMode?: "invocation-key" | null;
+  providerId?: string | null;
+  providerName?: string | null;
   endpoint: string;
   policyId: string;
   policyFingerprint?: string;
@@ -139,6 +143,7 @@ type PendingPayment = {
   outPoint: { txHash: string; index: string };
   input: unknown;
   serviceSlug: string;
+  operationId?: string;
 };
 
 type AuthorizationReceipt = {
@@ -147,6 +152,7 @@ type AuthorizationReceipt = {
   authorization?: {
     requestId?: string;
     action?: string;
+    operationId?: string | null;
     principal?: "owner" | "delegate";
     principalAddress?: string;
     ownerAddress?: string;
@@ -154,7 +160,7 @@ type AuthorizationReceipt = {
     delegationExpiresAt?: number | null;
     delegationVersion?: number | null;
     delegationLimits?: { maxUses?: number; maxSpendAtomic?: string } | null;
-    delegationUsage?: { usedCalls: number; usedSpendAtomic: string; remainingUses: number | null; remainingSpendAtomic: string | null; replayed: boolean } | null;
+    delegationUsage?: { usedCalls: number; usedSpendAtomic: string; reservedCalls?: number; reservedSpendAtomic?: string; remainingUses: number | null; remainingSpendAtomic: string | null; replayed: boolean; status?: string } | null;
     intentBound?: boolean;
     entitlementVerified?: boolean;
     paymentRequired?: boolean;
@@ -656,22 +662,27 @@ export default function App() {
     input: unknown,
     service: ServiceDescriptor,
     delegation?: DelegationCredential,
+    operationIdOverride = "",
   ) {
     if (!signer || !address) throw new Error("Connect a wallet first.");
     const requestMaterial = service.inputKind === "text" ? String(input) : canonicalJson(input);
     const requestHash = await sha256Hex(requestMaterial);
+    const operationId = service.operationMode === "idempotent-action"
+      ? (operationIdOverride || crypto.randomUUID())
+      : "";
     const challenge = await api<{ nonce: string; message: string; expiresAt: number }>("/api/challenge", {
       address,
       outPoint,
       requestHash,
       service: service.slug,
       delegationId: delegation?.grant.grantId || "",
+      ...(operationId ? { operationId } : {}),
     });
     const signature = await signer.signMessage(challenge.message);
     if (signature.identity !== address) {
       throw new Error("This deployment requires a CKB-native signer whose message-signature identity matches the connected CKB address.");
     }
-    return { address, nonce: challenge.nonce, signature, outPoint, input, ...(delegation ? { delegation } : {}) };
+    return { address, nonce: challenge.nonce, signature, outPoint, input, ...(operationId ? { operationId } : {}), ...(delegation ? { delegation } : {}) };
   }
 
   async function sendInvoke(
@@ -720,7 +731,7 @@ export default function App() {
       const body = await signedRequestBody(outPoint, input, selectedService);
       const response = await sendInvoke(selectedService, body);
       if (response.kind === "payment") {
-        setPendingPayment({ required: response.required, outPoint, input, serviceSlug: selectedService.slug });
+        setPendingPayment({ required: response.required, outPoint, input, serviceSlug: selectedService.slug, operationId: body.operationId });
         setPaymentPreimage("");
         setNotice({ tone: "info", message: "Payment is required before this request can run." });
       } else {
@@ -746,7 +757,7 @@ export default function App() {
     }
     setBusy("paid-retry");
     try {
-      const body = await signedRequestBody(pendingPayment.outPoint, pendingPayment.input, service);
+      const body = await signedRequestBody(pendingPayment.outPoint, pendingPayment.input, service, undefined, pendingPayment.operationId || "");
       if (config?.payments?.proofMode === "preimage" && !/^0x[0-9a-fA-F]{64}$/.test(paymentPreimage.trim())) {
         throw new Error("Enter the 32-byte Fiber payment preimage (0x + 64 hex characters)." );
       }

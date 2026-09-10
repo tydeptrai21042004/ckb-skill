@@ -16,7 +16,7 @@ SKILLPASS_GATEWAY_AUTH_BEARER=
 
 # Optional: override the global PAYMENT_AMOUNT for individual services.
 # Values are atomic-unit integer strings.
-SKILLPASS_SERVICE_PRICES_JSON={"research-insights-v1":"200000","private-json-gateway-v1":"500000"}
+SKILLPASS_SERVICE_PRICES_JSON={"private-data-api-v1":"200000","private-json-gateway-v1":"500000"}
 ```
 
 The upstream URL is fixed by the operator. Clients cannot supply or override a host/path. Public production requires HTTPS and forbids credentials embedded in the URL.

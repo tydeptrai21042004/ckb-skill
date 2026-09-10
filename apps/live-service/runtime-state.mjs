@@ -60,13 +60,14 @@ class LocalRateLimiter {
 }
 
 export async function createLiveRuntimeState({ backend = "local", stateFile = "", challengeTtlMs = 60_000, env = process.env } = {}) {
+  const delegationReservationTtlMs = Number(env.DELEGATION_RESERVATION_TTL_MS || 120_000);
   if (backend === "local") {
     return {
       backend,
       serviceState: new LiveServiceState({ file: stateFile }),
       challenges: new LocalChallengeStore({ ttlMs: challengeTtlMs }),
       rateLimiter: new LocalRateLimiter(),
-      delegationUsage: new LocalDelegationUsageLedger(),
+      delegationUsage: new LocalDelegationUsageLedger({ reservationTtlMs: delegationReservationTtlMs }),
       async health() { return { ok: true, backend, postgres: { ok: true, skipped: true }, redis: { ok: true, skipped: true } }; },
       async close() {},
     };
@@ -85,7 +86,7 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
       serviceState: new LiveServiceState({ store: recordStore }),
       challenges: new PostgresChallengeStore({ pool, ttlMs: challengeTtlMs }),
       rateLimiter: new PostgresRateLimiter({ pool }),
-      delegationUsage: new PostgresDelegationUsageLedger({ pool }),
+      delegationUsage: new PostgresDelegationUsageLedger({ pool, reservationTtlMs: delegationReservationTtlMs }),
       async health() {
         const postgres = await postgresHealth(pool);
         return { ok: postgres.ok, backend, postgres, redis: { ok: true, skipped: true } };
@@ -100,7 +101,7 @@ export async function createLiveRuntimeState({ backend = "local", stateFile = ""
     serviceState: new LiveServiceState({ store: recordStore }),
     challenges: new RedisChallengeStore({ client: redis, ttlMs: challengeTtlMs }),
     rateLimiter: new RedisRateLimiter({ client: redis }),
-    delegationUsage: new PostgresDelegationUsageLedger({ pool }),
+    delegationUsage: new PostgresDelegationUsageLedger({ pool, reservationTtlMs: delegationReservationTtlMs }),
     async health() {
       const [postgres, redisStatus] = await Promise.all([postgresHealth(pool), redisHealth(redis)]);
       return { ok: postgres.ok && redisStatus.ok, backend, postgres, redis: redisStatus };

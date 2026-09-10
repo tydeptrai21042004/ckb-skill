@@ -1,0 +1,69 @@
+# SkillPass multi-provider pilot.
+# One Service Bundle Capability is independently checked by three provider
+# processes. They intentionally do not share PostgreSQL/Redis entitlement state.
+# Usage: docker compose --env-file .env.testnet -f deploy/compose.multi-provider-pilot.yaml up --build
+
+x-skillpass-common: &skillpass-common
+  build:
+    context: ..
+    dockerfile: Dockerfile.live
+  restart: unless-stopped
+  init: true
+  read_only: true
+  tmpfs: [/tmp]
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+  environment: &skillpass-environment
+    HOST: 0.0.0.0
+    PORT: 8787
+    SKILLPASS_PUBLIC_PRODUCTION: "false"
+    STATE_BACKEND: local
+    ENABLE_PUBLIC_ISSUE: "false"
+    ENABLE_DEEP_HEALTH: "false"
+    PAYMENTS_REQUIRED: "false"
+    CKB_RPC_URL: ${CKB_RPC_URL:?set CKB_RPC_URL in .env.testnet}
+    CAPABILITY_CODE_HASH: ${CAPABILITY_CODE_HASH:?set CAPABILITY_CODE_HASH in .env.testnet}
+    CAPABILITY_HASH_TYPE: ${CAPABILITY_HASH_TYPE:-data2}
+    CAPABILITY_DEP_TX_HASH: ${CAPABILITY_DEP_TX_HASH:?set CAPABILITY_DEP_TX_HASH in .env.testnet}
+    CAPABILITY_DEP_INDEX: ${CAPABILITY_DEP_INDEX:-0}
+    CAPABILITY_TRUSTED_ISSUER_ID: ${CAPABILITY_TRUSTED_ISSUER_ID:?set CAPABILITY_TRUSTED_ISSUER_ID in .env.testnet}
+    CAPABILITY_TRUSTED_ISSUER_IDS: ${CAPABILITY_TRUSTED_ISSUER_IDS:-}
+    SERVICE_POLICY_ID: ${SERVICE_POLICY_ID:-service-bundle-v1}
+    SERVICE_RIGHT_MODE: owned
+
+services:
+  model-provider:
+    <<: *skillpass-common
+    environment:
+      <<: *skillpass-environment
+      SKILLPASS_PROVIDER_ID: provider-model-a
+      SKILLPASS_PROVIDER_NAME: Model Provider A
+      SKILLPASS_ENABLED_SERVICES: model-api-v1
+      SKILLPASS_PRIMARY_SERVICE: model-api-v1
+      PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_MODEL_PORT:-8811}
+    ports:
+      - "127.0.0.1:${SKILLPASS_PILOT_MODEL_PORT:-8811}:8787"
+
+  data-provider:
+    <<: *skillpass-common
+    environment:
+      <<: *skillpass-environment
+      SKILLPASS_PROVIDER_ID: provider-data-b
+      SKILLPASS_PROVIDER_NAME: Private Data Provider B
+      SKILLPASS_ENABLED_SERVICES: private-data-api-v1
+      SKILLPASS_PRIMARY_SERVICE: private-data-api-v1
+      PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_DATA_PORT:-8812}
+    ports:
+      - "127.0.0.1:${SKILLPASS_PILOT_DATA_PORT:-8812}:8787"
+
+  compute-provider:
+    <<: *skillpass-common
+    environment:
+      <<: *skillpass-environment
+      SKILLPASS_PROVIDER_ID: provider-compute-c
+      SKILLPASS_PROVIDER_NAME: Compute Provider C
+      SKILLPASS_ENABLED_SERVICES: compute-api-v1
+      SKILLPASS_PRIMARY_SERVICE: compute-api-v1
+      PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_COMPUTE_PORT:-8813}
+    ports:
+      - "127.0.0.1:${SKILLPASS_PILOT_COMPUTE_PORT:-8813}:8787"

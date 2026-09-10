@@ -58,7 +58,7 @@ The grant is bound to the exact live Capability outpoint. CKB transfer consumes 
 import { discoverSkillPass, resolveService, invokeSkillPass } from "@skillpass/agent-sdk";
 
 const discovery = await discoverSkillPass("https://skillpass.example");
-const service = resolveService(discovery, "research-insights-v1");
+const service = resolveService(discovery, "private-data-api-v1");
 
 const response = await invokeSkillPass({
   baseUrl: "https://skillpass.example",

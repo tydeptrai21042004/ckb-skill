@@ -66,7 +66,7 @@ This is intentionally less "crypto-native" but makes SkillPass usable where tran
 `SKILLPASS_SERVICE_POLICIES_JSON` is keyed by service slug. Issuer trust is evaluated **per service**, not as one global union.
 
 ```dotenv
-SKILLPASS_SERVICE_POLICIES_JSON={"paper-analyzer-v1":{"rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xPROVIDER_A_LOCK_HASH"],"policyId":"provider-a-owned-v1"},"research-insights-v1":{"rightMode":"license","requireTransferable":false,"delegationAllowed":false,"trustedIssuerIds":["0xPROVIDER_B_LOCK_HASH"],"policyId":"provider-b-license-v1"}}
+SKILLPASS_SERVICE_POLICIES_JSON={"model-api-v1":{"rightMode":"owned","requireTransferable":true,"delegationAllowed":true,"requireDelegatable":true,"trustedIssuerIds":["0xPROVIDER_A_LOCK_HASH"],"policyId":"provider-a-owned-v1"},"private-data-api-v1":{"rightMode":"license","requireTransferable":false,"delegationAllowed":false,"trustedIssuerIds":["0xPROVIDER_B_LOCK_HASH"],"policyId":"provider-b-license-v1"}}
 ```
 
 For readable production configuration, generate the JSON from a secrets/configuration system rather than hand-editing a long line.
@@ -100,14 +100,14 @@ List current revocations:
 ```bash
 SKILLPASS_BASE_URL=https://skillpass.example.com \
 SKILLPASS_ADMIN_TOKEN="$SKILLPASS_ADMIN_TOKEN" \
-npm run provider:admin -- list --service research-insights-v1
+npm run provider:admin -- list --service private-data-api-v1
 ```
 
 Revoke a live license by exact outpoint:
 
 ```bash
 npm run provider:admin -- revoke \
-  --service research-insights-v1 \
+  --service private-data-api-v1 \
   --tx-hash 0x... \
   --index 0x0 \
   --reason "abuse investigation"
@@ -117,7 +117,7 @@ Restore it:
 
 ```bash
 npm run provider:admin -- restore \
-  --service research-insights-v1 \
+  --service private-data-api-v1 \
   --capability-id 0x...
 ```
 

@@ -36,6 +36,10 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       inputKind: service.inputKind,
       maxInputChars: service.maxInputChars,
       kind: service.kind,
+      operationMode: service.operationMode || "read",
+      idempotencyMode: service.idempotencyMode || null,
+      providerId: service.providerId || null,
+      providerName: service.providerName || null,
       policyId: service.policyId,
       policyFingerprint: service.policyFingerprint,
       entitlementIds: service.entitlementIds || [service.id],
@@ -74,7 +78,7 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       scheme: "ckb-wallet-one-time-intent-challenge",
       challengeEndpoint: "/api/challenge",
       signatureRequired: true,
-      intentBinding: ["action", "service", "capability_outpoint", "request_hash", "policy_fingerprint", "delegation_id"],
+      intentBinding: ["action", "service", "capability_outpoint", "request_hash", "operation_id_for_actions", "policy_fingerprint", "delegation_id"],
       privateKeyLocation: "user-wallet-only",
     },
     delegation: {
@@ -107,6 +111,7 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       openapi: "/api/openapi.json",
       runtimeConfig: "/api/config",
       services: "/api/services",
+      providerManifest: "/api/provider-manifest",
       agentSpec: "/.well-known/skillpass-agent.txt",
     },
   });
@@ -128,6 +133,7 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
   const paths = {
     "/api/status": { get: { summary: "Read sanitized service status", responses: { "200": { description: "Service alive" } } } },
     "/api/services": { get: { summary: "List protected services", responses: { "200": { description: "Public service catalog" } } } },
+    "/api/provider-manifest": { get: { summary: "Read provider capability and policy manifest", responses: { "200": { description: "Provider manifest with canonical hash and optional external signature" } } } },
     "/api/capability/status": {
       post: {
         summary: "Inspect a SkillPass capability from fresh CKB state and return an evidence bundle",
@@ -158,13 +164,17 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
           required: true,
           content: { "application/json": { schema: {
             type: "object",
-            required: legacyOnly && endpoint === "/api/analyze" ? ["address", "nonce", "signature", "outPoint", "text"] : ["address", "nonce", "signature", "outPoint", "input"],
+            required: [
+              ...(legacyOnly && endpoint === "/api/analyze" ? ["address", "nonce", "signature", "outPoint", "text"] : ["address", "nonce", "signature", "outPoint", "input"]),
+              ...(service.operationMode === "idempotent-action" ? ["operationId"] : []),
+            ],
             properties: {
               address: { type: "string" },
               nonce: { type: "string" },
               signature: signatureSchema,
               outPoint: outPointSchema,
               input: inputSchema,
+              ...(service.operationMode === "idempotent-action" ? { operationId: { type: "string", minLength: 8, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$", description: "Caller-stable operation identifier reused across retries" } } : {}),
               ...(legacyOnly && endpoint === "/api/analyze" ? { text: inputSchema } : {}),
               delegation: delegationSchema,
             },

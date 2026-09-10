@@ -1,91 +1,61 @@
-# Multi-provider shared-entitlement pilot
+# Multi-provider Service Bundle pilot
 
-This is the strongest v1.3 demonstration because it makes the CKB-specific value measurable: **one live Capability entitlement can be accepted by several independently operated services without synchronizing entitlement databases**.
+This pilot demonstrates SkillPass's primary use case: one CKB Service Bundle right is accepted independently by three different service providers. The providers do **not** share an entitlement database. Each verifies the current live Capability Cell and applies its own service policy.
 
-## Architecture
+## Providers
 
-```text
-                 CKB Capability Cell
-             entitlement = BUNDLE_ID
-                       |
-          +------------+------------+
-          |                         |
-   Provider A service        Provider B service
-   Model API                 Private Data API
-   own policy/payment        own policy/payment
-          |                         |
-          +-- both explicitly trust the bundle issuer --+
+| Local endpoint | Provider | Service |
+| --- | --- | --- |
+| `http://127.0.0.1:8811` | Model Provider A | Model API |
+| `http://127.0.0.1:8812` | Private Data Provider B | Private Data API |
+| `http://127.0.0.1:8813` | Compute Provider C | Compute API |
+
+The built-in handlers perform real deterministic work so the pilot remains dependency-free. Production providers can replace them with HTTPS upstreams. Side-effecting upstreams are allowed only with the explicit `idempotent-action` + `invocation-key` contract.
+
+## 1. Configure testnet
+
+Copy `.env.testnet.example` to `.env.testnet` and set the deployed Capability Type code hash, dependency outpoint, and trusted issuer lock hash. Do not commit `.env.testnet`.
+
+## 2. Start three independent providers
+
+```bash
+npm run pilot:up
 ```
 
-A shared entitlement does **not** mean that providers share a database or admin authority. Each provider still controls its own service policy, payment settings, delegation rules, and—when `rightMode=license`—its own service-local revocation records.
+The Compose file starts three separate SkillPass processes, each with local process state and exactly one enabled service. There is no shared PostgreSQL or Redis instance in this pilot; CKB is the common ownership source.
 
-## Shared bundle policy example
+## 3. Verify provider independence
 
-Replace the example identifiers with real 32-byte values. Both providers deliberately trust the same bundle issuer and accept the same immutable entitlement ID.
-
-```json
-{
-  "model-api-v1": {
-    "trustedIssuerIds": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    "entitlementIds": ["0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
-    "issuanceEntitlementId": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "bundleId": "service-bundle-v1",
-    "rightMode": "owned",
-    "requireTransferable": true,
-    "delegationAllowed": true,
-    "requireDelegatable": true,
-    "policyId": "provider-a-bundle-v1"
-  },
-  "private-data-api-v1": {
-    "trustedIssuerIds": ["0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    "entitlementIds": ["0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"],
-    "issuanceEntitlementId": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "bundleId": "service-bundle-v1",
-    "rightMode": "owned",
-    "requireTransferable": true,
-    "delegationAllowed": true,
-    "requireDelegatable": false,
-    "policyId": "provider-b-bundle-v1"
-  }
-}
+```bash
+npm run pilot:check
 ```
 
-Set this object as `SKILLPASS_SERVICE_POLICIES_JSON`.
+Expected: three different provider IDs, three different single-service manifests, and `entitlementSynchronizationRequired=false`.
 
-## Flow to prove
+## 4. Prove current ownership convergence
 
-1. The trusted bundle issuer creates one `TRANSFERABLE + DELEGATABLE` Capability whose immutable `serviceId` is the shared bundle entitlement ID.
-2. Alice owns the live Capability and successfully invokes Model API and Private Data API. Compute API can join the same bundle as a third provider/service.
-3. Alice may delegate Provider A to a bounded client such as a team tool, automation, device, or agent. Provider B may independently accept or reject delegation according to its own policy.
-4. Alice transfers the Capability to Bob, consuming Alice's old outpoint.
-5. Alice immediately fails against both providers because she no longer owns the live Cell.
-6. Any old delegated grant bound to the consumed outpoint fails automatically.
-7. Bob succeeds against both providers from the new live outpoint.
-8. Neither provider updates a shared entitlement database during the ownership transition.
+After issuing a Service Bundle Capability, pass its current outpoint:
 
-## Separate revocable-license drill
-
-Also configure a third test service with:
-
-```json
-{
-  "rightMode": "license",
-  "requireTransferable": false,
-  "delegationAllowed": false
-}
+```bash
+node scripts/pilot-check.mjs --outpoint 0x<tx-hash>:0x0
 ```
 
-Issue a `REVOCABLE` non-transferable Capability, then use `npm run provider:admin` to revoke and restore it. This demonstrates that SkillPass does not force ordinary SaaS providers into irreversible ownership semantics.
+Each provider independently calls live CKB state. The check fails if the providers disagree about Capability identity or current owner lock hash.
 
-## Evidence to capture
+## 5. Demonstrate transfer
 
-- Capability ID, entitlement ID, bundle ID, issuer and flags;
-- old/new CKB outpoints and owner lock hashes;
-- policy ID/fingerprint for every provider;
-- HTTP success/deny codes before and after transfer;
-- delegation grant ID and limits;
-- provider-local revocation result for the license drill;
-- per-provider integration time and authorization latency;
-- number of entitlement database writes avoided during transfer.
+1. Invoke all three services as the current owner using the normal SkillPass wallet flow.
+2. Create a bounded delegation and demonstrate delegated access if desired.
+3. Transfer the Capability Cell to a second wallet.
+4. Use the **new** live outpoint with `pilot-check.mjs`; all three providers must agree on the new owner.
+5. Retry the previous owner's/delegate's protected requests with fresh challenges. They must be rejected because the previous Capability outpoint was consumed and ownership changed.
 
-Never publish wallet private keys, admin tokens, database credentials, upstream bearer tokens, payment preimages, or full bearer-sensitive delegation credentials.
+The key measurement is **provider-side entitlement ownership updates: zero**. The providers do not coordinate a customer-account migration; they independently converge on the CKB Cell owner.
+
+## 6. Stop the pilot
+
+```bash
+npm run pilot:down
+```
+
+For a production deployment, use the normal shared-state production stack. This pilot deliberately isolates providers to prove the cross-provider ownership claim; it is not the high-availability production topology.

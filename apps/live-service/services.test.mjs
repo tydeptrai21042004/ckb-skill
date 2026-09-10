@@ -11,9 +11,11 @@ test("multi-upstream gateway configuration is bounded and production-host allowl
   assert.match(source, /private, link-local, multicast/);
 });
 
-test("gateway keeps bearer credentials server-side and refuses side-effect mode without idempotency", () => {
+test("gateway keeps bearer credentials server-side and permits only retry-safe side-effect mode", () => {
   assert.match(source, /SKILLPASS_UPSTREAM_BEARERS_JSON/);
-  assert.match(source, /operationMode must be read; side-effecting upstreams require an explicit idempotency contract/);
+  assert.match(source, /operationMode must be read or idempotent-action/);
+  assert.match(source, /idempotencyMode must be invocation-key for idempotent-action upstreams/);
+  assert.match(source, /idempotent-action upstream requires a bound invocation key/);
   assert.match(source, /redirect: "error"/);
   assert.doesNotMatch(source, /publicList\(\).*bearer/s);
 });

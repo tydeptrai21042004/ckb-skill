@@ -73,7 +73,14 @@ const MAX_BODY = Number(process.env.MAX_REQUEST_BODY_BYTES || 36 * 1024);
 const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 12 * 1024);
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
 const serviceRegistry = buildServiceRegistry({ env: process.env, production: IS_PUBLIC_PRODUCTION, timeoutMs: UPSTREAM_TIMEOUT_MS });
-const PRIMARY_SERVICE = serviceRegistry.getBySlug("model-api-v1");
+const CONFIGURED_PRIMARY_SERVICE_SLUG = String(process.env.SKILLPASS_PRIMARY_SERVICE || "").trim().toLowerCase();
+const PRIMARY_SERVICE = CONFIGURED_PRIMARY_SERVICE_SLUG
+  ? serviceRegistry.getBySlug(CONFIGURED_PRIMARY_SERVICE_SLUG)
+  : (serviceRegistry.getBySlug("model-api-v1") || serviceRegistry.services[0]);
+if (!PRIMARY_SERVICE) {
+  if (CONFIGURED_PRIMARY_SERVICE_SLUG) throw new Error(`SKILLPASS_PRIMARY_SERVICE is not enabled: ${CONFIGURED_PRIMARY_SERVICE_SLUG}`);
+  throw new Error("SkillPass requires at least one enabled service");
+}
 const SERVICE_ID = PRIMARY_SERVICE.id; // backward-compatible primary service id
 const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
 const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
@@ -285,6 +292,9 @@ const serviceContexts = new Map(serviceRegistry.services.map((service) => {
     rightMode: override.rightMode || DEFAULT_RIGHT_MODE,
     policyId,
     termsHash,
+    requireSubjectBinding: parseBooleanPolicy(override.requireSubjectBinding, false, `${service.slug}.requireSubjectBinding`),
+    acceptedSubjectTypes: override.acceptedSubjectTypes ?? [],
+    requiredPolicyHash: override.requiredPolicyHash || "",
   });
   const fingerprintMaterial = canonicalJson({
     serviceId: policy.serviceId,
@@ -298,6 +308,9 @@ const serviceContexts = new Map(serviceRegistry.services.map((service) => {
     rightMode: policy.rightMode,
     policyId: policy.policyId,
     termsHash: policy.termsHash,
+    requireSubjectBinding: policy.requireSubjectBinding,
+    acceptedSubjectTypes: policy.acceptedSubjectTypes,
+    requiredPolicyHash: policy.requiredPolicyHash,
     url: policyUrl,
   });
   const fingerprint = createHash("sha256").update(fingerprintMaterial).digest("hex");
@@ -327,6 +340,9 @@ function publicPolicyFor(service) {
     delegationAllowed: policy.delegationAllowed,
     delegatableRequired: policy.requireDelegatable,
     termsHash: policy.termsHash || null,
+    requireSubjectBinding: policy.requireSubjectBinding,
+    acceptedSubjectTypes: policy.acceptedSubjectTypes,
+    requiredPolicyHash: policy.requiredPolicyHash || null,
     url: context.policyUrl || null,
   });
 }
@@ -359,6 +375,33 @@ function publicServiceDescriptor(service) {
     trustedIssuerIds: context.policy.trustedIssuerIds,
     payment: publicPaymentConfig(service),
   });
+}
+
+function buildProviderManifest() {
+  const services = serviceRegistry.publicList().map(publicServiceDescriptor);
+  const providerIds = [...new Set(services.map((service) => service.providerId).filter(Boolean))];
+  const providerNames = [...new Set(services.map((service) => service.providerName).filter(Boolean))];
+  const manifest = {
+    schemaVersion: "1.0",
+    protocol: "skillpass-provider-manifest",
+    network: "ckb-testnet",
+    provider: {
+      id: providerIds.length === 1 ? providerIds[0] : "multi-provider-gateway",
+      name: providerNames.length === 1 ? providerNames[0] : "SkillPass multi-provider gateway",
+    },
+    ownershipSource: "current-live-capability-cell-owner",
+    entitlementSynchronizationRequired: false,
+    services: services.map((service) => ({
+      slug: service.slug, id: service.id, name: service.name, endpoint: service.endpoint,
+      operationMode: service.operationMode, idempotencyMode: service.idempotencyMode || null,
+      entitlementIds: service.entitlementIds, policyId: service.policyId,
+      policyFingerprint: service.policyFingerprint, trustedIssuerIds: service.trustedIssuerIds,
+      delegationAllowed: service.delegationAllowed, payment: service.payment,
+    })),
+  };
+  const manifestHash = createHash("sha256").update(canonicalJson(manifest)).digest("hex");
+  const externalSignature = String(process.env.SKILLPASS_PROVIDER_MANIFEST_SIGNATURE || "").trim();
+  return Object.freeze({ ...manifest, manifestHash: `sha256:${manifestHash}`, signature: externalSignature || null });
 }
 
 const servicePolicy = serviceContext(PRIMARY_SERVICE).policy; // backward-compatible primary references
@@ -423,9 +466,21 @@ function normalizeRequestHash(value) {
   return hash;
 }
 
-function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash, service, delegationId = "" }) {
+function normalizeOperationId(value, { required = false } = {}) {
+  const operationId = String(value || "").trim();
+  if (!operationId) {
+    if (required) throw Object.assign(new Error("operationId is required for idempotent-action services"), { status: 400, code: "OPERATION_ID_REQUIRED" });
+    return "";
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(operationId)) {
+    throw Object.assign(new Error("operationId must be 8..128 safe identifier characters"), { status: 400, code: "INVALID_OPERATION_ID" });
+  }
+  return operationId;
+}
+
+function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash, service, delegationId = "", operationId = "" }) {
   const context = serviceContext(service);
-  return [
+  const lines = [
     "SkillPass capability access",
     "action=invoke",
     `service=${context.service.slug}`,
@@ -434,20 +489,27 @@ function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash, se
     `policy_fingerprint=${context.fingerprint}`,
     `capability_outpoint=${outPointBinding(outPoint)}`,
     `request_hash=${normalizeRequestHash(requestHash)}`,
+  ];
+  if (context.service.operationMode === "idempotent-action") {
+    lines.push(`operation_id=${normalizeOperationId(operationId, { required: true })}`);
+  }
+  lines.push(
     `delegation_id=${String(delegationId || "direct")}`,
     `address=${address}`,
     `nonce=${nonce}`,
     `expires_at=${expiresAt}`,
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
-async function issueChallenge(address, outPoint, requestHash, service, delegationId = "") {
+async function issueChallenge(address, outPoint, requestHash, service, delegationId = "", operationId = "") {
   await ccc.Address.fromString(address, client);
   outPointFromJson(outPoint);
   normalizeRequestHash(requestHash);
   const context = serviceContext(service);
+  normalizeOperationId(operationId, { required: context.service.operationMode === "idempotent-action" });
   return challenges.issue(address, ({ nonce, identity, expiresAt }) =>
-    challengeMessage({ nonce, address: identity, expiresAt, outPoint, requestHash, service: context.service, delegationId }),
+    challengeMessage({ nonce, address: identity, expiresAt, outPoint, requestHash, service: context.service, delegationId, operationId }),
   );
 }
 
@@ -464,6 +526,7 @@ function challengeMatchesRequest(challenge, body, service) {
     requestHash: requestInputHash(service, body.input),
     service,
     delegationId: body.delegation?.grant?.grantId || "",
+    operationId: body.operationId || "",
   });
   const left = Buffer.from(String(challenge.message || ""));
   const right = Buffer.from(expected);
@@ -587,24 +650,50 @@ async function verifyDelegatedCapability({ credential, delegateAddress, outPoint
   return { ...inspected, delegation: grant, principalAddress: delegateAddress, ownerAddress: grant.ownerAddress };
 }
 
-function delegationInvocationKey(body, payment) {
+function actionInvocationKey(body, service) {
+  const operationId = normalizeOperationId(body.operationId, { required: true });
+  return createHash("sha256").update(canonicalJson({
+    serviceId: service.id,
+    capabilityOutPoint: outPointBinding(body.outPoint),
+    operationId,
+  })).digest("hex");
+}
+
+function delegationInvocationKey(body, payment, service) {
+  if (service.operationMode === "idempotent-action") return actionInvocationKey(body, service);
   if (payment?.hash && /^[0-9a-f]{64}$/i.test(String(payment.hash))) return String(payment.hash).toLowerCase();
   return createHash("sha256")
     .update(`${String(body.delegation?.grant?.grantId || "direct")}:${String(body.nonce || "")}`)
     .digest("hex");
 }
 
-async function consumeDelegationBudget(verified, body, service, payment) {
+function delegationBudgetInput(verified, body, service, payment) {
   const grant = verified?.delegation;
   if (!grant || grant.version < 2 || !grant.limits) return null;
-  return delegationUsage.consume({
+  return {
     grantId: grant.grantId,
-    invocationKey: delegationInvocationKey(body, payment),
+    invocationKey: delegationInvocationKey(body, payment, service),
     maxUses: grant.limits.maxUses,
     maxSpendAtomic: grant.limits.maxSpendAtomic,
     spendAtomic: PAYMENTS_REQUIRED ? paymentAmountFor(service) : "0",
     expiresAt: grant.expiresAt,
-  });
+  };
+}
+
+async function reserveDelegationBudget(verified, body, service, payment) {
+  const input = delegationBudgetInput(verified, body, service, payment);
+  if (!input) return null;
+  return { input, usage: await delegationUsage.reserve(input) };
+}
+
+async function commitDelegationBudget(reservation) {
+  if (!reservation) return null;
+  return delegationUsage.commit(reservation.input);
+}
+
+async function releaseDelegationBudget(reservation) {
+  if (!reservation) return null;
+  return delegationUsage.release(reservation.input);
 }
 
 function paymentBinding(req, body, service) {
@@ -615,6 +704,7 @@ function paymentBinding(req, body, service) {
     delegationId: String(body.delegation?.grant?.grantId || "direct"),
     outPoint: { txHash: String(body.outPoint?.txHash || "").toLowerCase(), index: String(body.outPoint?.index ?? "") },
     requestHash: requestInputHash(service, body.input),
+    operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(body.operationId, { required: true }) : null,
     serviceId: service.id,
     paymentAmount: PAYMENTS_REQUIRED ? paymentAmountFor(service) : "0",
     policyId: context.policyId,
@@ -840,6 +930,7 @@ function validateProtectedShape(body, service) {
     throw Object.assign(new Error("SkillPass requires a CKB-native wallet signature bound to the acting CKB address"), { status: 401, code: "IDENTITY_NOT_BOUND" });
   }
   validateServiceInput(service, body.input);
+  normalizeOperationId(body.operationId, { required: service.operationMode === "idempotent-action" });
   outPointFromJson(body.outPoint);
 }
 
@@ -1078,22 +1169,39 @@ async function handleInvokeRequest(req, res, service, rawBody) {
     payment = await verifyPaymentHeader(req, requestBody, service);
   }
 
-  const delegationBudget = await consumeDelegationBudget(verified, requestBody, service, payment);
-
-  const result = payment?.alreadySettled
-    ? payment.receipt.result
-    : await service.execute(requestBody.input, {
-        requestId: res.__skillpassRequestId,
-        capabilityId: verified.capability.capabilityId,
-        ownerAddress: verified.ownerAddress,
-        principalAddress: verified.principalAddress,
-        invocationKey: delegationInvocationKey(requestBody, payment),
-      });
-  const settlement = await settlePayment(payment, result);
+  // Reserve bounded delegation quota before execution so concurrent requests
+  // cannot oversubscribe the grant, but do not permanently charge the grant
+  // until protected execution and optional payment settlement both succeed.
+  const delegationReservation = await reserveDelegationBudget(verified, requestBody, service, payment);
+  let delegationBudget = delegationReservation?.usage || null;
+  let result;
+  let settlement;
+  try {
+    result = payment?.alreadySettled
+      ? payment.receipt.result
+      : await service.execute(requestBody.input, {
+          requestId: res.__skillpassRequestId,
+          capabilityId: verified.capability.capabilityId,
+          ownerAddress: verified.ownerAddress,
+          principalAddress: verified.principalAddress,
+          invocationKey: service.operationMode === "idempotent-action" ? actionInvocationKey(requestBody, service) : delegationInvocationKey(requestBody, payment, service),
+        });
+    settlement = await settlePayment(payment, result);
+    delegationBudget = await commitDelegationBudget(delegationReservation);
+  } catch (error) {
+    // Failed read/query delivery must not burn a delegated use/spend budget.
+    // Release is best-effort here; a durable backend can also reclaim stale
+    // reservations after the bounded reservation TTL.
+    try { await releaseDelegationBudget(delegationReservation); } catch {}
+    throw error;
+  }
   const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
   return sendJson(res, 200, {
     ok: true,
-    service: { slug: service.slug, id: service.id, name: service.name, kind: service.kind },
+    service: {
+      slug: service.slug, id: service.id, name: service.name, kind: service.kind,
+      operationMode: service.operationMode, providerId: service.providerId, providerName: service.providerName,
+    },
     entitlement: {
       capabilityId: verified.capability.capabilityId,
       serviceId: verified.capability.serviceId,
@@ -1107,6 +1215,7 @@ async function handleInvokeRequest(req, res, service, rawBody) {
     authorization: {
       requestId: res.__skillpassRequestId,
       action: "invoke",
+      operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : null,
       principal: verified.delegation ? "delegate" : "owner",
       principalAddress: verified.principalAddress,
       ownerAddress: verified.ownerAddress,
@@ -1170,6 +1279,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, buildOpenApi({ services: serviceRegistry.publicList().map(publicServiceDescriptor), paymentsRequired: PAYMENTS_REQUIRED }), {
         "cache-control": "public, max-age=300",
         "vercel-cdn-cache-control": "max-age=3600, stale-while-revalidate=86400",
+      });
+    }
+    if (req.method === "GET" && url.pathname === "/api/provider-manifest") {
+      return sendJson(res, 200, buildProviderManifest(), {
+        "cache-control": "public, max-age=60",
+        "vercel-cdn-cache-control": "max-age=600, stale-while-revalidate=3600",
       });
     }
     if (req.method === "GET" && url.pathname === "/api/services") {
@@ -1316,7 +1431,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/challenge") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
-      const { address, outPoint, requestHash, service: serviceSlug = PRIMARY_SERVICE.slug, delegationId = "" } = await jsonBody(req);
+      const { address, outPoint, requestHash, service: serviceSlug = PRIMARY_SERVICE.slug, delegationId = "", operationId = "" } = await jsonBody(req);
       if (typeof address !== "string" || address.length < 8 || address.length > 256) {
         throw Object.assign(new Error("address is invalid"), { status: 400, code: "INVALID_ADDRESS" });
       }
@@ -1328,7 +1443,7 @@ const server = http.createServer(async (req, res) => {
       normalizeRequestHash(requestHash);
       await ccc.Address.fromString(address, client);
       await rateLimit(req, "challenge", CHALLENGE_RATE_LIMIT, GLOBAL_CHALLENGE_RATE_LIMIT);
-      return sendJson(res, 200, await issueChallenge(address, outPoint, requestHash, service, delegationId));
+      return sendJson(res, 200, await issueChallenge(address, outPoint, requestHash, service, delegationId, operationId));
     }
 
     if (req.method === "POST" && url.pathname === "/api/analyze") {

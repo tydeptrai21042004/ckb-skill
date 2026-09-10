@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import {
   COMPUTE_API_V1_SERVICE_ID,
@@ -7,68 +6,16 @@ import {
   PRIVATE_JSON_GATEWAY_V1_SERVICE_ID,
 } from "@skillpass/capability-codec/service-ids";
 import { createServiceRegistry, normalizeServiceSlug, validateServiceInput } from "@skillpass/service-gateway";
+import { executeComputeReference, executeModelReference, executePrivateDataReference } from "./reference-services.mjs";
 
 const DEFAULT_MAX_INPUT_CHARS = 20_000;
 
-function requestFingerprint(value) {
-  const serialized = typeof value === "string" ? value : JSON.stringify(value);
-  return createHash("sha256").update(serialized).digest("hex").slice(0, 16);
-}
-
-function executeModelDemo(input) {
-  const text = String(input).trim();
-  const words = text ? text.split(/\s+/u).filter(Boolean).length : 0;
-  return {
-    mode: "demo",
-    service: "model-api-v1",
-    provider: "SkillPass demo provider",
-    requestFingerprint: requestFingerprint(text),
-    inputCharacters: text.length,
-    inputWords: words,
-    response: "Authorized model request accepted. Replace this built-in demo handler with a real provider upstream for production inference.",
-  };
-}
-
-function executePrivateDataDemo(input) {
-  const query = typeof input?.query === "string" ? input.query.trim().slice(0, 160) : "recent records";
-  const limitRaw = Number(input?.limit ?? 3);
-  const limit = Number.isSafeInteger(limitRaw) ? Math.max(1, Math.min(5, limitRaw)) : 3;
-  const rows = [
-    { id: "asset-001", tier: "pro", region: "apac", status: "available" },
-    { id: "asset-002", tier: "pro", region: "eu", status: "available" },
-    { id: "asset-003", tier: "standard", region: "us", status: "archived" },
-    { id: "asset-004", tier: "pro", region: "apac", status: "available" },
-    { id: "asset-005", tier: "standard", region: "eu", status: "available" },
-  ].slice(0, limit);
-  return {
-    mode: "demo",
-    service: "private-data-api-v1",
-    provider: "SkillPass demo provider",
-    query,
-    requestFingerprint: requestFingerprint(input),
-    rows,
-    note: "Sample protected data only. Configure an upstream JSON service for real private datasets.",
-  };
-}
-
-function executeComputeDemo(input) {
-  const task = typeof input?.task === "string" ? input.task.trim().slice(0, 120) : "inference-job";
-  const cpuRaw = Number(input?.cpu ?? 2);
-  const memoryRaw = Number(input?.memoryMb ?? 2048);
-  const cpu = Number.isFinite(cpuRaw) ? Math.max(1, Math.min(32, Math.round(cpuRaw))) : 2;
-  const memoryMb = Number.isFinite(memoryRaw) ? Math.max(256, Math.min(131072, Math.round(memoryRaw))) : 2048;
-  const fingerprint = requestFingerprint(input);
-  return {
-    mode: "demo",
-    service: "compute-api-v1",
-    provider: "SkillPass demo provider",
-    accepted: true,
-    jobId: `demo-${fingerprint}`,
-    task,
-    resources: { cpu, memoryMb },
-    state: "authorized",
-    note: "Authorization demo only; no real compute job is launched by the built-in handler.",
-  };
+function referenceProvider(env) {
+  const providerId = String(env.SKILLPASS_PROVIDER_ID || "skillpass-reference-provider").trim();
+  const providerName = String(env.SKILLPASS_PROVIDER_NAME || "SkillPass reference provider").trim();
+  if (!/^[a-z0-9][a-z0-9_.:-]{0,127}$/i.test(providerId)) throw new Error("SKILLPASS_PROVIDER_ID is invalid");
+  if (!providerName || providerName.length > 120) throw new Error("SKILLPASS_PROVIDER_NAME must be 1..120 characters");
+  return { providerId, providerName };
 }
 
 function isPrivateLiteral(hostname) {
@@ -161,7 +108,11 @@ function httpGatewayService(raw, { env, production, defaultTimeoutMs, bearerMap,
   const maxResponseBytes = boundedInteger(raw.maxResponseBytes, 256_000, { min: 1024, max: 2_000_000, label: `${slug}.maxResponseBytes` });
   const serviceTimeoutMs = boundedInteger(raw.timeoutMs, defaultTimeoutMs, { min: 1000, max: 15_000, label: `${slug}.timeoutMs` });
   const operationMode = String(raw.operationMode || "read").trim().toLowerCase();
-  if (operationMode !== "read") throw new Error(`${slug}.operationMode must be read; side-effecting upstreams require an explicit idempotency contract`);
+  if (!["read", "idempotent-action"].includes(operationMode)) throw new Error(`${slug}.operationMode must be read or idempotent-action`);
+  const idempotencyMode = operationMode === "idempotent-action" ? String(raw.idempotencyMode || "").trim().toLowerCase() : null;
+  if (operationMode === "idempotent-action" && idempotencyMode !== "invocation-key") {
+    throw new Error(`${slug}.idempotencyMode must be invocation-key for idempotent-action upstreams`);
+  }
   const bearer = bearerMap[slug] || "";
   return {
     slug,
@@ -172,8 +123,14 @@ function httpGatewayService(raw, { env, production, defaultTimeoutMs, bearerMap,
     maxInputChars,
     kind: "http-json-gateway",
     operationMode,
+    idempotencyMode,
+    providerId: String(raw.providerId || env.SKILLPASS_PROVIDER_ID || `provider-${slug}`).trim(),
+    providerName: String(raw.providerName || env.SKILLPASS_PROVIDER_NAME || raw.name || slug).trim(),
     async execute(input, context = {}) {
       const validated = validateServiceInput(this, input);
+      if (operationMode === "idempotent-action" && !/^[0-9a-f]{64}$/.test(String(context.invocationKey || ""))) {
+        throw Object.assign(new Error("idempotent-action upstream requires a bound invocation key"), { status: 500, code: "INVOCATION_KEY_REQUIRED" });
+      }
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), serviceTimeoutMs);
       timer.unref?.();
@@ -219,17 +176,19 @@ function parseConfiguredUpstreams(env, options) {
 }
 
 export function buildServiceRegistry({ env = process.env, production = false, timeoutMs = 8_000 } = {}) {
+  const provider = referenceProvider(env);
   const services = [
     {
       slug: "model-api-v1",
       id: MODEL_API_V1_SERVICE_ID,
       name: "Model API",
-      description: "Protected model inference access. The built-in handler is a deterministic demo; providers can attach a real inference upstream.",
+      description: "Protected model inference/embedding access. The reference handler performs deterministic compute; production providers can attach a real model upstream.",
       inputKind: "text",
       maxInputChars: DEFAULT_MAX_INPUT_CHARS,
-      kind: "builtin",
+      kind: "builtin-reference",
       operationMode: "read",
-      async execute(input) { return executeModelDemo(validateServiceInput(this, input)); },
+      ...provider,
+      async execute(input) { return executeModelReference(validateServiceInput(this, input), provider); },
     },
     {
       slug: "private-data-api-v1",
@@ -238,20 +197,23 @@ export function buildServiceRegistry({ env = process.env, production = false, ti
       description: "Protected access to provider-controlled datasets or read/query endpoints.",
       inputKind: "json",
       maxInputChars: DEFAULT_MAX_INPUT_CHARS,
-      kind: "builtin",
+      kind: "builtin-reference",
       operationMode: "read",
-      async execute(input) { return executePrivateDataDemo(validateServiceInput(this, input)); },
+      ...provider,
+      async execute(input) { return executePrivateDataReference(validateServiceInput(this, input), provider); },
     },
     {
       slug: "compute-api-v1",
       id: COMPUTE_API_V1_SERVICE_ID,
       name: "Compute API",
-      description: "Protected compute-job admission for authorized clients that hold an accepted SkillPass entitlement.",
+      description: "Protected deterministic compute execution; production providers can configure an idempotent-action upstream for real jobs.",
       inputKind: "json",
       maxInputChars: DEFAULT_MAX_INPUT_CHARS,
-      kind: "builtin",
-      operationMode: "read",
-      async execute(input) { return executeComputeDemo(validateServiceInput(this, input)); },
+      kind: "builtin-reference",
+      operationMode: "idempotent-action",
+      idempotencyMode: "invocation-key",
+      ...provider,
+      async execute(input) { return executeComputeReference(validateServiceInput(this, input), provider); },
     },
   ];
 
@@ -280,5 +242,14 @@ export function buildServiceRegistry({ env = process.env, production = false, ti
 
   services.push(...parseConfiguredUpstreams(env, shared));
   if (services.length > 16) throw new Error("SkillPass supports at most 16 configured services per deployment");
-  return createServiceRegistry(services);
+
+  const enabled = String(env.SKILLPASS_ENABLED_SERVICES || "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  const selected = enabled.length ? services.filter((service) => enabled.includes(service.slug)) : services;
+  if (enabled.length && selected.length !== new Set(enabled).size) {
+    const known = new Set(services.map((service) => service.slug));
+    const unknown = [...new Set(enabled)].filter((slug) => !known.has(slug));
+    if (unknown.length) throw new Error(`SKILLPASS_ENABLED_SERVICES contains unknown service(s): ${unknown.join(", ")}`);
+  }
+  if (!selected.length) throw new Error("SKILLPASS_ENABLED_SERVICES selected no services");
+  return createServiceRegistry(selected);
 }
