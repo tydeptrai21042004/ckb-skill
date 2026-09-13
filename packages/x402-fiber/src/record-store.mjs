@@ -51,6 +51,29 @@ export class JsonRecordStore {
     return this.#entries.get(normalized);
   }
 
+  async setIfAbsent(key, value = {}) {
+    await this.#load();
+    const normalized = String(key);
+    const current = this.#entries.get(normalized);
+    if (current) return { inserted: false, record: current };
+    const record = { key: normalized, updatedAt: this.now(), ...value };
+    this.#entries.set(normalized, record);
+    await this.#persist();
+    return { inserted: true, record };
+  }
+
+  async compareAndSetState(key, expectedStates, value = {}) {
+    await this.#load();
+    const normalized = String(key);
+    const current = this.#entries.get(normalized);
+    const allowed = new Set((Array.isArray(expectedStates) ? expectedStates : [expectedStates]).map(String));
+    if (!current || !allowed.has(String(current.state || ""))) return { updated: false, record: current || null };
+    const record = { key: normalized, updatedAt: this.now(), ...value };
+    this.#entries.set(normalized, record);
+    await this.#persist();
+    return { updated: true, record };
+  }
+
   async delete(key) {
     await this.#load();
     const removed = this.#entries.delete(String(key));

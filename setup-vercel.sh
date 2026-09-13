@@ -194,11 +194,14 @@ while IFS='=' read -r key value; do
     ''|'#'*) continue ;;
   esac
   printf '%s' "$value" > "$TMP_VALUE"
-  if [ "$key" = "FACILITATOR_AUTH_TOKEN" ] || [ "$key" = "DEEP_HEALTH_TOKEN" ] || [ "$key" = "FIBER_RPC_TOKEN" ]; then
-    vercel env add "$key" production --force --sensitive < "$TMP_VALUE" >/dev/null
-  else
-    vercel env add "$key" production --force < "$TMP_VALUE" >/dev/null
-  fi
+  case "$key" in
+    FACILITATOR_AUTH_TOKEN|DEEP_HEALTH_TOKEN|FIBER_RPC_TOKEN|SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY|SKILLPASS_GATEWAY_SIGNING_PRIVATE_KEY)
+      vercel env add "$key" production --force --sensitive < "$TMP_VALUE" >/dev/null
+      ;;
+    *)
+      vercel env add "$key" production --force < "$TMP_VALUE" >/dev/null
+      ;;
+  esac
   printf '  set %s\n' "$key"
 done < "$GENERATED_ENV"
 ok "SkillPass environment variables uploaded to Production only; secrets marked Sensitive"

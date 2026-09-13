@@ -1,0 +1,140 @@
+{
+  "lockVersion": 1,
+  "generatedFrom": "workspace-package-json",
+  "packages": {
+    "apps/fiber-facilitator/package.json": {
+      "name": "@skillpass/fiber-facilitator",
+      "version": "1.0.0",
+      "sha256": "75b4224f3f19fc48b5a441123b31cd916315647c5eb8054a7c4fe16cca2087be",
+      "dependencies": {
+        "@skillpass/production-store": "1.0.0"
+      },
+      "devDependencies": {
+        "@types/node": "24.13.3",
+        "typescript": "5.9.2"
+      }
+    },
+    "apps/live-service/package.json": {
+      "name": "@skillpass/live-service",
+      "version": "1.0.0",
+      "sha256": "721083234974a6c12ccd4ae6418d2f070b54b18a757c67badaee83f63029787b",
+      "dependencies": {
+        "@ckb-ccc/ccc": "1.2.7",
+        "@skillpass/auth-protocol": "1.0.0",
+        "@skillpass/capability-codec": "0.7.0",
+        "@skillpass/delegation": "1.2.0",
+        "@skillpass/production-store": "1.0.0",
+        "@skillpass/provider-verifier": "1.0.0",
+        "@skillpass/service-gateway": "1.2.0",
+        "@skillpass/service-rights": "1.0.0",
+        "@skillpass/x402-fiber": "0.7.0"
+      },
+      "devDependencies": {
+        "@types/node": "24.13.3",
+        "typescript": "5.9.2"
+      }
+    },
+    "apps/web/package.json": {
+      "name": "@skillpass/web",
+      "version": "1.0.0",
+      "sha256": "abc814df4731a6f17d71df20b20b93104296795ccf9662a695921894b3008e6d",
+      "dependencies": {
+        "@ckb-ccc/connector-react": "1.1.9",
+        "@skillpass/capability-codec": "0.7.0",
+        "@skillpass/ckb-client": "1.0.0",
+        "@skillpass/delegation": "1.2.0",
+        "@skillpass/service-gateway": "1.2.0",
+        "react": "19.0.0",
+        "react-dom": "19.0.0",
+        "react-qr-code": "2.2.0"
+      },
+      "devDependencies": {
+        "@types/node": "24.13.3",
+        "@types/react": "19.0.0",
+        "@types/react-dom": "19.0.0",
+        "@vitejs/plugin-react": "5.0.0",
+        "typescript": "5.9.2",
+        "vite": "7.3.5"
+      }
+    },
+    "package.json": {
+      "name": "ckb-skillpass",
+      "version": "1.6.0",
+      "sha256": "78a45dc47c23294635b2aeed40124c5b46b902f0339bb676f5f483526f285efc",
+      "devDependencies": {
+        "@types/node": "24.13.3",
+        "typescript": "5.9.2"
+      }
+    },
+    "packages/agent-sdk/package.json": {
+      "name": "@skillpass/agent-sdk",
+      "version": "1.2.0",
+      "sha256": "34166a10b05f7db84a1afb010615518b7dd66f8a43aa802602d935749bd81580"
+    },
+    "packages/auth-protocol/package.json": {
+      "name": "@skillpass/auth-protocol",
+      "version": "1.0.0",
+      "sha256": "35f5a7cfebbf2182d9e2a9e8c23e5bae3b2da13204fc61b0e0f40fdac78fea06"
+    },
+    "packages/capability-codec/package.json": {
+      "name": "@skillpass/capability-codec",
+      "version": "0.7.0",
+      "sha256": "58b10bb4eac321003d3c36efdfe89f14e7437c97e9db6afab087e51a3402f29e"
+    },
+    "packages/ckb-client/package.json": {
+      "name": "@skillpass/ckb-client",
+      "version": "1.0.0",
+      "sha256": "e52992c79d8ebce3a1265080ec090ecb06639d997e7a7d7809aaacb1f01a271f",
+      "dependencies": {
+        "@ckb-ccc/ccc": "1.2.7",
+        "@ckb-ccc/connector-react": "1.1.9",
+        "@skillpass/auth-protocol": "1.0.0",
+        "@skillpass/capability-codec": "0.7.0"
+      },
+      "devDependencies": {
+        "tsx": "4.20.5",
+        "typescript": "5.9.2"
+      }
+    },
+    "packages/delegation/package.json": {
+      "name": "@skillpass/delegation",
+      "version": "1.2.0",
+      "sha256": "4256281a7e32969c6932530edb155eff3f4495da438ded431c1f3ee841a4d300"
+    },
+    "packages/production-store/package.json": {
+      "name": "@skillpass/production-store",
+      "version": "1.0.0",
+      "sha256": "4c3889ceb64b13b955bd6f2f00d7979894b5e1ff39f62818df7e083ea9e1f87f",
+      "dependencies": {
+        "pg": "8.23.0",
+        "redis": "6.2.1"
+      }
+    },
+    "packages/provider-verifier/package.json": {
+      "name": "@skillpass/provider-verifier",
+      "version": "1.0.0",
+      "sha256": "1746323f2124f55dc58d7c3078cf45a43ef1baff1e749f7af777513f0d892970",
+      "dependencies": {
+        "@skillpass/service-rights": "1.0.0"
+      }
+    },
+    "packages/service-gateway/package.json": {
+      "name": "@skillpass/service-gateway",
+      "version": "1.2.0",
+      "sha256": "0cfbc117ae7dfd18296340856e22cc636bd17e3cbddc78f6738909f41263f468"
+    },
+    "packages/service-rights/package.json": {
+      "name": "@skillpass/service-rights",
+      "version": "1.0.0",
+      "sha256": "3603397a3021b381d19d2edfb623e1729394d8ea5d203b860c44beb2664119b2",
+      "dependencies": {
+        "@skillpass/capability-codec": "0.7.0"
+      }
+    },
+    "packages/x402-fiber/package.json": {
+      "name": "@skillpass/x402-fiber",
+      "version": "0.7.0",
+      "sha256": "f1976ac5f2fbb220318f859db6a1eaed63c4cb7c674771c8cb83949e4dd9c42c"
+    }
+  }
+}

@@ -16,7 +16,7 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
   const issuers = Array.isArray(trustedIssuerIds) && trustedIssuerIds.length ? trustedIssuerIds : (trustedIssuerId ? [trustedIssuerId] : []);
   const list = normalizeServices({ services, serviceId, maxInputChars });
   return Object.freeze({
-    schemaVersion: "2.1",
+    schemaVersion: "2.2",
     product: "SkillPass",
     positioning: "portable CKB service entitlements for people, teams, apps, devices, digital assets, and automated clients + optional Fiber/x402 usage settlement",
     service: {
@@ -76,10 +76,21 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
     },
     authentication: {
       scheme: "ckb-wallet-one-time-intent-challenge",
+      intentProtocol: "SkillPass Authorization Intent v1",
       challengeEndpoint: "/api/challenge",
       signatureRequired: true,
       intentBinding: ["action", "service", "capability_outpoint", "request_hash", "operation_id_for_actions", "policy_fingerprint", "delegation_id"],
       privateKeyLocation: "user-wallet-only",
+      replayProtection: "one-time nonce plus durable operation/request binding for idempotent actions",
+    },
+    verification: {
+      providerSdk: "@skillpass/provider-verifier",
+      ownershipSource: "fresh live CKB Cell",
+      subjectBinding: "Capability v2 subject commitments are resolved and checked fail-closed when present",
+      finality: "provider-configurable confirmation threshold with chain-tip evidence",
+      providerManifest: "Ed25519-signed in public production",
+      upstreamAuthorization: "short-lived Ed25519 gateway assertion for configured remote providers",
+      authorizationEvidence: "hashed request/capability/policy/payment/chain decision record",
     },
     delegation: {
       supported: true,
@@ -106,6 +117,7 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       readiness: "/readyz",
       status: "/api/status",
       capabilityStatus: "/api/capability/status",
+      authorizationEvidence: "persisted server-side for bounded audit retention",
     },
     api: {
       openapi: "/api/openapi.json",
@@ -209,7 +221,7 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
 
 export function buildAgentSpec({ services = [], paymentsRequired = false } = {}) {
   const lines = [
-    "SkillPass Agent Protocol v1.3",
+    "SkillPass Agent Protocol v1.4",
     "Purpose: invoke services protected by a live CKB Capability without giving the service or agent custody of the owner private key.",
     "Discovery: GET /.well-known/skillpass.json and GET /api/services.",
     "1. Select a service and a live Capability whose entitlement serviceId is accepted by that service policy. A shared bundle entitlement may be accepted by multiple independent services.",
@@ -221,7 +233,7 @@ export function buildAgentSpec({ services = [], paymentsRequired = false } = {})
     paymentsRequired
       ? "7. If HTTP 402 is returned, pay the supplied Fiber/x402 requirement, obtain a FRESH wallet challenge, then retry with PAYMENT-SIGNATURE."
       : "7. This deployment does not require Fiber/x402 payment.",
-    "Authorization order: fresh intent signature -> live CKB Cell/provider policy -> provider-local license revocation (license mode) -> delegation scope/budget -> optional Fiber payment -> protected service.",
+    "Authorization order: canonical signed intent -> fresh live CKB Cell/provider policy -> v2 subject binding/finality -> provider-local license revocation (license mode) -> delegation scope/budget -> optional Fiber payment -> durable protected execution.",
     "Do not send private keys. Treat exported delegation credentials as bearer-sensitive authorization material until expiry or Capability transfer.",
   ];
   if (services.length) lines.push(`Services: ${services.map((service) => `${service.slug} (${service.endpoint || `/api/invoke/${service.slug}`})`).join(", ")}.`);

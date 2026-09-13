@@ -84,6 +84,24 @@ generate_secret(){
   fi
 }
 
+generate_ed25519_private_key(){
+  local name="$1" path=".secrets/$1"
+  mkdir -p .secrets; chmod 700 .secrets 2>/dev/null || true
+  [[ -s "$path" ]] && return 0
+  if have openssl; then
+    openssl genpkey -algorithm Ed25519 -out "$path" >/dev/null 2>&1
+  elif have node; then
+    node - "$path" <<'NODE'
+const { generateKeyPairSync } = require('node:crypto');
+const { writeFileSync } = require('node:fs');
+const { privateKey } = generateKeyPairSync('ed25519');
+writeFileSync(process.argv[2], privateKey.export({ type: 'pkcs8', format: 'pem' }));
+NODE
+  else fail "Need openssl or node to generate Ed25519 signing keys"; fi
+  chmod 600 "$path" 2>/dev/null || true
+  info "Generated .secrets/$name"
+}
+
 init(){
   [[ -f .env.production.example ]] || fail ".env.production.example is missing"
   if [[ ! -f .env.production ]]; then
@@ -97,6 +115,8 @@ init(){
   generate_secret facilitator_auth_token.txt
   generate_secret postgres_password.txt
   generate_secret redis_password.txt
+  generate_ed25519_private_key provider_manifest_ed25519.pem
+  generate_ed25519_private_key gateway_signing_ed25519.pem
   mkdir -p .secrets
   if [[ ! -f .secrets/fiber_rpc_token.txt ]]; then
     : > .secrets/fiber_rpc_token.txt
@@ -137,6 +157,9 @@ doctor(){
 
   for f in facilitator_auth_token.txt postgres_password.txt redis_password.txt; do
     secret_ok ".secrets/$f" && echo "[OK]   secret $f" || { echo "[FAIL] secret $f is missing/too short"; fail_count=$((fail_count+1)); }
+  done
+  for f in provider_manifest_ed25519.pem gateway_signing_ed25519.pem; do
+    [[ -s ".secrets/$f" ]] && echo "[OK]   signing key $f" || { echo "[FAIL] signing key $f is missing"; fail_count=$((fail_count+1)); }
   done
 
   domain="$(env_value PUBLIC_DOMAIN)"

@@ -87,7 +87,8 @@ test("delegation quota uses reserve then commit and releases on protected execut
 test("idempotent action operation IDs survive fresh challenges and stay payment/delegation bound", () => {
   const server = read("apps/live-service/server.mjs");
   const web = read("apps/web/src/App.tsx");
-  assert.match(server, /operation_id=\$\{normalizeOperationId/);
+  assert.match(server, /formatAuthorizationIntent\(\{/);
+  assert.match(read("packages/auth-protocol/src/index.mjs"), /operation_id/);
   assert.match(server, /operationId: service\.operationMode === "idempotent-action"/);
   assert.match(server, /actionInvocationKey\(body, service\)/);
   assert.match(server, /operationId: service\.operationMode === "idempotent-action" \? normalizeOperationId\(body\.operationId/);

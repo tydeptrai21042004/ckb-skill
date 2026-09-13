@@ -1,4 +1,9 @@
 import { isIP } from "node:net";
+import { lookup } from "node:dns/promises";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { readFileSync } from "node:fs";
+import { createGatewayAssertion } from "@skillpass/provider-verifier";
 import {
   COMPUTE_API_V1_SERVICE_ID,
   MODEL_API_V1_SERVICE_ID,
@@ -9,6 +14,12 @@ import { createServiceRegistry, normalizeServiceSlug, validateServiceInput } fro
 import { executeComputeReference, executeModelReference, executePrivateDataReference } from "./reference-services.mjs";
 
 const DEFAULT_MAX_INPUT_CHARS = 20_000;
+
+function readSecret(env, name) {
+  const file = String(env[`${name}_FILE`] || "").trim();
+  if (file) return readFileSync(file, "utf8").trim().replace(/\\n/g, "\n");
+  return String(env[name] || "").trim().replace(/\\n/g, "\n");
+}
 
 function referenceProvider(env) {
   const providerId = String(env.SKILLPASS_PROVIDER_ID || "skillpass-reference-provider").trim();
@@ -50,6 +61,64 @@ function boundedUrl(raw, { production = false, allowed = new Set() } = {}) {
   if (production && !allowed.size) throw new Error("SKILLPASS_GATEWAY_ALLOWED_HOSTS is required when an upstream gateway is enabled in public production");
   if (production && !allowed.has(url.hostname.toLowerCase())) throw new Error(`gateway upstream host is not allowlisted: ${url.hostname}`);
   return url;
+}
+
+async function resolvePinnedAddress(hostname) {
+  const host = String(hostname || "").replace(/^\[|\]$/g, "");
+  if (isIP(host)) {
+    if (isPrivateLiteral(host)) throw Object.assign(new Error("upstream resolved to a private or reserved address"), { status: 502, code: "UPSTREAM_ADDRESS_REJECTED" });
+    return { address: host, family: isIP(host) };
+  }
+  const answers = await lookup(host, { all: true, verbatim: true });
+  if (!answers.length) throw Object.assign(new Error("upstream DNS returned no addresses"), { status: 502, code: "UPSTREAM_DNS_EMPTY" });
+  for (const answer of answers) {
+    if (isPrivateLiteral(answer.address)) throw Object.assign(new Error("upstream DNS resolved to a private or reserved address"), { status: 502, code: "UPSTREAM_ADDRESS_REJECTED" });
+  }
+  return answers[0];
+}
+
+export async function postJsonPinned(url, { headers, body, timeoutMs, maxResponseBytes }) {
+  const pinned = await resolvePinnedAddress(url.hostname);
+  const payload = Buffer.from(JSON.stringify(body));
+  const requestImpl = url.protocol === "https:" ? httpsRequest : httpRequest;
+  return new Promise((resolve, reject) => {
+    const req = requestImpl(url, {
+      method: "POST",
+      headers: { ...headers, "content-length": String(payload.length) },
+      timeout: timeoutMs,
+      lookup: (_hostname, options, callback) => {
+        if (options?.all) callback(null, [{ address: pinned.address, family: pinned.family }]);
+        else callback(null, pinned.address, pinned.family);
+      },
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > maxResponseBytes) {
+          req.destroy(Object.assign(new Error("upstream response is too large"), { status: 502, code: "UPSTREAM_RESPONSE_TOO_LARGE" }));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          reject(Object.assign(new Error("protected upstream rejected the request"), { status: 502, code: "UPSTREAM_REJECTED" }));
+          return;
+        }
+        const type = String(response.headers["content-type"] || "").toLowerCase();
+        if (!type.includes("application/json") && !type.includes("+json")) {
+          reject(Object.assign(new Error("protected upstream must return JSON"), { status: 502, code: "UPSTREAM_INVALID_CONTENT_TYPE" }));
+          return;
+        }
+        try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null); }
+        catch { reject(Object.assign(new Error("protected upstream returned invalid JSON"), { status: 502, code: "UPSTREAM_INVALID_JSON" })); }
+      });
+    });
+    req.on("timeout", () => req.destroy(Object.assign(new Error("protected upstream timed out"), { status: 504, code: "UPSTREAM_TIMEOUT" })));
+    req.on("error", reject);
+    req.end(payload);
+  });
 }
 
 async function readBoundedJson(response, maxBytes) {
@@ -114,6 +183,12 @@ function httpGatewayService(raw, { env, production, defaultTimeoutMs, bearerMap,
     throw new Error(`${slug}.idempotencyMode must be invocation-key for idempotent-action upstreams`);
   }
   const bearer = bearerMap[slug] || "";
+  const gatewaySigningPrivateKey = readSecret(env, "SKILLPASS_GATEWAY_SIGNING_PRIVATE_KEY") || readSecret(env, "SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY");
+  const gatewaySigningKeyId = String(env.SKILLPASS_GATEWAY_SIGNING_KEY_ID || env.SKILLPASS_PROVIDER_MANIFEST_KEY_ID || "gateway-2026-09").trim();
+  const requireGatewayAssertion = env.SKILLPASS_REQUIRE_UPSTREAM_ASSERTION === "" || env.SKILLPASS_REQUIRE_UPSTREAM_ASSERTION == null
+    ? production
+    : String(env.SKILLPASS_REQUIRE_UPSTREAM_ASSERTION).toLowerCase() === "true";
+  if (requireGatewayAssertion && !gatewaySigningPrivateKey) throw new Error(`upstream service ${slug} requires SKILLPASS_GATEWAY_SIGNING_PRIVATE_KEY(_FILE)`);
   return {
     slug,
     id,
@@ -131,33 +206,34 @@ function httpGatewayService(raw, { env, production, defaultTimeoutMs, bearerMap,
       if (operationMode === "idempotent-action" && !/^[0-9a-f]{64}$/.test(String(context.invocationKey || ""))) {
         throw Object.assign(new Error("idempotent-action upstream requires a bound invocation key"), { status: 500, code: "INVOCATION_KEY_REQUIRED" });
       }
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), serviceTimeoutMs);
-      timer.unref?.();
-      try {
-        const headers = {
-          "content-type": "application/json",
-          accept: "application/json",
-          "user-agent": "SkillPass-Gateway/1.2",
-          "x-skillpass-service-id": id,
-          "x-skillpass-capability-id": String(context.capabilityId || ""),
-          "x-skillpass-request-id": String(context.requestId || ""),
-          "x-skillpass-invocation-key": String(context.invocationKey || ""),
-        };
-        if (bearer) headers.authorization = `Bearer ${bearer}`;
-        const payload = inputKind === "text" ? { text: validated } : validated;
-        const response = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload), signal: controller.signal, redirect: "error" });
-        if (!response.ok) throw Object.assign(new Error("protected upstream rejected the request"), { status: 502, code: "UPSTREAM_REJECTED" });
-        const type = String(response.headers.get("content-type") || "").toLowerCase();
-        if (!type.includes("application/json") && !type.includes("+json")) throw Object.assign(new Error("protected upstream must return JSON"), { status: 502, code: "UPSTREAM_INVALID_CONTENT_TYPE" });
-        try { return await readBoundedJson(response, maxResponseBytes); }
-        catch (error) { throw Object.assign(new Error(error.message === "upstream response is too large" ? error.message : "protected upstream returned invalid JSON"), { status: 502, code: error.message === "upstream response is too large" ? "UPSTREAM_RESPONSE_TOO_LARGE" : "UPSTREAM_INVALID_JSON" }); }
-      } catch (error) {
-        if (error?.name === "AbortError") throw Object.assign(new Error("protected upstream timed out"), { status: 504, code: "UPSTREAM_TIMEOUT" });
-        throw error;
-      } finally {
-        clearTimeout(timer);
+      const headers = {
+        "content-type": "application/json",
+        accept: "application/json",
+        "user-agent": "SkillPass-Gateway/2.0",
+        "x-skillpass-service-id": id,
+        "x-skillpass-capability-id": String(context.capabilityId || ""),
+        "x-skillpass-request-id": String(context.requestId || ""),
+        "x-skillpass-invocation-key": String(context.invocationKey || ""),
+      };
+      if (bearer) headers.authorization = `Bearer ${bearer}`;
+      if (gatewaySigningPrivateKey) {
+        headers["x-skillpass-authorization"] = createGatewayAssertion({
+          privateKeyPem: gatewaySigningPrivateKey,
+          keyId: gatewaySigningKeyId,
+          ttlSeconds: 30,
+          claims: {
+            providerId: this.providerId, serviceId: id, capabilityId: String(context.capabilityId || ""),
+            capabilityOutPoint: context.capabilityOutPoint || null, ownerLockHash: String(context.ownerLockHash || ""),
+            principalAddress: String(context.principalAddress || ""), requestHash: String(context.requestHash || ""),
+            policyId: String(context.policyId || ""), policyFingerprint: String(context.policyFingerprint || ""),
+            operationId: String(context.operationId || ""), delegationId: String(context.delegationId || "direct"),
+            invocationKey: String(context.invocationKey || ""), requestId: String(context.requestId || ""),
+          },
+        });
+        headers["x-skillpass-authorization-key-id"] = gatewaySigningKeyId;
       }
+      const payload = inputKind === "text" ? { text: validated } : validated;
+      return postJsonPinned(url, { headers, body: payload, timeoutMs: serviceTimeoutMs, maxResponseBytes });
     },
   };
 }

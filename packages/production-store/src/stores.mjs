@@ -44,6 +44,43 @@ export class PostgresRecordStore {
     return this.get(normalized);
   }
 
+  async setIfAbsent(key, value = {}) {
+    const normalized = String(key);
+    const body = { ...value };
+    delete body.key;
+    delete body.updatedAt;
+    const expiresAt = Number.isFinite(Number(body.expiresAt)) ? Number(body.expiresAt) : null;
+    const result = await this.pool.query(
+      `INSERT INTO skillpass_service_records(namespace, record_key, value, expires_at, updated_at)
+       VALUES ($1, $2, $3::jsonb, CASE WHEN $4::bigint IS NULL THEN NULL ELSE to_timestamp($4::double precision / 1000.0) END, clock_timestamp())
+       ON CONFLICT (namespace, record_key) DO NOTHING
+       RETURNING record_key`,
+      [this.namespace, normalized, JSON.stringify(body), expiresAt],
+    );
+    return { inserted: result.rowCount === 1, record: await this.get(normalized) };
+  }
+
+  async compareAndSetState(key, expectedStates, value = {}) {
+    const normalized = String(key);
+    const states = (Array.isArray(expectedStates) ? expectedStates : [expectedStates]).map(String);
+    if (!states.length) throw new Error("expectedStates must not be empty");
+    const body = { ...value };
+    delete body.key;
+    delete body.updatedAt;
+    const expiresAt = Number.isFinite(Number(body.expiresAt)) ? Number(body.expiresAt) : null;
+    const result = await this.pool.query(
+      `UPDATE skillpass_service_records
+          SET value = $4::jsonb,
+              expires_at = CASE WHEN $5::bigint IS NULL THEN NULL ELSE to_timestamp($5::double precision / 1000.0) END,
+              updated_at = clock_timestamp()
+        WHERE namespace = $1 AND record_key = $2
+          AND COALESCE(value->>'state', '') = ANY($3::text[])
+        RETURNING record_key`,
+      [this.namespace, normalized, states, JSON.stringify(body), expiresAt],
+    );
+    return { updated: result.rowCount === 1, record: await this.get(normalized) };
+  }
+
   async delete(key) {
     const result = await this.pool.query(
       "DELETE FROM skillpass_service_records WHERE namespace = $1 AND record_key = $2",
@@ -289,7 +326,7 @@ export class RedisRateLimiter {
   }
 }
 
-function normalizeDelegationUsageInput({ grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic = "0", expiresAt }) {
+function normalizeDelegationUsageInput({ grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic = "0", expiresAt, grantFingerprint }) {
   const id = String(grantId || "").trim().toLowerCase();
   if (!/^[0-9a-f]{32}$/.test(id)) throw new Error("delegation grantId is invalid");
   const key = String(invocationKey || "").trim().toLowerCase();
@@ -306,7 +343,10 @@ function normalizeDelegationUsageInput({ grantId, invocationKey, maxUses, maxSpe
   const spend = normalizeAtomic(spendAtomic, "delegation spendAtomic");
   const expiry = Number(expiresAt);
   if (!Number.isSafeInteger(expiry) || expiry <= 0) throw new Error("delegation expiresAt is invalid");
-  return { grantId: id, invocationKey: key, maxUses: uses, maxSpendAtomic: maxSpend, spendAtomic: spend, expiresAt: expiry };
+  const suppliedFingerprint = String(grantFingerprint || "").trim().toLowerCase();
+  const fingerprint = suppliedFingerprint || createHash("sha256").update(`legacy-delegation:${id}:${expiry}`).digest("hex");
+  if (!/^[0-9a-f]{64}$/.test(fingerprint)) throw new Error("delegation grantFingerprint must be a SHA-256 hex digest");
+  return { grantId: id, invocationKey: key, maxUses: uses, maxSpendAtomic: maxSpend, spendAtomic: spend, expiresAt: expiry, grantFingerprint: fingerprint };
 }
 
 function usageResult({
@@ -360,13 +400,13 @@ export class PostgresDelegationUsageLedger {
   async #lockUsage(client, normalized) {
     await client.query(
       `INSERT INTO skillpass_delegation_usage(
-         grant_id, used_calls, used_spend, reserved_calls, reserved_spend, expires_at, updated_at
-       ) VALUES ($1, 0, 0, 0, 0, to_timestamp($2::double precision / 1000.0), clock_timestamp())
+         grant_id, grant_fingerprint, used_calls, used_spend, reserved_calls, reserved_spend, expires_at, updated_at
+       ) VALUES ($1, $3, 0, 0, 0, 0, to_timestamp($2::double precision / 1000.0), clock_timestamp())
        ON CONFLICT (grant_id) DO NOTHING`,
-      [normalized.grantId, normalized.expiresAt],
+      [normalized.grantId, normalized.expiresAt, normalized.grantFingerprint],
     );
     const { rows } = await client.query(
-      `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+      `SELECT grant_fingerprint, used_calls::text AS used_calls, used_spend::text AS used_spend,
               reserved_calls::text AS reserved_calls, reserved_spend::text AS reserved_spend,
               extract(epoch from expires_at) * 1000 AS expires_ms
          FROM skillpass_delegation_usage
@@ -375,7 +415,11 @@ export class PostgresDelegationUsageLedger {
     );
     if (!rows.length) throw new Error("delegation usage row is missing");
     const row = rows[0];
-    if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt) {
+    if (!row.grant_fingerprint) {
+      await client.query("UPDATE skillpass_delegation_usage SET grant_fingerprint = $2 WHERE grant_id = $1", [normalized.grantId, normalized.grantFingerprint]);
+      row.grant_fingerprint = normalized.grantFingerprint;
+    }
+    if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt || String(row.grant_fingerprint).toLowerCase() !== normalized.grantFingerprint) {
       throw delegationError("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
     }
     return row;
@@ -553,7 +597,7 @@ export class PostgresDelegationUsageLedger {
     try {
       await client.query("BEGIN");
       const rowResult = await client.query(
-        `SELECT used_calls::text AS used_calls, used_spend::text AS used_spend,
+        `SELECT grant_fingerprint, used_calls::text AS used_calls, used_spend::text AS used_spend,
                 reserved_calls::text AS reserved_calls, reserved_spend::text AS reserved_spend,
                 extract(epoch from expires_at) * 1000 AS expires_ms
            FROM skillpass_delegation_usage WHERE grant_id = $1 FOR UPDATE`,
@@ -561,7 +605,7 @@ export class PostgresDelegationUsageLedger {
       );
       if (!rowResult.rows.length) { await client.query("COMMIT"); return null; }
       const row = rowResult.rows[0];
-      if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt) {
+      if (Math.trunc(Number(row.expires_ms)) !== normalized.expiresAt || (row.grant_fingerprint && String(row.grant_fingerprint).toLowerCase() !== normalized.grantFingerprint)) {
         throw delegationError("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
       }
       const invocationResult = await client.query(

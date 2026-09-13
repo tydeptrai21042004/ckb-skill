@@ -29,8 +29,10 @@ import {
 } from "@skillpass/x402-fiber";
 import { createLiveRuntimeState } from "./runtime-state.mjs";
 import { buildAgentSpec, buildDiscovery, buildOpenApi } from "./discovery.mjs";
-import { buildServiceRegistry } from "./services.mjs";
+import { buildServiceRegistry, postJsonPinned } from "./services.mjs";
 import { canonicalJson, validateServiceInput } from "@skillpass/service-gateway";
+import { formatAuthorizationIntent } from "@skillpass/auth-protocol";
+import { providerIdDigest, publicKeyFromPrivateKey, signProviderManifest } from "@skillpass/provider-verifier";
 import { assertDelegationScope, buildDelegationMessage } from "@skillpass/delegation";
 import {
   assertJsonRequest,
@@ -46,6 +48,8 @@ import {
   policyAcceptsEntitlement,
   verifyDelegationPolicy,
   verifyServicePolicy,
+  verifySubjectBinding,
+  createAuthorizationEvidence,
 } from "../../packages/service-rights/src/index.mjs";
 
 
@@ -53,6 +57,10 @@ function readSecret(name) {
   const file = String(process.env[`${name}_FILE`] || "").trim();
   if (file) return readFileSync(file, "utf8").trim();
   return String(process.env[name] || "").trim();
+}
+
+function readPemSecret(name) {
+  return readSecret(name).replace(/\\n/g, "\n");
 }
 
 const HOST = process.env.HOST || "0.0.0.0";
@@ -69,6 +77,17 @@ const SERVICE_TERMS_HASH_RAW = String(process.env.SERVICE_TERMS_HASH || "").trim
 const STARTED_AT = Date.now();
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true";
+const SUBJECT_RESOLVER_TIMEOUT_MS = Number(process.env.SUBJECT_RESOLVER_TIMEOUT_MS || 5_000);
+const MIN_CAPABILITY_CONFIRMATIONS = Number(process.env.SKILLPASS_MIN_CAPABILITY_CONFIRMATIONS || 0);
+const INVOCATION_TTL_SECONDS = Number(process.env.INVOCATION_TTL_SECONDS || 7 * 24 * 3600);
+const AUTHORIZATION_EVIDENCE_TTL_SECONDS = Number(process.env.AUTHORIZATION_EVIDENCE_TTL_SECONDS || 30 * 24 * 3600);
+const PROVIDER_MANIFEST_PRIVATE_KEY = readPemSecret("SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY");
+const PROVIDER_MANIFEST_KEY_ID = String(process.env.SKILLPASS_PROVIDER_MANIFEST_KEY_ID || "provider-manifest-2026-09").trim();
+const GATEWAY_SIGNING_PRIVATE_KEY = readPemSecret("SKILLPASS_GATEWAY_SIGNING_PRIVATE_KEY") || PROVIDER_MANIFEST_PRIVATE_KEY;
+const GATEWAY_SIGNING_KEY_ID = String(process.env.SKILLPASS_GATEWAY_SIGNING_KEY_ID || PROVIDER_MANIFEST_KEY_ID || "gateway-2026-09").trim();
+const REQUIRE_SIGNED_PROVIDER_MANIFEST = process.env.SKILLPASS_REQUIRE_SIGNED_MANIFEST === "" || process.env.SKILLPASS_REQUIRE_SIGNED_MANIFEST == null
+  ? IS_PUBLIC_PRODUCTION
+  : process.env.SKILLPASS_REQUIRE_SIGNED_MANIFEST === "true";
 const MAX_BODY = Number(process.env.MAX_REQUEST_BODY_BYTES || 36 * 1024);
 const PAYMENT_HEADER_MAX_BYTES = Number(process.env.PAYMENT_HEADER_MAX_BYTES || 12 * 1024);
 const UPSTREAM_TIMEOUT_MS = Number(process.env.UPSTREAM_TIMEOUT_MS || 8_000);
@@ -114,6 +133,11 @@ if (!Number.isSafeInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error("PO
 if (!Number.isSafeInteger(MAX_BODY) || MAX_BODY < 8 * 1024 || MAX_BODY > 64 * 1024) throw new Error("MAX_REQUEST_BODY_BYTES must be 8192..65536");
 if (!Number.isSafeInteger(PAYMENT_HEADER_MAX_BYTES) || PAYMENT_HEADER_MAX_BYTES < 1024 || PAYMENT_HEADER_MAX_BYTES > 16 * 1024) throw new Error("PAYMENT_HEADER_MAX_BYTES must be 1024..16384");
 if (!Number.isSafeInteger(UPSTREAM_TIMEOUT_MS) || UPSTREAM_TIMEOUT_MS < 1000 || UPSTREAM_TIMEOUT_MS > 15_000) throw new Error("UPSTREAM_TIMEOUT_MS must be 1000..15000");
+if (!Number.isSafeInteger(SUBJECT_RESOLVER_TIMEOUT_MS) || SUBJECT_RESOLVER_TIMEOUT_MS < 500 || SUBJECT_RESOLVER_TIMEOUT_MS > 15_000) throw new Error("SUBJECT_RESOLVER_TIMEOUT_MS must be 500..15000");
+if (!Number.isSafeInteger(MIN_CAPABILITY_CONFIRMATIONS) || MIN_CAPABILITY_CONFIRMATIONS < 0 || MIN_CAPABILITY_CONFIRMATIONS > 10_000) throw new Error("SKILLPASS_MIN_CAPABILITY_CONFIRMATIONS must be 0..10000");
+if (!Number.isSafeInteger(INVOCATION_TTL_SECONDS) || INVOCATION_TTL_SECONDS < 600 || INVOCATION_TTL_SECONDS > 90 * 24 * 3600) throw new Error("INVOCATION_TTL_SECONDS must be 600..7776000");
+if (!Number.isSafeInteger(AUTHORIZATION_EVIDENCE_TTL_SECONDS) || AUTHORIZATION_EVIDENCE_TTL_SECONDS < 3600 || AUTHORIZATION_EVIDENCE_TTL_SECONDS > 365 * 24 * 3600) throw new Error("AUTHORIZATION_EVIDENCE_TTL_SECONDS must be 3600..31536000");
+if (REQUIRE_SIGNED_PROVIDER_MANIFEST && !PROVIDER_MANIFEST_PRIVATE_KEY) throw new Error("SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY(_FILE) is required when signed provider manifests are required");
 for (const [name, value, max] of [
   ["CHALLENGE_RATE_LIMIT_PER_MINUTE", CHALLENGE_RATE_LIMIT, 120],
   ["ANALYZE_RATE_LIMIT_PER_MINUTE", ANALYZE_RATE_LIMIT, 60],
@@ -254,6 +278,29 @@ function parseServicePolicyOverrides() {
   return normalized;
 }
 
+function parseSubjectResolvers() {
+  const raw = String(process.env.SKILLPASS_SUBJECT_RESOLVERS_JSON || "").trim();
+  if (!raw) return new Map();
+  let value;
+  try { value = JSON.parse(raw); } catch { throw new Error("SKILLPASS_SUBJECT_RESOLVERS_JSON must be a JSON object"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("SKILLPASS_SUBJECT_RESOLVERS_JSON must be a JSON object");
+  const allowed = new Set(String(process.env.SKILLPASS_SUBJECT_RESOLVER_ALLOWED_HOSTS || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
+  if (IS_PUBLIC_PRODUCTION && Object.keys(value).length && !allowed.size) throw new Error("SKILLPASS_SUBJECT_RESOLVER_ALLOWED_HOSTS is required when subject resolvers are enabled in public production");
+  const out = new Map();
+  for (const [subjectTypeRaw, descriptor] of Object.entries(value)) {
+    const subjectType = Number(subjectTypeRaw);
+    if (!Number.isInteger(subjectType) || subjectType < 1 || subjectType > 255) throw new Error(`invalid subject resolver type ${subjectTypeRaw}`);
+    const item = typeof descriptor === "string" ? { url: descriptor } : descriptor;
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error(`subject resolver ${subjectType} must be a URL or object`);
+    const url = new URL(String(item.url || ""));
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.hash) throw new Error(`subject resolver ${subjectType} URL is invalid`);
+    if (IS_PUBLIC_PRODUCTION && url.protocol !== "https:") throw new Error(`subject resolver ${subjectType} must use https:// in public production`);
+    if (IS_PUBLIC_PRODUCTION && !allowed.has(url.hostname.toLowerCase())) throw new Error(`subject resolver host is not allowlisted: ${url.hostname}`);
+    out.set(subjectType, Object.freeze({ url: url.toString(), provider: String(item.provider || "custom").slice(0, 64) }));
+  }
+  return out;
+}
+
 const TRUSTED_ISSUER_IDS = parseTrustedIssuerIds();
 const PRIMARY_TRUSTED_ISSUER_RAW = String(process.env.CAPABILITY_TRUSTED_ISSUER_ID || "").trim();
 const TRUSTED_ISSUER_ID = PRIMARY_TRUSTED_ISSUER_RAW
@@ -263,6 +310,8 @@ const SERVICE_TERMS_HASH = SERVICE_TERMS_HASH_RAW ? requireHex32("SERVICE_TERMS_
 const DEFAULT_RIGHT_MODE = String(process.env.SERVICE_RIGHT_MODE || "owned").trim().toLowerCase();
 const SKILLPASS_ADMIN_TOKEN = readSecret("SKILLPASS_ADMIN_TOKEN");
 const SERVICE_POLICY_OVERRIDES = parseServicePolicyOverrides();
+const SUBJECT_RESOLVERS = parseSubjectResolvers();
+const SUBJECT_RESOLVER_AUTH_TOKEN = readSecret("SUBJECT_RESOLVER_AUTH_TOKEN");
 if (!SERVICE_POLICY_ID || SERVICE_POLICY_ID.length > 128) throw new Error("SERVICE_POLICY_ID must be 1..128 characters");
 if (!["owned", "license"].includes(DEFAULT_RIGHT_MODE)) throw new Error("SERVICE_RIGHT_MODE must be owned or license");
 const DEFAULT_POLICY_URL = parsePolicyUrl(SERVICE_POLICY_URL, "SERVICE_POLICY_URL");
@@ -382,7 +431,7 @@ function buildProviderManifest() {
   const providerIds = [...new Set(services.map((service) => service.providerId).filter(Boolean))];
   const providerNames = [...new Set(services.map((service) => service.providerName).filter(Boolean))];
   const manifest = {
-    schemaVersion: "1.0",
+    schemaVersion: "2.0",
     protocol: "skillpass-provider-manifest",
     network: "ckb-testnet",
     provider: {
@@ -391,6 +440,11 @@ function buildProviderManifest() {
     },
     ownershipSource: "current-live-capability-cell-owner",
     entitlementSynchronizationRequired: false,
+    authorizationIntent: { protocol: "SkillPass Authorization Intent v1", requestHashBound: true, outPointBound: true, policyBound: true },
+    gatewayAuthorization: GATEWAY_SIGNING_PRIVATE_KEY ? {
+      scheme: "Ed25519", header: "x-skillpass-authorization", keyId: GATEWAY_SIGNING_KEY_ID,
+      publicKeyPem: publicKeyFromPrivateKey(GATEWAY_SIGNING_PRIVATE_KEY), maxTtlSeconds: 30,
+    } : null,
     services: services.map((service) => ({
       slug: service.slug, id: service.id, name: service.name, endpoint: service.endpoint,
       operationMode: service.operationMode, idempotencyMode: service.idempotencyMode || null,
@@ -399,9 +453,17 @@ function buildProviderManifest() {
       delegationAllowed: service.delegationAllowed, payment: service.payment,
     })),
   };
+  if (PROVIDER_MANIFEST_PRIVATE_KEY) {
+    return signProviderManifest({
+      manifest,
+      privateKeyPem: PROVIDER_MANIFEST_PRIVATE_KEY,
+      keyId: PROVIDER_MANIFEST_KEY_ID,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+    });
+  }
   const manifestHash = createHash("sha256").update(canonicalJson(manifest)).digest("hex");
-  const externalSignature = String(process.env.SKILLPASS_PROVIDER_MANIFEST_SIGNATURE || "").trim();
-  return Object.freeze({ ...manifest, manifestHash: `sha256:${manifestHash}`, signature: externalSignature || null });
+  return Object.freeze({ ...manifest, manifestHash: `sha256:${manifestHash}`, signature: null });
 }
 
 const servicePolicy = serviceContext(PRIMARY_SERVICE).policy; // backward-compatible primary references
@@ -479,27 +541,22 @@ function normalizeOperationId(value, { required = false } = {}) {
 }
 
 function challengeMessage({ nonce, address, expiresAt, outPoint, requestHash, service, delegationId = "", operationId = "" }) {
+  // Canonical intent fields: action=invoke, capability_outpoint=, request_hash=, policy_fingerprint=.
   const context = serviceContext(service);
-  const lines = [
-    "SkillPass capability access",
-    "action=invoke",
-    `service=${context.service.slug}`,
-    `service_id=${context.service.id}`,
-    `policy_id=${context.policyId}`,
-    `policy_fingerprint=${context.fingerprint}`,
-    `capability_outpoint=${outPointBinding(outPoint)}`,
-    `request_hash=${normalizeRequestHash(requestHash)}`,
-  ];
-  if (context.service.operationMode === "idempotent-action") {
-    lines.push(`operation_id=${normalizeOperationId(operationId, { required: true })}`);
-  }
-  lines.push(
-    `delegation_id=${String(delegationId || "direct")}`,
-    `address=${address}`,
-    `nonce=${nonce}`,
-    `expires_at=${expiresAt}`,
-  );
-  return lines.join("\n");
+  return formatAuthorizationIntent({
+    action: "invoke",
+    serviceSlug: context.service.slug,
+    serviceId: context.service.id,
+    policyId: context.policyId,
+    policyFingerprint: context.fingerprint,
+    capabilityOutPoint: { txHash: String(outPoint?.txHash || "").toLowerCase(), index: String(outPoint?.index ?? "") },
+    requestHash: normalizeRequestHash(requestHash),
+    operationId: context.service.operationMode === "idempotent-action" ? normalizeOperationId(operationId, { required: true }) : "",
+    delegationId: String(delegationId || "direct"),
+    address,
+    nonce,
+    expiresAt,
+  });
 }
 
 async function issueChallenge(address, outPoint, requestHash, service, delegationId = "", operationId = "") {
@@ -548,6 +605,103 @@ async function withTimeout(promise, label, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   }
 }
 
+let chainTipCache = null;
+let chainTipInFlight = null;
+
+async function currentChainTipEvidence() {
+  const now = Date.now();
+  if (chainTipCache && now - chainTipCache.cachedAt < 2_000) return chainTipCache.value;
+  if (chainTipInFlight) return chainTipInFlight;
+  chainTipInFlight = (async () => {
+    const number = await withTimeout(client.getTip(), "CKB tip");
+    let hash = null;
+    try {
+      if (typeof client.getHeaderByNumber === "function") {
+        const header = await withTimeout(client.getHeaderByNumber(number), "CKB tip header", 3_000);
+        hash = header?.hash ? String(header.hash).toLowerCase() : null;
+      }
+    } catch {}
+    return Object.freeze({ number: BigInt(number).toString(), hash });
+  })().then((value) => { chainTipCache = { cachedAt: Date.now(), value }; return value; }).finally(() => { chainTipInFlight = null; });
+  return chainTipInFlight;
+}
+
+function cellBlockNumber(cell) {
+  const raw = cell?.blockNumber ?? cell?.block_number ?? cell?.block?.number ?? null;
+  if (raw == null || raw === "") return null;
+  try { return BigInt(raw); } catch { return null; }
+}
+
+async function finalityEvidence(cell) {
+  const tip = await currentChainTipEvidence();
+  const includedAt = cellBlockNumber(cell);
+  let confirmations = null;
+  if (includedAt != null) {
+    const tipNumber = BigInt(tip.number);
+    confirmations = tipNumber >= includedAt ? (tipNumber - includedAt + 1n) : 0n;
+  }
+  if (MIN_CAPABILITY_CONFIRMATIONS > 0) {
+    if (confirmations == null) {
+      throw Object.assign(new Error("capability confirmation metadata is unavailable"), { status: 503, code: "FINALITY_METADATA_UNAVAILABLE" });
+    }
+    if (confirmations < BigInt(MIN_CAPABILITY_CONFIRMATIONS)) {
+      throw Object.assign(new Error("capability has not reached the provider confirmation threshold"), { status: 409, code: "CAPABILITY_NOT_FINAL", confirmations: confirmations.toString() });
+    }
+  }
+  return Object.freeze({
+    tipBlockNumber: tip.number,
+    tipBlockHash: tip.hash,
+    capabilityBlockNumber: includedAt == null ? null : includedAt.toString(),
+    confirmations: confirmations == null ? null : confirmations.toString(),
+    requiredConfirmations: MIN_CAPABILITY_CONFIRMATIONS,
+  });
+}
+
+async function resolveSubjectBinding({ capability, capabilityOwnerLockHash, capabilityOutPoint, service }) {
+  if (capability?.version !== 2 || Number(capability.bindingMode || 0) === 0) {
+    return Object.freeze({ bound: false, subject: null, resolver: null });
+  }
+  const descriptor = SUBJECT_RESOLVERS.get(Number(capability.subjectType));
+  if (!descriptor) {
+    throw Object.assign(new Error("subject-bound capability requires a configured provider subject resolver"), { status: 503, code: "SUBJECT_RESOLVER_UNAVAILABLE" });
+  }
+  try {
+    const headers = { "content-type": "application/json", accept: "application/json", "user-agent": "SkillPass-SubjectResolver/1.0" };
+    if (SUBJECT_RESOLVER_AUTH_TOKEN) headers.authorization = `Bearer ${SUBJECT_RESOLVER_AUTH_TOKEN}`;
+    let subject;
+    try {
+      subject = await postJsonPinned(new URL(descriptor.url), {
+        headers, timeoutMs: SUBJECT_RESOLVER_TIMEOUT_MS, maxResponseBytes: 64 * 1024,
+        body: {
+          network: "ckb-testnet", subjectType: capability.subjectType, subjectId: capability.subjectId, bindingMode: capability.bindingMode,
+          capabilityId: capability.capabilityId, capabilityOutPoint: { txHash: String(capabilityOutPoint.txHash).toLowerCase(), index: String(capabilityOutPoint.index) },
+          capabilityOwnerLockHash, serviceId: service.id,
+        },
+      });
+    } catch (error) {
+      if (error?.code === "UPSTREAM_TIMEOUT") throw Object.assign(new Error("subject resolver timed out"), { status: 503, code: "SUBJECT_RESOLVER_TIMEOUT" });
+      throw Object.assign(new Error("subject resolver lookup failed"), { status: 503, code: error?.code === "UPSTREAM_ADDRESS_REJECTED" ? "SUBJECT_RESOLVER_ADDRESS_REJECTED" : "SUBJECT_RESOLVER_UNAVAILABLE" });
+    }
+    const normalized = {
+      id: normalizeHex32(subject?.id, "subject.id"),
+      lockHash: normalizeHex32(subject?.lockHash, "subject.lockHash"),
+      live: subject?.live === true,
+      outPoint: subject?.outPoint || null,
+      blockNumber: subject?.blockNumber == null ? null : String(subject.blockNumber),
+      blockHash: subject?.blockHash ? String(subject.blockHash).toLowerCase() : null,
+    };
+    try {
+      verifySubjectBinding({ capability, capabilityOwnerLockHash, subject: normalized });
+    } catch (error) {
+      if (error instanceof ServiceRightError) throw Object.assign(new Error(error.message), { status: 403, code: error.code });
+      throw error;
+    }
+    return Object.freeze({ bound: true, subject: Object.freeze(normalized), resolver: descriptor.provider });
+  } catch (error) {
+    throw error;
+  }
+}
+
 async function inspectLiveCapability({ outPoint, service = null, skipRevocation = false }) {
   const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
@@ -592,6 +746,12 @@ async function inspectLiveCapability({ outPoint, service = null, skipRevocation 
     }
   }
 
+  const currentOwnerLockHash = normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash");
+  const [finality, subjectBinding] = await Promise.all([
+    finalityEvidence(cell),
+    resolveSubjectBinding({ capability, capabilityOwnerLockHash: currentOwnerLockHash, capabilityOutPoint: outPoint, service: context.service }),
+  ]);
+
   return {
     cell,
     capability,
@@ -599,7 +759,9 @@ async function inspectLiveCapability({ outPoint, service = null, skipRevocation 
     policy: context.policy,
     policyId: context.policyId,
     policyFingerprint: context.fingerprint,
-    currentOwnerLockHash: normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash"),
+    currentOwnerLockHash,
+    subjectBinding,
+    finality,
     acceptedByServices: acceptingContexts.map((candidate) => candidate.service.slug),
     checkedAt: new Date().toISOString(),
   };
@@ -650,18 +812,30 @@ async function verifyDelegatedCapability({ credential, delegateAddress, outPoint
   return { ...inspected, delegation: grant, principalAddress: delegateAddress, ownerAddress: grant.ownerAddress };
 }
 
+function paymentHashDigest(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  const bare = raw.startsWith("0x") ? raw.slice(2) : raw;
+  return /^[0-9a-f]{64}$/.test(bare) ? bare : "";
+}
+
 function actionInvocationKey(body, service) {
   const operationId = normalizeOperationId(body.operationId, { required: true });
+  const context = serviceContext(service);
   return createHash("sha256").update(canonicalJson({
+    protocol: "skillpass-invocation-v2",
+    providerId: service.providerId || "",
     serviceId: service.id,
+    policyFingerprint: context.fingerprint,
     capabilityOutPoint: outPointBinding(body.outPoint),
     operationId,
+    requestHash: requestInputHash(service, body.input),
   })).digest("hex");
 }
 
 function delegationInvocationKey(body, payment, service) {
   if (service.operationMode === "idempotent-action") return actionInvocationKey(body, service);
-  if (payment?.hash && /^[0-9a-f]{64}$/i.test(String(payment.hash))) return String(payment.hash).toLowerCase();
+  const paymentDigest = paymentHashDigest(payment?.hash);
+  if (paymentDigest) return paymentDigest;
   return createHash("sha256")
     .update(`${String(body.delegation?.grant?.grantId || "direct")}:${String(body.nonce || "")}`)
     .digest("hex");
@@ -677,6 +851,7 @@ function delegationBudgetInput(verified, body, service, payment) {
     maxSpendAtomic: grant.limits.maxSpendAtomic,
     spendAtomic: PAYMENTS_REQUIRED ? paymentAmountFor(service) : "0",
     expiresAt: grant.expiresAt,
+    grantFingerprint: createHash("sha256").update(buildDelegationMessage(grant)).digest("hex"),
   };
 }
 
@@ -740,6 +915,7 @@ async function maybePrunePaymentState({ force = false } = {}) {
   paymentPruneInFlight = Promise.all([
     serviceState.pruneExpiredQuotes(),
     serviceState.pruneExpiredReceipts(SERVICE_RECEIPT_TTL_SECONDS * 1000),
+    serviceState.pruneExpiredInvocations(),
   ]).then(() => { lastPaymentPruneAt = Date.now(); }).finally(() => { paymentPruneInFlight = null; });
   return paymentPruneInFlight;
 }
@@ -827,9 +1003,9 @@ async function verifyPaymentHeader(req, body, service) {
   const verification = await withTimeout(facilitator.verify({ x402Version: 2, paymentPayload, paymentRequirements: quote.requirement }), "facilitator verify");
   if (!verification?.isValid) {
     // A persisted quote plus facilitator replay evidence means settlement may
-    // have completed immediately before a service crash. The protected paper
-    // analyzer is side-effect free, so we can recompute the result and call the
-    // idempotent settle endpoint to recover delivery without charging again.
+    // have completed immediately before a service crash. Durable invocation
+    // state preserves an EXECUTED result, and settlement is idempotent, so a
+    // retry can recover delivery without rerunning a protected side effect.
     if (verification?.invalidReason === "payment_already_consumed") {
       return { hash, quote, paymentPayload, verification, binding, recoverConsumedSettlement: true };
     }
@@ -1150,53 +1326,73 @@ async function readiness() {
   return readinessInFlight;
 }
 
-async function handleInvokeRequest(req, res, service, rawBody) {
-  const requestBody = normalizeInvokeBody(rawBody, service);
-  validateProtectedShape(requestBody, service);
-  await rateLimit(req, `invoke:${service.slug}`, ANALYZE_RATE_LIMIT, GLOBAL_ANALYZE_RATE_LIMIT);
+function invocationExpiry() {
+  return Date.now() + INVOCATION_TTL_SECONDS * 1000;
+}
 
-  // Authentication + fresh live CKB ownership happen before Fiber work or the
-  // protected service. Delegated requests additionally verify the owner-signed
-  // grant and then re-check that the delegating owner still owns the live Cell.
-  const verified = await authenticateProtectedRequest(requestBody, service);
+function authorizationEvidenceExpiry() {
+  return Date.now() + AUTHORIZATION_EVIDENCE_TTL_SECONDS * 1000;
+}
 
-  let payment = null;
-  if (PAYMENTS_REQUIRED) {
-    if (!req.headers["payment-signature"]) {
-      const required = await createPaymentQuote(req, requestBody, service);
-      return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with a fresh wallet challenge and PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
-    }
-    payment = await verifyPaymentHeader(req, requestBody, service);
-  }
+async function beginDurableInvocation({ verified, requestBody, service, payment = null }) {
+  const invocationKey = service.operationMode === "idempotent-action"
+    ? actionInvocationKey(requestBody, service)
+    : delegationInvocationKey(requestBody, payment, service);
+  const operationId = service.operationMode === "idempotent-action"
+    ? normalizeOperationId(requestBody.operationId, { required: true })
+    : "";
+  const invocation = await serviceState.beginInvocation({
+    invocationKey,
+    serviceSlug: service.slug,
+    capabilityId: verified.capability.capabilityId,
+    capabilityOutPoint: { txHash: String(requestBody.outPoint.txHash).toLowerCase(), index: String(requestBody.outPoint.index) },
+    operationId,
+    requestHash: requestInputHash(service, requestBody.input),
+    ownerLockHash: verified.currentOwnerLockHash,
+    principalAddress: verified.principalAddress,
+    paymentRequired: PAYMENTS_REQUIRED,
+    expiresAt: invocationExpiry(),
+  });
+  return { invocationKey, invocation };
+}
 
-  // Reserve bounded delegation quota before execution so concurrent requests
-  // cannot oversubscribe the grant, but do not permanently charge the grant
-  // until protected execution and optional payment settlement both succeed.
-  const delegationReservation = await reserveDelegationBudget(verified, requestBody, service, payment);
-  let delegationBudget = delegationReservation?.usage || null;
-  let result;
-  let settlement;
-  try {
-    result = payment?.alreadySettled
-      ? payment.receipt.result
-      : await service.execute(requestBody.input, {
-          requestId: res.__skillpassRequestId,
-          capabilityId: verified.capability.capabilityId,
-          ownerAddress: verified.ownerAddress,
-          principalAddress: verified.principalAddress,
-          invocationKey: service.operationMode === "idempotent-action" ? actionInvocationKey(requestBody, service) : delegationInvocationKey(requestBody, payment, service),
-        });
-    settlement = await settlePayment(payment, result);
-    delegationBudget = await commitDelegationBudget(delegationReservation);
-  } catch (error) {
-    // Failed read/query delivery must not burn a delegated use/spend budget.
-    // Release is best-effort here; a durable backend can also reclaim stale
-    // reservations after the bounded reservation TTL.
-    try { await releaseDelegationBudget(delegationReservation); } catch {}
-    throw error;
-  }
-  const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
-  return sendJson(res, 200, {
+async function persistAuthorizationEvidence({ requestId, verified, requestBody, service, payment, settlement, invocationKey }) {
+  const requestHash = requestInputHash(service, requestBody.input);
+  const paymentDigest = paymentHashDigest(payment?.hash);
+  const paymentProofHash = paymentDigest ? `0x${paymentDigest}` : "";
+  const base = createAuthorizationEvidence({
+    requestHash: `0x${requestHash}`,
+    capability: verified.capability,
+    outPoint: requestBody.outPoint,
+    providerId: providerIdDigest(service.providerId || "skillpass-provider"),
+    serviceId: service.id,
+    policyHash: verified.capability?.version === 2 ? verified.capability.policyHash : "",
+    delegationId: verified.delegation?.grantId || "",
+    paymentProofHash,
+    decision: "allow",
+    subject: verified.subjectBinding?.subject || null,
+  });
+  const record = {
+    ...base,
+    requestId,
+    providerKey: service.providerId || null,
+    policyId: verified.policyId,
+    policyFingerprint: verified.policyFingerprint,
+    currentOwnerLockHash: verified.currentOwnerLockHash,
+    subjectResolver: verified.subjectBinding?.resolver || null,
+    chain: verified.finality,
+    invocationKey,
+    operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : null,
+    paymentSettlementHash: settlement ? createHash("sha256").update(canonicalJson(settlement)).digest("hex") : null,
+    expiresAt: authorizationEvidenceExpiry(),
+  };
+  const evidenceHash = createHash("sha256").update(canonicalJson(record)).digest("hex");
+  const saved = await serviceState.setAuthorizationEvidence(requestId, { ...record, evidenceHash });
+  return { ...record, ...(saved || {}), evidenceHash };
+}
+
+function invokeResponse({ res, service, verified, requestBody, delegationBudget, result, settlement, evidence, invocationKey, replayed = false }) {
+  return {
     ok: true,
     service: {
       slug: service.slug, id: service.id, name: service.name, kind: service.kind,
@@ -1211,11 +1407,21 @@ async function handleInvokeRequest(req, res, service, rawBody) {
       policyFingerprint: verified.policyFingerprint,
       checkedAt: verified.checkedAt,
       source: "live-ckb-cell",
+      subjectBinding: verified.subjectBinding?.bound ? {
+        bound: true,
+        subjectId: verified.capability.subjectId,
+        subjectType: verified.capability.subjectType,
+        bindingMode: verified.capability.bindingMode,
+        resolver: verified.subjectBinding.resolver,
+      } : { bound: false },
+      finality: verified.finality,
     },
     authorization: {
       requestId: res.__skillpassRequestId,
       action: "invoke",
       operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : null,
+      invocationKey,
+      replayed: Boolean(replayed),
       principal: verified.delegation ? "delegate" : "owner",
       principalAddress: verified.principalAddress,
       ownerAddress: verified.ownerAddress,
@@ -1224,14 +1430,133 @@ async function handleInvokeRequest(req, res, service, rawBody) {
       delegationVersion: verified.delegation?.version || null,
       delegationLimits: verified.delegation?.limits || null,
       delegationUsage: delegationBudget,
+      delegationGrantFingerprint: verified.delegation ? createHash("sha256").update(buildDelegationMessage(verified.delegation)).digest("hex") : null,
       intentBound: true,
       entitlementVerified: true,
+      subjectBindingVerified: Boolean(verified.subjectBinding?.bound),
       paymentRequired: PAYMENTS_REQUIRED,
       paymentVerified: PAYMENTS_REQUIRED ? Boolean(settlement) : false,
+      evidenceHash: evidence?.evidenceHash || null,
     },
     result,
     payment: settlement,
-  }, headers);
+  };
+}
+
+async function handleInvokeRequest(req, res, service, rawBody) {
+  const requestBody = normalizeInvokeBody(rawBody, service);
+  validateProtectedShape(requestBody, service);
+  await rateLimit(req, `invoke:${service.slug}`, ANALYZE_RATE_LIMIT, GLOBAL_ANALYZE_RATE_LIMIT);
+
+  // Authentication + fresh live CKB ownership happen before Fiber work or the
+  // protected service. Delegated requests additionally verify the owner-signed
+  // grant and then re-check that the delegating owner still owns the live Cell.
+  const verified = await authenticateProtectedRequest(requestBody, service);
+
+  // Action operation IDs are reserved before payment quotation so one caller
+  // cannot obtain multiple paid interpretations of the same operationId.
+  let durable = null;
+  if (service.operationMode === "idempotent-action") {
+    durable = await beginDurableInvocation({ verified, requestBody, service });
+  }
+
+  let payment = null;
+  if (PAYMENTS_REQUIRED) {
+    if (!req.headers["payment-signature"]) {
+      const required = await createPaymentQuote(req, requestBody, service);
+      return sendJson(res, 402, { error: "payment_required", message: "Fiber payment required; retry with a fresh wallet challenge and PAYMENT-SIGNATURE" }, { "PAYMENT-REQUIRED": encodeHeaderJson(required) });
+    }
+    payment = await verifyPaymentHeader(req, requestBody, service);
+  }
+
+  if (!durable) durable = await beginDurableInvocation({ verified, requestBody, service, payment });
+  const { invocationKey } = durable;
+  let invocation = durable.invocation;
+
+  if (invocation?.state === "DELIVERED" && Object.hasOwn(invocation, "result")) {
+    const evidence = await persistAuthorizationEvidence({ requestId: res.__skillpassRequestId, verified, requestBody, service, payment, settlement: invocation.settlement || null, invocationKey });
+    const headers = invocation.settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(invocation.settlement) } : {};
+    return sendJson(res, 200, invokeResponse({
+      res, service, verified, requestBody, delegationBudget: invocation.delegationUsage || null,
+      result: invocation.result, settlement: invocation.settlement || null, evidence, invocationKey, replayed: true,
+    }), headers);
+  }
+
+  invocation = await serviceState.advanceInvocation(invocationKey, {
+    expectedStates: ["AUTHORIZED"], state: "PAYMENT_VERIFIED",
+    patch: {
+      paymentHash: payment?.hash || null,
+      paymentAlreadySettled: Boolean(payment?.alreadySettled),
+      paymentVerifiedAt: Date.now(),
+    },
+  });
+
+  // Reserve bounded delegation quota before execution so concurrent requests
+  // cannot oversubscribe the grant, but do not permanently charge the grant
+  // until protected execution and optional payment settlement both succeed.
+  const delegationReservation = await reserveDelegationBudget(verified, requestBody, service, payment);
+  let delegationBudget = delegationReservation?.usage || invocation?.delegationUsage || null;
+  let result = invocation?.result;
+  let settlement = invocation?.settlement || null;
+  try {
+    if (!["EXECUTED", "PAYMENT_SETTLED", "DELIVERED"].includes(invocation.state)) {
+      invocation = await serviceState.advanceInvocation(invocationKey, {
+        expectedStates: ["PAYMENT_VERIFIED"], state: "EXECUTION_RESERVED",
+        patch: { executionReservedAt: Date.now() },
+      });
+      result = payment?.alreadySettled
+        ? payment.receipt.result
+        : await service.execute(requestBody.input, {
+            requestId: res.__skillpassRequestId,
+            capabilityId: verified.capability.capabilityId,
+            capabilityOutPoint: { txHash: String(requestBody.outPoint.txHash).toLowerCase(), index: String(requestBody.outPoint.index) },
+            ownerAddress: verified.ownerAddress,
+            ownerLockHash: verified.currentOwnerLockHash,
+            principalAddress: verified.principalAddress,
+            requestHash: requestInputHash(service, requestBody.input),
+            policyId: verified.policyId,
+            policyFingerprint: verified.policyFingerprint,
+            operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : "",
+            delegationId: verified.delegation?.grantId || "direct",
+            invocationKey,
+          });
+      invocation = await serviceState.advanceInvocation(invocationKey, {
+        expectedStates: ["EXECUTION_RESERVED"], state: "EXECUTED",
+        patch: { result, resultHash: createHash("sha256").update(canonicalJson(result)).digest("hex"), executedAt: Date.now() },
+      });
+    } else {
+      result = invocation.result;
+    }
+
+    if (!["PAYMENT_SETTLED", "DELIVERED"].includes(invocation.state)) {
+      settlement = await settlePayment(payment, result);
+      invocation = await serviceState.advanceInvocation(invocationKey, {
+        expectedStates: ["EXECUTED"], state: "PAYMENT_SETTLED",
+        patch: { settlement, paymentSettledAt: Date.now() },
+      });
+    } else {
+      settlement = invocation.settlement || settlement;
+    }
+
+    delegationBudget = await commitDelegationBudget(delegationReservation);
+    invocation = await serviceState.advanceInvocation(invocationKey, {
+      expectedStates: ["PAYMENT_SETTLED"], state: "DELIVERED",
+      patch: { result, settlement, delegationUsage: delegationBudget, deliveredAt: Date.now() },
+    });
+  } catch (error) {
+    // Failed execution/settlement must not permanently burn a delegated budget.
+    // The durable invocation keeps EXECUTED results, so retries settle/deliver
+    // without rerunning a real paid upstream action.
+    try { await releaseDelegationBudget(delegationReservation); } catch {}
+    throw error;
+  }
+
+  const evidence = await persistAuthorizationEvidence({ requestId: res.__skillpassRequestId, verified, requestBody, service, payment, settlement, invocationKey });
+  const headers = settlement ? { "PAYMENT-RESPONSE": encodeHeaderJson(settlement) } : {};
+  return sendJson(res, 200, invokeResponse({
+    res, service, verified, requestBody, delegationBudget, result, settlement, evidence, invocationKey,
+    replayed: Boolean(invocation?.updatedAt && durable.invocation?.state !== "AUTHORIZED"),
+  }), headers);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -1362,6 +1687,7 @@ const server = http.createServer(async (req, res) => {
         deployment: { codeHash: deployment.codeHash, hashType: deployment.hashType },
         outPoint: { txHash: String(outPoint.txHash).toLowerCase(), index: String(outPoint.index) },
         capability: {
+          version: inspected.capability.version,
           capabilityId: inspected.capability.capabilityId,
           serviceId: inspected.capability.serviceId,
           service: inspected.service.slug,
@@ -1377,6 +1703,11 @@ const server = http.createServer(async (req, res) => {
           entitlementIds: inspected.policy.entitlementIds,
           policyId: inspected.policyId,
           policyFingerprint: inspected.policyFingerprint,
+          subjectBinding: inspected.subjectBinding?.bound ? {
+            verified: true, subjectType: inspected.capability.subjectType, subjectId: inspected.capability.subjectId,
+            bindingMode: inspected.capability.bindingMode, resolver: inspected.subjectBinding.resolver,
+          } : { verified: false, required: inspected.policy.requireSubjectBinding },
+          finality: inspected.finality,
         },
       };
       const proofHash = createHash("sha256").update(canonicalJson(proof)).digest("hex");

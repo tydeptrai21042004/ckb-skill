@@ -1,3 +1,4 @@
+# LEGACY LOCAL DEMO ONLY. Production uses Dockerfile.live.
 FROM node:24.20.0-alpine3.24
 WORKDIR /app
 COPY apps/demo-service ./apps/demo-service
@@ -9,6 +10,7 @@ COPY packages/verifier ./packages/verifier
 COPY packages/x402-fiber ./packages/x402-fiber
 RUN chown -R node:node /app
 USER node
+ENV SKILLPASS_ENABLE_LEGACY_DEMO=true
 ENV HOST=0.0.0.0
 ENV PORT=8787
 EXPOSE 8787

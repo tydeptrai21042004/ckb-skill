@@ -1,0 +1,15 @@
+{
+  "name": "@skillpass/provider-verifier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@skillpass/service-rights": "1.0.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.mts",
+      "import": "./src/index.mjs"
+    }
+  }
+}

@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 function normalized(input) {
   const grantId = String(input?.grantId || "").trim().toLowerCase();
   const invocationKey = String(input?.invocationKey || "").trim().toLowerCase();
@@ -15,7 +17,10 @@ function normalized(input) {
   const spendAtomic = atomic(input.spendAtomic);
   const expiresAt = Number(input.expiresAt);
   if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) throw new Error("delegation expiresAt is invalid");
-  return { grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic, expiresAt };
+  const suppliedGrantFingerprint = String(input.grantFingerprint || "").trim().toLowerCase();
+  const grantFingerprint = suppliedGrantFingerprint || createHash("sha256").update(`legacy-delegation:${grantId}:${expiresAt}`).digest("hex");
+  if (!/^[0-9a-f]{64}$/.test(grantFingerprint)) throw new Error("delegation grantFingerprint must be a SHA-256 hex digest");
+  return { grantId, invocationKey, maxUses, maxSpendAtomic, spendAtomic, expiresAt, grantFingerprint };
 }
 
 function error(message, status, code) {
@@ -38,6 +43,7 @@ export class LocalDelegationUsageLedger {
     if (!row) {
       row = {
         expiresAt: v.expiresAt,
+        grantFingerprint: v.grantFingerprint,
         usedCalls: 0,
         usedSpendAtomic: 0n,
         reservedCalls: 0,
@@ -46,7 +52,7 @@ export class LocalDelegationUsageLedger {
       };
       this.#grants.set(v.grantId, row);
     }
-    if (row.expiresAt !== v.expiresAt) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+    if (row.expiresAt !== v.expiresAt || row.grantFingerprint !== v.grantFingerprint) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
     return row;
   }
 
@@ -123,7 +129,7 @@ export class LocalDelegationUsageLedger {
     const v = normalized(input);
     const row = this.#grants.get(v.grantId);
     if (!row) return null;
-    if (row.expiresAt !== v.expiresAt) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
+    if (row.expiresAt !== v.expiresAt || row.grantFingerprint !== v.grantFingerprint) throw error("delegation grantId collision detected", 403, "DELEGATION_GRANT_COLLISION");
     const invocation = row.invocations.get(v.invocationKey);
     if (!invocation) return this.#result(row, v, { replayed: false, status: "missing" });
     if (invocation.spendAtomic !== BigInt(v.spendAtomic)) throw error("delegation invocation key collision detected", 403, "DELEGATION_INVOCATION_COLLISION");

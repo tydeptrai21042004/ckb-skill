@@ -67,10 +67,11 @@
     "typecheck:vercel": "tsc -p apps/live-service/tsconfig.json && tsc -p apps/fiber-facilitator/tsconfig.json",
     "verify:workspaces": "node scripts/check-workspace-deps.mjs",
     "provider:admin": "node scripts/provider-admin.mjs",
-    "serve:demo": "node apps/demo-service/server.mjs",
+    "serve:demo": "node scripts/dev-cli.mjs demo",
     "pilot:up": "docker compose --env-file .env.testnet -f deploy/compose.multi-provider-pilot.yaml up --build",
     "pilot:down": "docker compose --env-file .env.testnet -f deploy/compose.multi-provider-pilot.yaml down --remove-orphans",
-    "pilot:check": "node scripts/pilot-check.mjs"
+    "pilot:check": "node scripts/pilot-check.mjs",
+    "verify:dependency-lock": "node scripts/dependency-lock.mjs --check"
   },
   "workspaces": [
     "apps/*",

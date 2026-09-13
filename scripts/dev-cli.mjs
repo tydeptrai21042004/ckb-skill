@@ -116,7 +116,7 @@ const command = process.argv[2] || "help";
 try {
   switch (command) {
     case "setup": await setup(); break;
-    case "demo": await run("node", ["apps/demo-service/server.mjs"]); break;
+    case "demo": await run("node", ["apps/demo-service/server.mjs"], { env: { SKILLPASS_ENABLE_LEGACY_DEMO: "true" } }); break;
     case "web": await run("node", ["scripts/dev-product.mjs"]); break;
     case "facilitator": await run("node", ["apps/fiber-facilitator/server.mjs"]); break;
     case "live": await run("node", ["apps/live-service/server.mjs"]); break;

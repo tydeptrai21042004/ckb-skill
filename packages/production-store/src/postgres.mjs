@@ -98,6 +98,16 @@ const MIGRATIONS = [
         ON skillpass_delegation_invocations (status, updated_at);
     `,
   },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE skillpass_delegation_usage
+        ADD COLUMN IF NOT EXISTS grant_fingerprint TEXT NULL;
+      CREATE INDEX IF NOT EXISTS skillpass_delegation_usage_fingerprint_idx
+        ON skillpass_delegation_usage (grant_fingerprint)
+        WHERE grant_fingerprint IS NOT NULL;
+    `,
+  },
 ];
 
 export function createPostgresPool(env = process.env) {

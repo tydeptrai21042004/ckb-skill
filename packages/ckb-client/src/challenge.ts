@@ -1,19 +1,13 @@
 import { ccc } from "@ckb-ccc/ccc";
+import { formatAuthorizationIntent, type AuthorizationIntentInput } from "@skillpass/auth-protocol";
 
-/** Build the exact message the browser signs. */
-export function formatChallengeMessage(input: {
-  nonce: string;
-  address: string;
-  service: string;
-  expiresAt: number;
-}) {
-  return [
-    "SkillPass capability access",
-    `service=${input.service}`,
-    `address=${input.address}`,
-    `nonce=${input.nonce}`,
-    `expires_at=${input.expiresAt}`,
-  ].join("\n");
+/**
+ * Build the exact SkillPass authorization-intent message the browser signs.
+ * This delegates to @skillpass/auth-protocol so browser SDKs and servers cannot
+ * silently drift onto different field sets.
+ */
+export function formatChallengeMessage(input: AuthorizationIntentInput) {
+  return formatAuthorizationIntent(input);
 }
 
 /** Browser/client side: wallet remains the only key custodian. */

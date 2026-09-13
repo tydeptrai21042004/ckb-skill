@@ -45,6 +45,7 @@ const AUTH_TOKEN = readSecret("FACILITATOR_AUTH_TOKEN");
 const FIBER_RPC_TOKEN = readSecret("FIBER_RPC_TOKEN");
 const IS_VERCEL = Boolean(process.env.VERCEL);
 const IS_PUBLIC_PRODUCTION = IS_VERCEL || process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true";
+const PAYMENTS_REQUIRED_FOR_DEPLOYMENT = process.env.PAYMENTS_REQUIRED === "true";
 const MAX_BODY_BYTES = Number(process.env.FACILITATOR_MAX_REQUEST_BODY_BYTES || 32 * 1024);
 const FIBER_RPC_TIMEOUT_MS = Number(process.env.FIBER_RPC_TIMEOUT_MS || 8_000);
 
@@ -57,6 +58,7 @@ if (!["invoice-status", "preimage"].includes(PROOF_MODE)) throw new Error("FIBER
 if (MODE === "fnn" && !AUTH_TOKEN) throw new Error("FACILITATOR_AUTH_TOKEN is required when FIBER_BACKEND=fnn");
 if (IS_PUBLIC_PRODUCTION && AUTH_TOKEN.length < 32) throw new Error("FACILITATOR_AUTH_TOKEN must be at least 32 characters in public production");
 if (IS_PUBLIC_PRODUCTION && ALLOW_DEV_PAYMENT) throw new Error("ALLOW_DEV_PAYMENT=true is forbidden in public production");
+if (IS_PUBLIC_PRODUCTION && PAYMENTS_REQUIRED_FOR_DEPLOYMENT && MODE !== "fnn") throw new Error("FIBER_BACKEND=fnn is required when public production payments are enabled");
 if (IS_PUBLIC_PRODUCTION && STATE_BACKEND === "local") throw new Error("STATE_BACKEND=local is forbidden in public production; use postgres");
 
 if (MODE === "fnn") {

@@ -2,6 +2,8 @@ FROM node:24.20.0-alpine3.24 AS web
 WORKDIR /repo
 COPY package.json ./package.json
 COPY packages/capability-codec ./packages/capability-codec
+COPY packages/auth-protocol ./packages/auth-protocol
+COPY packages/provider-verifier ./packages/provider-verifier
 COPY packages/service-rights ./packages/service-rights
 COPY packages/service-gateway ./packages/service-gateway
 COPY packages/delegation ./packages/delegation
@@ -14,6 +16,8 @@ FROM node:24.20.0-alpine3.24 AS runtime
 WORKDIR /app
 COPY package.json ./package.json
 COPY packages/capability-codec ./packages/capability-codec
+COPY packages/auth-protocol ./packages/auth-protocol
+COPY packages/provider-verifier ./packages/provider-verifier
 COPY packages/service-rights ./packages/service-rights
 COPY packages/service-gateway ./packages/service-gateway
 COPY packages/delegation ./packages/delegation

@@ -30,6 +30,13 @@ import {
   makePaymentRequired,
 } from "../../packages/x402-fiber/src/index.mjs";
 
+if (process.env.SKILLPASS_ENABLE_LEGACY_DEMO !== "true") {
+  throw new Error("Legacy Paper Analyzer compatibility demo is isolated. Start it only via `npm run dev:demo`.");
+}
+if (process.env.NODE_ENV === "production" || process.env.SKILLPASS_PUBLIC_PRODUCTION === "true") {
+  throw new Error("Legacy Paper Analyzer compatibility demo is disabled in production.");
+}
+
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787);
 const SERVICE_ID = PAPER_ANALYZER_V1_SERVICE_ID;

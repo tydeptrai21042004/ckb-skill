@@ -8,11 +8,14 @@
   },
   "dependencies": {
     "@ckb-ccc/ccc": "1.2.7",
+    "@skillpass/auth-protocol": "1.0.0",
     "@skillpass/capability-codec": "0.7.0",
-    "@skillpass/x402-fiber": "0.7.0",
+    "@skillpass/delegation": "1.2.0",
     "@skillpass/production-store": "1.0.0",
+    "@skillpass/provider-verifier": "1.0.0",
     "@skillpass/service-gateway": "1.2.0",
-    "@skillpass/delegation": "1.2.0"
+    "@skillpass/service-rights": "1.0.0",
+    "@skillpass/x402-fiber": "0.7.0"
   },
   "scripts": {
     "start": "node server.mjs"
