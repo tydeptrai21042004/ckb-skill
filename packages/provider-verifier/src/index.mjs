@@ -19,6 +19,12 @@ export function publicKeyFromPrivateKey(privateKeyPem) {
   return createPublicKey(createPrivateKey(String(privateKeyPem || ""))).export({ type: "spki", format: "pem" }).toString();
 }
 
+/** Stable SHA-256 fingerprint for an Ed25519/SPKI public key. */
+export function publicKeyFingerprint(publicKeyPem) {
+  const der = createPublicKey(String(publicKeyPem || "")).export({ type: "spki", format: "der" });
+  return `sha256:${digestHex(der)}`;
+}
+
 /** Reusable provider-side verifier. Chain and subject resolution stay provider-owned. */
 export async function verifyProviderAuthorization({
   capability,
@@ -61,6 +67,10 @@ export function signProviderManifest({ manifest, privateKeyPem, keyId = "provide
   return Object.freeze({ ...unsigned, manifestHash: envelope.manifestHash, signature: Object.freeze({ ...envelope, value: signature, publicKeyPem }) });
 }
 
+/**
+ * Signature/tamper verification. For trust decisions, prefer
+ * verifyTrustedProviderManifest() so the key is pinned independently.
+ */
 export function verifyProviderManifest({ signedManifest, publicKeyPem, now = Date.now() } = {}) {
   const signature = signedManifest?.signature;
   if (!signature || signature.algorithm !== "Ed25519" || !signature.value) return false;
@@ -71,7 +81,27 @@ export function verifyProviderManifest({ signedManifest, publicKeyPem, now = Dat
   if (expectedHash !== signature.manifestHash || expectedHash !== signedManifest.manifestHash) return false;
   if (signature.expiresAt && Number.isFinite(Date.parse(signature.expiresAt)) && now >= Date.parse(signature.expiresAt)) return false;
   const envelope = { version: signature.version, keyId: signature.keyId, algorithm: signature.algorithm, manifestHash: signature.manifestHash, issuedAt: signature.issuedAt, expiresAt: signature.expiresAt || "" };
-  return verify(null, Buffer.from(signingMaterial("SkillPass Provider Manifest v1", envelope)), createPublicKey(publicKeyPem || signature.publicKeyPem), fromB64url(signature.value));
+  try {
+    return verify(null, Buffer.from(signingMaterial("SkillPass Provider Manifest v1", envelope)), createPublicKey(publicKeyPem || signature.publicKeyPem), fromB64url(signature.value));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify a provider manifest against an independently trusted key or key
+ * fingerprint. This closes the self-signed trust-bootstrap gap: the manifest
+ * may publish a key for convenience, but it cannot choose the key that the
+ * verifier trusts.
+ */
+export function verifyTrustedProviderManifest({ signedManifest, trustedPublicKeyPem = "", trustedFingerprint = "", now = Date.now() } = {}) {
+  const embedded = String(signedManifest?.signature?.publicKeyPem || "");
+  const key = String(trustedPublicKeyPem || embedded);
+  if (!key) return false;
+  if (!trustedPublicKeyPem && !trustedFingerprint) return false;
+  if (trustedFingerprint && publicKeyFingerprint(key) !== String(trustedFingerprint).toLowerCase()) return false;
+  if (trustedPublicKeyPem && embedded && publicKeyFingerprint(embedded) !== publicKeyFingerprint(trustedPublicKeyPem)) return false;
+  return verifyProviderManifest({ signedManifest, publicKeyPem: key, now });
 }
 
 export function createGatewayAssertion({ claims, privateKeyPem, keyId = "gateway-default", ttlSeconds = 30, now = Date.now() } = {}) {
@@ -92,4 +122,49 @@ export function verifyGatewayAssertion({ token, publicKeyPem, now = Date.now() }
   if (payload.version !== 1 || !Number.isSafeInteger(payload.expiresAt) || now >= payload.expiresAt) throw Object.assign(new Error("gateway assertion is expired"), { code: "EXPIRED_GATEWAY_ASSERTION" });
   if (!Number.isSafeInteger(payload.issuedAt) || payload.issuedAt > now + 60_000) throw Object.assign(new Error("gateway assertion issuedAt is invalid"), { code: "INVALID_GATEWAY_ASSERTION" });
   return Object.freeze(payload);
+}
+
+/**
+ * Safe-by-default gateway helper. Remote providers should bind the signed
+ * assertion to the concrete provider, service and request body they are about
+ * to execute instead of verifying only the Ed25519 signature.
+ */
+export function verifyGatewayRequest({
+  token,
+  publicKeyPem,
+  expectedProviderId,
+  expectedServiceId,
+  expectedRequestHash,
+  expectedInvocationKey,
+  expectedCapabilityId,
+  expectedPolicyFingerprint,
+  expectedOperationId,
+  now = Date.now(),
+} = {}) {
+  for (const [name, value] of [
+    ["expectedProviderId", expectedProviderId],
+    ["expectedServiceId", expectedServiceId],
+    ["expectedRequestHash", expectedRequestHash],
+  ]) {
+    if (typeof value !== "string" || !value) throw new Error(`${name} is required`);
+  }
+  const payload = verifyGatewayAssertion({ token, publicKeyPem, now });
+  const expected = {
+    providerId: expectedProviderId,
+    serviceId: expectedServiceId,
+    requestHash: expectedRequestHash,
+    ...(expectedInvocationKey !== undefined ? { invocationKey: expectedInvocationKey } : {}),
+    ...(expectedCapabilityId !== undefined ? { capabilityId: expectedCapabilityId } : {}),
+    ...(expectedPolicyFingerprint !== undefined ? { policyFingerprint: expectedPolicyFingerprint } : {}),
+    ...(expectedOperationId !== undefined ? { operationId: expectedOperationId } : {}),
+  };
+  for (const [claim, value] of Object.entries(expected)) {
+    if (canonical(payload[claim]) !== canonical(value)) {
+      throw Object.assign(new Error(`gateway assertion ${claim} does not match the request`), {
+        code: "GATEWAY_ASSERTION_CLAIM_MISMATCH",
+        claim,
+      });
+    }
+  }
+  return payload;
 }

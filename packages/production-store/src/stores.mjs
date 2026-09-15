@@ -81,6 +81,34 @@ export class PostgresRecordStore {
     return { updated: result.rowCount === 1, record: await this.get(normalized) };
   }
 
+  /**
+   * Atomic compare-and-set for exact JSON scalar fields. PostgreSQL's jsonb
+   * containment operator lets the execution-lease protocol match both the
+   * state and the previous lease token/expiry in one UPDATE, preventing two
+   * replicas from reclaiming the same stale lease.
+   */
+  async compareAndSetFields(key, expected = {}, value = {}) {
+    const normalized = String(key);
+    if (!expected || typeof expected !== "object" || Array.isArray(expected) || !Object.keys(expected).length) {
+      throw new Error("expected fields must be a non-empty object");
+    }
+    const body = { ...value };
+    delete body.key;
+    delete body.updatedAt;
+    const expiresAt = Number.isFinite(Number(body.expiresAt)) ? Number(body.expiresAt) : null;
+    const result = await this.pool.query(
+      `UPDATE skillpass_service_records
+          SET value = $4::jsonb,
+              expires_at = CASE WHEN $5::bigint IS NULL THEN NULL ELSE to_timestamp($5::double precision / 1000.0) END,
+              updated_at = clock_timestamp()
+        WHERE namespace = $1 AND record_key = $2
+          AND value @> $3::jsonb
+        RETURNING record_key`,
+      [this.namespace, normalized, JSON.stringify(expected), JSON.stringify(body), expiresAt],
+    );
+    return { updated: result.rowCount === 1, record: await this.get(normalized) };
+  }
+
   async delete(key) {
     const result = await this.pool.query(
       "DELETE FROM skillpass_service_records WHERE namespace = $1 AND record_key = $2",

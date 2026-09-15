@@ -74,6 +74,26 @@ export class JsonRecordStore {
     return { updated: true, record };
   }
 
+  /**
+   * Atomic compare-and-set on a small set of scalar record fields. This is used
+   * by the execution-lease protocol so a stale lease can be reclaimed by one
+   * worker only. The check and in-memory mutation are synchronous after load,
+   * therefore single-process local development cannot produce two winners.
+   */
+  async compareAndSetFields(key, expected = {}, value = {}) {
+    await this.#load();
+    const normalized = String(key);
+    const current = this.#entries.get(normalized);
+    if (!current) return { updated: false, record: null };
+    for (const [field, expectedValue] of Object.entries(expected || {})) {
+      if (current[field] !== expectedValue) return { updated: false, record: current };
+    }
+    const record = { key: normalized, updatedAt: this.now(), ...value };
+    this.#entries.set(normalized, record);
+    await this.#persist();
+    return { updated: true, record };
+  }
+
   async delete(key) {
     await this.#load();
     const removed = this.#entries.delete(String(key));

@@ -121,6 +121,8 @@ const PAYMENT_CURRENCY = String(process.env.PAYMENT_CURRENCY || "Fibt");
 const PAYMENT_TIMEOUT_SECONDS = Number(process.env.PAYMENT_TIMEOUT_SECONDS || 600);
 const PAYMENT_PRUNE_INTERVAL_MS = Number(process.env.PAYMENT_PRUNE_INTERVAL_MS || 30_000);
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS || 30_000);
+const EXECUTION_LEASE_MS = Number(process.env.EXECUTION_LEASE_MS || 30_000);
+const EXECUTION_FOLLOWER_WAIT_MS = Number(process.env.EXECUTION_FOLLOWER_WAIT_MS || Math.min(10_000, REQUEST_TIMEOUT_MS - 2_000));
 const FIBER_NETWORK_NAME = process.env.FIBER_NETWORK || "testnet";
 const FIBER_NETWORK = FIBER_NETWORK_NAME === "mainnet" ? FIBER_MAINNET : FIBER_TESTNET;
 const FACILITATOR_URL = process.env.FACILITATOR_URL || "http://127.0.0.1:8790";
@@ -187,6 +189,12 @@ if (!Number.isSafeInteger(PAYMENT_PRUNE_INTERVAL_MS) || PAYMENT_PRUNE_INTERVAL_M
 }
 if (!Number.isSafeInteger(REQUEST_TIMEOUT_MS) || REQUEST_TIMEOUT_MS < 10_000 || REQUEST_TIMEOUT_MS > 60_000) {
   throw new Error("REQUEST_TIMEOUT_MS must be 10000..60000");
+}
+if (!Number.isSafeInteger(EXECUTION_LEASE_MS) || EXECUTION_LEASE_MS < Math.max(5_000, UPSTREAM_TIMEOUT_MS * 2) || EXECUTION_LEASE_MS > 5 * 60_000) {
+  throw new Error(`EXECUTION_LEASE_MS must be ${Math.max(5_000, UPSTREAM_TIMEOUT_MS * 2)}..300000`);
+}
+if (!Number.isSafeInteger(EXECUTION_FOLLOWER_WAIT_MS) || EXECUTION_FOLLOWER_WAIT_MS < 100 || EXECUTION_FOLLOWER_WAIT_MS >= REQUEST_TIMEOUT_MS) {
+  throw new Error("EXECUTION_FOLLOWER_WAIT_MS must be 100..REQUEST_TIMEOUT_MS-1");
 }
 if (FIBER_NETWORK_NAME !== "testnet") throw new Error("This CKB-testnet service requires FIBER_NETWORK=testnet");
 if (!PAYMENT_ASSET.trim()) throw new Error("PAYMENT_ASSET must not be empty");
@@ -1334,6 +1342,30 @@ function authorizationEvidenceExpiry() {
   return Date.now() + AUTHORIZATION_EVIDENCE_TTL_SECONDS * 1000;
 }
 
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
+/**
+ * Return either the execution lease owned by this request or a durable result
+ * produced by another request. Losing concurrent retries never call the
+ * protected service. If the winner crashes, the exact token+expiry CAS in the
+ * state layer allows one later request to reclaim the expired lease.
+ */
+async function acquireExecutionForRequest(invocationKey) {
+  const deadline = Date.now() + EXECUTION_FOLLOWER_WAIT_MS;
+  while (true) {
+    const lease = await serviceState.acquireExecutionLease(invocationKey, { leaseMs: EXECUTION_LEASE_MS });
+    if (lease.acquired) return lease;
+    if (["EXECUTED", "PAYMENT_SETTLED", "DELIVERED"].includes(lease.record?.state)) return lease;
+    if (Date.now() >= deadline) {
+      const retryAfterSeconds = Math.max(1, Math.ceil(Math.max(0, Number(lease.record?.executionLeaseExpiresAt || Date.now()) - Date.now()) / 1000));
+      throw Object.assign(new Error("protected invocation is already executing"), {
+        status: 409, code: "INVOCATION_IN_PROGRESS", retryAfterSeconds,
+      });
+    }
+    await sleep(Math.min(100, Math.max(20, deadline - Date.now())));
+  }
+}
+
 async function beginDurableInvocation({ verified, requestBody, service, payment = null }) {
   const invocationKey = service.operationMode === "idempotent-action"
     ? actionInvocationKey(requestBody, service)
@@ -1500,30 +1532,35 @@ async function handleInvokeRequest(req, res, service, rawBody) {
   let settlement = invocation?.settlement || null;
   try {
     if (!["EXECUTED", "PAYMENT_SETTLED", "DELIVERED"].includes(invocation.state)) {
-      invocation = await serviceState.advanceInvocation(invocationKey, {
-        expectedStates: ["PAYMENT_VERIFIED"], state: "EXECUTION_RESERVED",
-        patch: { executionReservedAt: Date.now() },
-      });
-      result = payment?.alreadySettled
-        ? payment.receipt.result
-        : await service.execute(requestBody.input, {
-            requestId: res.__skillpassRequestId,
-            capabilityId: verified.capability.capabilityId,
-            capabilityOutPoint: { txHash: String(requestBody.outPoint.txHash).toLowerCase(), index: String(requestBody.outPoint.index) },
-            ownerAddress: verified.ownerAddress,
-            ownerLockHash: verified.currentOwnerLockHash,
-            principalAddress: verified.principalAddress,
-            requestHash: requestInputHash(service, requestBody.input),
-            policyId: verified.policyId,
-            policyFingerprint: verified.policyFingerprint,
-            operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : "",
-            delegationId: verified.delegation?.grantId || "direct",
-            invocationKey,
-          });
-      invocation = await serviceState.advanceInvocation(invocationKey, {
-        expectedStates: ["EXECUTION_RESERVED"], state: "EXECUTED",
-        patch: { result, resultHash: createHash("sha256").update(canonicalJson(result)).digest("hex"), executedAt: Date.now() },
-      });
+      const executionLease = await acquireExecutionForRequest(invocationKey);
+      invocation = executionLease.record;
+      if (executionLease.acquired) {
+        result = payment?.alreadySettled
+          ? payment.receipt.result
+          : await service.execute(requestBody.input, {
+              requestId: res.__skillpassRequestId,
+              capabilityId: verified.capability.capabilityId,
+              capabilityOutPoint: { txHash: String(requestBody.outPoint.txHash).toLowerCase(), index: String(requestBody.outPoint.index) },
+              ownerAddress: verified.ownerAddress,
+              ownerLockHash: verified.currentOwnerLockHash,
+              principalAddress: verified.principalAddress,
+              requestHash: requestInputHash(service, requestBody.input),
+              policyId: verified.policyId,
+              policyFingerprint: verified.policyFingerprint,
+              operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : "",
+              delegationId: verified.delegation?.grantId || "direct",
+              invocationKey,
+            });
+        invocation = await serviceState.completeExecutionLease(invocationKey, executionLease.token, {
+          result,
+          resultHash: createHash("sha256").update(canonicalJson(result)).digest("hex"),
+          executedAt: Date.now(),
+        });
+      } else {
+        // Another request completed the protected action while this request was
+        // waiting. Reuse the persisted result and never re-run the side effect.
+        result = invocation.result;
+      }
     } else {
       result = invocation.result;
     }
@@ -1802,7 +1839,7 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     const status = error?.status || (error?.name === "FacilitatorHttpError" ? 503 : 400);
     const extraHeaders = error?.paymentRequired ? { "PAYMENT-REQUIRED": encodeHeaderJson(error.paymentRequired) } : {};
-    if (status === 429) extraHeaders["retry-after"] = String(error?.retryAfterSeconds || 60);
+    if (status === 429 || (status === 409 && error?.retryAfterSeconds)) extraHeaders["retry-after"] = String(error?.retryAfterSeconds || 60);
     const message = status >= 500 ? "service temporarily unavailable" : publicErrorMessage(error);
     return sendJson(res, status, { error: error?.code || "bad_request", message }, extraHeaders);
   }

@@ -1,5 +1,12 @@
 # SkillPass v1.6 — Portable Service Ownership on CKB
 
+## Project direction
+
+**SkillPass is reusable CKB infrastructure for portable provider-issued service rights.** The live Capability Cell is the ownership source of truth; independent providers verify the current owner without a shared entitlement database; Fiber/x402 remains an optional per-use settlement layer. The web app is a reference implementation, not the protocol boundary.
+
+The pre-funding roadmap is intentionally narrow: execution reliability -> reproducible release -> provider SDK/trust hardening -> two independent providers -> repeated Alice-to-Bob Testnet validation -> external tester evidence. See [`docs/GRANT_READINESS_PLAN.md`](docs/GRANT_READINESS_PLAN.md).
+
+
 SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or optionally delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
 
 The strongest SkillPass use case is **a service right that should move with its owner or be recognized by independent providers without synchronizing entitlement databases**. The owner may be a person, team, application, device, digital asset, or automated client. It is not positioned as a generic replacement for OAuth, API keys, x402, or ordinary SaaS subscriptions. Fiber/x402 remains an optional usage-payment layer; it never replaces entitlement authorization.
@@ -16,12 +23,13 @@ The strongest SkillPass use case is **a service right that should move with its 
 
 > **Product/market validation:** read [`docs/MARKET_VALIDATION_PLAYBOOK.md`](docs/MARKET_VALIDATION_PLAYBOOK.md), [`docs/MULTI_PROVIDER_PILOT.md`](docs/MULTI_PROVIDER_PILOT.md), and [`docs/PROVIDER_POLICY_MODES.md`](docs/PROVIDER_POLICY_MODES.md). These documents define the target customer, the strongest cross-provider demo, explicit kill/pivot criteria, and the owned-right vs revocable-license policy model.
 
-> **Funding/product foundation:** see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
+> **Funding/product foundation:** start with [`docs/GRANT_READINESS_PLAN.md`](docs/GRANT_READINESS_PLAN.md) and [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md), then see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
 
 
 ## What v1.6 includes
 
-- **Three-provider ownership pilot** — Model API, Private Data API, and Compute API can run as separate provider processes with different provider identities and no shared entitlement database; `npm run pilot:check` verifies their manifests and can compare live CKB ownership evidence.
+- **Three-provider ownership pilot** — Model API, Private Data API, and Compute API run as separate provider processes with different provider identities/manifest keys and no shared entitlement database; `npm run pilot:keys` creates independent pilot identities and `npm run pilot:check` verifies each signed manifest against a pinned fingerprint before comparing live CKB ownership evidence.
+- **Single-winner protected execution** — durable invocations use an atomic execution lease with a unique executor token; concurrent retries cannot infer ownership merely from `EXECUTION_RESERVED`, and stale leases are reclaimed by exactly one worker.
 - **Real reference service behavior** — the built-in trio now performs deterministic model-style embedding, protected dataset queries, and vector compute instead of placeholder analysis copy.
 - **Failure-safe delegation budgets** — bounded delegation uses reserve → execute/settle → commit, with release on failure and stale-reservation recovery so upstream failures do not permanently burn quota.
 - **Explicit idempotent actions** — state-changing/compute upstreams must declare `operationMode=idempotent-action` and `idempotencyMode=invocation-key`; a caller-stable `operationId` is signed into the wallet intent and reused as the upstream idempotency boundary, while arbitrary write modes remain rejected.

@@ -46,7 +46,7 @@ async function post(path, body, headers = {}) {
 
 before(async () => {
   child = spawn(process.execPath, ["apps/demo-service/server.mjs"], {
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port) },
+    env: { ...process.env, SKILLPASS_ENABLE_LEGACY_DEMO: "true", HOST: "127.0.0.1", PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => { logs += chunk.toString(); });

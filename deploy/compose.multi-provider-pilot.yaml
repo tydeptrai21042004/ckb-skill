@@ -41,6 +41,11 @@ services:
       SKILLPASS_ENABLED_SERVICES: model-api-v1
       SKILLPASS_PRIMARY_SERVICE: model-api-v1
       PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_MODEL_PORT:-8811}
+      SKILLPASS_REQUIRE_SIGNED_MANIFEST: "true"
+      SKILLPASS_PROVIDER_MANIFEST_KEY_ID: provider-model-a-2026-09
+      SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY_FILE: /run/secrets/provider_manifest_private_key
+    volumes:
+      - ../.runtime/pilot/provider-model-a.pem:/run/secrets/provider_manifest_private_key:ro
     ports:
       - "127.0.0.1:${SKILLPASS_PILOT_MODEL_PORT:-8811}:8787"
 
@@ -53,6 +58,11 @@ services:
       SKILLPASS_ENABLED_SERVICES: private-data-api-v1
       SKILLPASS_PRIMARY_SERVICE: private-data-api-v1
       PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_DATA_PORT:-8812}
+      SKILLPASS_REQUIRE_SIGNED_MANIFEST: "true"
+      SKILLPASS_PROVIDER_MANIFEST_KEY_ID: provider-data-b-2026-09
+      SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY_FILE: /run/secrets/provider_manifest_private_key
+    volumes:
+      - ../.runtime/pilot/provider-data-b.pem:/run/secrets/provider_manifest_private_key:ro
     ports:
       - "127.0.0.1:${SKILLPASS_PILOT_DATA_PORT:-8812}:8787"
 
@@ -65,5 +75,10 @@ services:
       SKILLPASS_ENABLED_SERVICES: compute-api-v1
       SKILLPASS_PRIMARY_SERVICE: compute-api-v1
       PUBLIC_BASE_URL: http://127.0.0.1:${SKILLPASS_PILOT_COMPUTE_PORT:-8813}
+      SKILLPASS_REQUIRE_SIGNED_MANIFEST: "true"
+      SKILLPASS_PROVIDER_MANIFEST_KEY_ID: provider-compute-c-2026-09
+      SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY_FILE: /run/secrets/provider_manifest_private_key
+    volumes:
+      - ../.runtime/pilot/provider-compute-c.pem:/run/secrets/provider_manifest_private_key:ro
     ports:
       - "127.0.0.1:${SKILLPASS_PILOT_COMPUTE_PORT:-8813}:8787"

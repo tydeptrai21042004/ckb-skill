@@ -22,12 +22,41 @@ const decision = await verifyProviderAuthorization({
 });
 ```
 
-A provider remains responsible for checking that the resolved live Cell belongs to the expected SkillPass Type Script deployment before passing it to this helper. This keeps chain/RPC trust and provider policy local to that provider.
+A provider remains responsible for checking that the resolved live Cell belongs to the accepted SkillPass Type Script deployment before passing it to this helper. This keeps chain/RPC trust and provider policy local to that provider.
 
-## Signed provider manifest
+## Signed provider manifest and trust pinning
 
-`signProviderManifest()` and `verifyProviderManifest()` use Ed25519. Public production deployments require a provider-manifest signing key. The manifest also publishes the public key used to verify short-lived gateway assertions when configured.
+`signProviderManifest()` signs a manifest with Ed25519. `verifyProviderManifest()` verifies signature/tamper integrity. For a real trust decision use `verifyTrustedProviderManifest()` with a public key or SHA-256 SPKI fingerprint obtained independently of the manifest:
+
+```js
+import {
+  publicKeyFingerprint,
+  verifyTrustedProviderManifest,
+} from "@skillpass/provider-verifier";
+
+const ok = verifyTrustedProviderManifest({
+  signedManifest,
+  trustedFingerprint: "sha256:...",
+});
+```
+
+The manifest may publish its public key for transport convenience, but a self-published key is not a trust anchor.
 
 ## Gateway authorization
 
-`createGatewayAssertion()` produces a short-lived Ed25519 assertion bound to provider/service, capability, owner, request hash, policy, operation/delegation and invocation identifiers. A remote provider should call `verifyGatewayAssertion()` and then compare every claim to the HTTP request it is about to execute.
+`createGatewayAssertion()` produces a short-lived Ed25519 assertion bound to provider/service, capability, owner, request hash, policy, operation/delegation and invocation identifiers.
+
+Remote providers should prefer `verifyGatewayRequest()` so signature verification and claim binding happen together:
+
+```js
+const authorization = verifyGatewayRequest({
+  token: req.headers["x-skillpass-authorization"],
+  publicKeyPem: TRUSTED_GATEWAY_KEY,
+  expectedProviderId: "provider-a",
+  expectedServiceId: SERVICE_ID,
+  expectedRequestHash: hashRequest(body),
+  expectedInvocationKey: req.headers["x-skillpass-invocation-key"],
+});
+```
+
+For side-effecting services, the provider should also persist/deduplicate `invocationKey`. SkillPass's gateway has its own single-winner execution lease, while upstream idempotency protects crash/retry boundaries outside the gateway process.

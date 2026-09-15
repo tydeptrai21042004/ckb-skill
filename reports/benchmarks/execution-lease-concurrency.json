@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-09-15T03:42:19.171Z",
+  "concurrentRequests": 100,
+  "executionLeaseWinners": 1,
+  "protectedSideEffects": 1,
+  "duplicateExecutions": 0,
+  "elapsedMs": 3,
+  "pass": true,
+  "environment": {
+    "node": "v22.16.0",
+    "platform": "linux"
+  },
+  "scope": "LiveServiceState execution-lease mechanism; not a live CKB/Fiber network load test"
+}

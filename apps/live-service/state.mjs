@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { JsonRecordStore } from "../../packages/x402-fiber/src/record-store.mjs";
 
 export const INVOCATION_STATES = Object.freeze([
@@ -149,6 +150,97 @@ export class LiveServiceState {
   }
 
   async getInvocation(invocationKey) { return this.store.get(this.invocationKey(invocationKey)); }
+
+  /**
+   * Acquire the single execution lease for a durable invocation.
+   *
+   * The important property is that the caller receives `acquired: true` only
+   * when its own atomic CAS wrote the lease token. A concurrent caller that
+   * merely observes EXECUTION_RESERVED receives `acquired: false` and must not
+   * call the protected upstream. Expired leases may be reclaimed using an
+   * exact token+expiry CAS, which is safe across PostgreSQL replicas.
+   */
+  async acquireExecutionLease(invocationKey, { leaseMs = 30_000, executorToken = "" } = {}) {
+    if (!Number.isSafeInteger(Number(leaseMs)) || Number(leaseMs) < 1_000 || Number(leaseMs) > 5 * 60_000) {
+      throw new Error("execution leaseMs must be 1000..300000");
+    }
+    if (typeof this.store.compareAndSetFields !== "function") {
+      throw new Error("record store does not support execution leases");
+    }
+    const key = this.invocationKey(invocationKey);
+    const token = String(executorToken || randomBytes(24).toString("hex"));
+    if (!/^[0-9a-f]{32,128}$/i.test(token)) throw new Error("executorToken must be a 16..64 byte hex token");
+
+    const now = this.now();
+    const current = await this.store.get(key);
+    if (!current) throw stateError("invocation record not found", "INVOCATION_NOT_FOUND");
+    const rank = INVOCATION_STATE_RANK[current.state];
+    if (rank == null) throw stateError(`unknown persisted invocation state: ${current.state}`);
+    if (rank >= INVOCATION_STATE_RANK.EXECUTED) return { acquired: false, token: "", record: current, reason: "already-executed" };
+
+    let expected;
+    if (current.state === "PAYMENT_VERIFIED") {
+      expected = { state: "PAYMENT_VERIFIED" };
+    } else if (current.state === "EXECUTION_RESERVED") {
+      const leaseExpiresAt = Number(current.executionLeaseExpiresAt || 0);
+      if (!leaseExpiresAt || !current.executionLeaseToken) {
+        throw stateError("legacy execution reservation has no reclaimable lease metadata", "EXECUTION_LEASE_METADATA_MISSING");
+      }
+      if (leaseExpiresAt > now) {
+        return { acquired: false, token: "", record: current, reason: "lease-held" };
+      }
+      expected = {
+        state: "EXECUTION_RESERVED",
+        executionLeaseToken: current.executionLeaseToken,
+        executionLeaseExpiresAt: current.executionLeaseExpiresAt,
+      };
+    } else {
+      throw stateError(`cannot acquire execution lease from ${current.state}`, "EXECUTION_LEASE_NOT_READY");
+    }
+
+    const next = {
+      ...current,
+      state: "EXECUTION_RESERVED",
+      executionLeaseToken: token,
+      executionLeaseAcquiredAt: now,
+      executionLeaseExpiresAt: now + Number(leaseMs),
+      executionLeaseGeneration: Number(current.executionLeaseGeneration || 0) + 1,
+    };
+    const result = await this.store.compareAndSetFields(key, expected, next);
+    if (result.updated) return { acquired: true, token, record: result.record, reason: expected.state === "PAYMENT_VERIFIED" ? "initial" : "reclaimed" };
+
+    const latest = result.record || await this.store.get(key);
+    if (!latest) throw stateError("invocation disappeared while acquiring execution lease", "INVOCATION_NOT_FOUND");
+    return { acquired: false, token: "", record: latest, reason: "lost-race" };
+  }
+
+  /** Finish execution only if the caller still owns the current lease. */
+  async completeExecutionLease(invocationKey, executorToken, { result, resultHash, executedAt = this.now(), patch = {} } = {}) {
+    if (typeof this.store.compareAndSetFields !== "function") throw new Error("record store does not support execution leases");
+    const key = this.invocationKey(invocationKey);
+    const token = String(executorToken || "");
+    if (!token) throw new Error("executorToken is required");
+    const current = await this.store.get(key);
+    if (!current) throw stateError("invocation record not found", "INVOCATION_NOT_FOUND");
+    if (INVOCATION_STATE_RANK[current.state] >= INVOCATION_STATE_RANK.EXECUTED) return current;
+    if (current.state !== "EXECUTION_RESERVED" || current.executionLeaseToken !== token) {
+      throw stateError("execution lease is no longer owned by this worker", "EXECUTION_LEASE_LOST");
+    }
+    const next = {
+      ...current,
+      ...patch,
+      state: "EXECUTED",
+      result,
+      resultHash,
+      executedAt,
+      executionLeaseCompletedAt: this.now(),
+    };
+    const cas = await this.store.compareAndSetFields(key, { state: "EXECUTION_RESERVED", executionLeaseToken: token }, next);
+    if (cas.updated) return cas.record;
+    const latest = cas.record || await this.store.get(key);
+    if (latest && INVOCATION_STATE_RANK[latest.state] >= INVOCATION_STATE_RANK.EXECUTED) return latest;
+    throw stateError("execution lease was lost before result persistence", "EXECUTION_LEASE_LOST");
+  }
 
   async advanceInvocation(invocationKey, { expectedStates, state, patch = {} } = {}) {
     if (!Object.hasOwn(INVOCATION_STATE_RANK, state)) throw new Error(`unknown invocation state: ${state}`);

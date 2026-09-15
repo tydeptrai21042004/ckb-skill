@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { verifyTrustedProviderManifest } from "@skillpass/provider-verifier";
+
 const providers = [
   { base: process.env.SKILLPASS_PILOT_MODEL_URL || "http://127.0.0.1:8811", id: "provider-model-a", service: "model-api-v1" },
   { base: process.env.SKILLPASS_PILOT_DATA_URL || "http://127.0.0.1:8812", id: "provider-data-b", service: "private-data-api-v1" },
@@ -29,6 +33,10 @@ async function readJson(url, init) {
 
 const { outpoint } = parseArgs(process.argv.slice(2));
 const parsedOutPoint = parseOutPoint(outpoint);
+const trustPath = resolve(process.cwd(), ".runtime/pilot/trust.json");
+let trust;
+try { trust = JSON.parse(readFileSync(trustPath, "utf8")); }
+catch { throw new Error(`pilot trust file is missing; run npm run pilot:keys first (${trustPath})`); }
 const manifests = [];
 for (const provider of providers) {
   const manifest = await readJson(`${provider.base}/api/provider-manifest`);
@@ -37,8 +45,13 @@ for (const provider of providers) {
   if (!Array.isArray(manifest.services) || manifest.services.length !== 1 || manifest.services[0].slug !== provider.service) {
     throw new Error(`${provider.base}: expected only ${provider.service}`);
   }
+  const trusted = trust.providers?.[provider.id];
+  if (!trusted?.fingerprint) throw new Error(`${provider.base}: no pinned manifest fingerprint for ${provider.id}`);
+  if (!verifyTrustedProviderManifest({ signedManifest: manifest, trustedFingerprint: trusted.fingerprint })) {
+    throw new Error(`${provider.base}: signed provider manifest failed pinned-key verification`);
+  }
   manifests.push(manifest);
-  console.log(`OK manifest ${manifest.provider.id}: ${provider.service} (${manifest.manifestHash})`);
+  console.log(`OK signed manifest ${manifest.provider.id}: ${provider.service} (${trusted.fingerprint})`);
 }
 if (new Set(manifests.map((item) => item.provider.id)).size !== providers.length) throw new Error("pilot providers are not independent identities");
 

@@ -16,6 +16,11 @@ test("gateway keeps bearer credentials server-side and permits only retry-safe s
   assert.match(source, /operationMode must be read or idempotent-action/);
   assert.match(source, /idempotencyMode must be invocation-key for idempotent-action upstreams/);
   assert.match(source, /idempotent-action upstream requires a bound invocation key/);
-  assert.match(source, /redirect: "error"/);
+  // Native http/https.request never follows redirects automatically. Verify
+  // that the gateway uses the native clients and treats every non-2xx (3xx
+  // included) as an upstream rejection instead of testing the removed fetch API.
+  assert.match(source, /request as httpRequest/);
+  assert.match(source, /request as httpsRequest/);
+  assert.match(source, /response\.statusCode < 200 \|\| response\.statusCode >= 300/);
   assert.doesNotMatch(source, /publicList\(\).*bearer/s);
 });

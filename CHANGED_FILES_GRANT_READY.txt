@@ -1,0 +1,44 @@
+Grant-readiness revision compared against ckb-skill-main (2)(1).zip
+
+Core execution correctness
+- apps/live-service/state.mjs
+- apps/live-service/server.mjs
+- packages/x402-fiber/src/record-store.mjs
+- packages/production-store/src/stores.mjs
+- tests/execution-lease.test.mjs
+- scripts/evidence-concurrency.mjs
+- reports/benchmarks/execution-lease-concurrency.json
+
+Provider trust / independent-provider pilot
+- packages/provider-verifier/src/index.mjs
+- packages/provider-verifier/src/index.d.mts
+- packages/provider-verifier/README.md
+- deploy/compose.multi-provider-pilot.yaml
+- scripts/pilot-keygen.mjs
+- scripts/pilot-check.mjs
+- tests/provider-trust.test.mjs
+- docs/PROVIDER_INTEGRATION.md
+- docs/specs/provider-manifest-v1.md
+- docs/specs/gateway-authorization-v1.md
+
+Release / reproducibility / grant direction
+- .env.example
+- .env.testnet.example
+- .env.live.example
+- .env.production.example
+- .env.vercel.example
+- .gitignore
+- .dockerignore
+- .github/workflows/security-readiness.yml
+- docs/GRANT_READINESS_PLAN.md
+- docs/FINAL_REQUIREMENTS_CHECKLIST.md
+- docs/NPM_LOCKFILE.md
+- tests/grant-readiness.test.mjs
+- TEST_RESULTS_GRANT_READY.md
+- README.md
+- package.json
+- dependency-versions.lock.json
+
+Test maintenance
+- apps/live-service/services.test.mjs
+- tests/security-xss.test.mjs
