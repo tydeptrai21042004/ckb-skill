@@ -1234,7 +1234,7 @@ export default function App() {
                               </div>
                               <div className="proof-actions">
                                 <button className="button ghost small" onClick={() => void copyText(JSON.stringify(evidenceBundle, null, 2), "Authorization evidence")}>Copy proof</button>
-                                <button className="button ghost small" onClick={() => downloadJson(evidenceBundle, `skillpass-evidence-${lastReceipt.authorization.requestId || "request"}.json`)}>Export JSON</button>
+                                <button className="button ghost small" onClick={() => downloadJson(evidenceBundle, `skillpass-evidence-${lastReceipt.authorization?.requestId || "request"}.json`)}>Export JSON</button>
                               </div>
                             </div>
                           )}
