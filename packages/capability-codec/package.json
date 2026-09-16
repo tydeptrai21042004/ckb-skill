@@ -1,7 +1,7 @@
 {
   "name": "@skillpass/capability-codec",
   "version": "0.7.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "exports": {
     ".": {
@@ -16,5 +16,12 @@
       "types": "./src/node-ids.d.mts",
       "import": "./src/node-ids.mjs"
     }
-  }
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ]
 }

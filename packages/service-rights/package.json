@@ -1,12 +1,19 @@
 {
   "name": "@skillpass/service-rights",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "dependencies": {
     "@skillpass/capability-codec": "0.7.0"
   },
   "exports": {
     ".": "./src/index.mjs"
-  }
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src"
+  ]
 }

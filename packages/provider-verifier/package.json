@@ -1,9 +1,10 @@
 {
   "name": "@skillpass/provider-verifier",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "type": "module",
   "dependencies": {
+    "@skillpass/capability-codec": "0.7.0",
     "@skillpass/service-rights": "1.0.0"
   },
   "exports": {
@@ -11,5 +12,13 @@
       "types": "./src/index.d.mts",
       "import": "./src/index.mjs"
     }
-  }
+  },
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ]
 }

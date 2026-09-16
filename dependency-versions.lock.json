@@ -59,8 +59,8 @@
     },
     "package.json": {
       "name": "ckb-skillpass",
-      "version": "1.6.0",
-      "sha256": "473404678a9d30b74caf78e7199d782d372555564ec506b5fd5e04aeca090d91",
+      "version": "1.7.0",
+      "sha256": "4e47eaeca4a63a752d22f00c9a9dabb90fc5f7cab9b51b1c7efe4f491b23a52d",
       "devDependencies": {
         "@types/node": "24.13.3",
         "typescript": "5.9.2"
@@ -79,7 +79,7 @@
     "packages/capability-codec/package.json": {
       "name": "@skillpass/capability-codec",
       "version": "0.7.0",
-      "sha256": "58b10bb4eac321003d3c36efdfe89f14e7437c97e9db6afab087e51a3402f29e"
+      "sha256": "9e93247e4125dafd209ee93586b1428b7e4ab5bd406863ee9f76c0d886993d38"
     },
     "packages/ckb-client/package.json": {
       "name": "@skillpass/ckb-client",
@@ -113,8 +113,9 @@
     "packages/provider-verifier/package.json": {
       "name": "@skillpass/provider-verifier",
       "version": "1.0.0",
-      "sha256": "1746323f2124f55dc58d7c3078cf45a43ef1baff1e749f7af777513f0d892970",
+      "sha256": "b215b17015a9a8d809409064cc763ce5bb2e96e73deedd19327cbede75a9e6b0",
       "dependencies": {
+        "@skillpass/capability-codec": "0.7.0",
         "@skillpass/service-rights": "1.0.0"
       }
     },
@@ -126,7 +127,7 @@
     "packages/service-rights/package.json": {
       "name": "@skillpass/service-rights",
       "version": "1.0.0",
-      "sha256": "3603397a3021b381d19d2edfb623e1729394d8ea5d203b860c44beb2664119b2",
+      "sha256": "8e9c53668604e20941dea8a11b3efc97deeaace34da14e0131719690b1fa7abb",
       "dependencies": {
         "@skillpass/capability-codec": "0.7.0"
       }

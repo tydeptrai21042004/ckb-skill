@@ -1,3 +1,11 @@
+## v1.7.0 — Funding Candidate — 2026-09-16
+
+- Restored release-critical hidden config/CI assets and added archive completeness checks.
+- Added Apache-2.0 licensing and Node/Rust toolchain pins.
+- Hardened provider manifest timestamps, gateway assertion envelope claims, external-provider deployment/identity verification, and live confirmation defaults.
+- Made the provider-verifier dependency chain publishable and added a funding-candidate verification command.
+- Updated current verification/documentation to v1.7.
+
 ## v1.6.0 — Portable service ownership hardening
 
 - Made the current Model/Data/Compute Service Bundle the default development product; legacy research demo is opt-in only.

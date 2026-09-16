@@ -1,10 +1,12 @@
-# SkillPass v1.6 — Portable Service Ownership on CKB
+# SkillPass v1.7 — Portable Service Ownership on CKB
 
 ## Project direction
 
 **SkillPass is reusable CKB infrastructure for portable provider-issued service rights.** The live Capability Cell is the ownership source of truth; independent providers verify the current owner without a shared entitlement database; Fiber/x402 remains an optional per-use settlement layer. The web app is a reference implementation, not the protocol boundary.
 
 The pre-funding roadmap is intentionally narrow: execution reliability -> reproducible release -> provider SDK/trust hardening -> two independent providers -> repeated Alice-to-Bob Testnet validation -> external tester evidence. See [`docs/GRANT_READINESS_PLAN.md`](docs/GRANT_READINESS_PLAN.md).
+
+**Funding-candidate verification:** after installing dependencies with Node 24.20.0, run `npm run verify:funding-candidate`; for the on-chain Type Script also run `npm run verify:contract` (or `npm run verify:contract:docker`). Public/testnet profiles now default to at least one Capability confirmation.
 
 
 SkillPass is a **multi-user CKB testnet entitlement gateway**. A provider issues a Capability as a CKB Cell and protected services authorize against the current live Cell state instead of trusting only a provider-owned entitlement row. Rights can be portable or non-transferable, owner-only or optionally delegatable, and either strongly owned or explicitly provider-revocable according to each service policy.
@@ -26,7 +28,7 @@ The strongest SkillPass use case is **a service right that should move with its 
 > **Funding/product foundation:** start with [`docs/GRANT_READINESS_PLAN.md`](docs/GRANT_READINESS_PLAN.md) and [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md), then see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
 
 
-## What v1.6 includes
+## What v1.7 includes
 
 - **Three-provider ownership pilot** — Model API, Private Data API, and Compute API run as separate provider processes with different provider identities/manifest keys and no shared entitlement database; `npm run pilot:keys` creates independent pilot identities and `npm run pilot:check` verifies each signed manifest against a pinned fingerprint before comparing live CKB ownership evidence.
 - **Single-winner protected execution** — durable invocations use an atomic execution lease with a unique executor token; concurrent retries cannot infer ownership merely from `EXECUTION_RESERVED`, and stale leases are reclaimed by exactly one worker.

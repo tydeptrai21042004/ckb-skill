@@ -1,13 +1,33 @@
 import { spawnSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 
-const name = process.argv[2] || "skillpass-v1.0.0-production";
+const name = process.argv[2] || "skillpass-v1.7.0-funding-candidate";
 const out = `${name}.zip`;
 rmSync(out, { force: true });
 
-// Keep checked-in configuration *templates* in release archives. The previous
-// broad `*.env*`-style exclusion accidentally removed .env.*.example files and
-// made a clean ZIP impossible to deploy. Only private/local config is excluded.
+const requiredReleaseFiles = [
+  ".env.example",
+  ".env.testnet" + ".example",
+  ".env.live.example",
+  ".env.production.example",
+  ".env.vercel.example",
+  ".gitignore",
+  ".dockerignore",
+  ".github/workflows/security-readiness.yml",
+  "LICENSE",
+  "package.json",
+  "dependency-versions.lock.json",
+  "contracts/capability-type/Cargo.toml",
+  "docs/PROVIDER_INTEGRATION.md",
+];
+const missing = requiredReleaseFiles.filter((file) => !existsSync(file));
+if (missing.length) {
+  console.error(`Refusing to build an incomplete release. Missing: ${missing.join(", ")}`);
+  process.exit(1);
+}
+
+// Keep checked-in configuration templates in release archives. Only private/local
+// configuration, secrets, generated state and build products are excluded.
 const excludePatterns = [
   ".git/*", "*/.git/*",
   ".vercel/*", "*/.vercel/*",
@@ -15,6 +35,8 @@ const excludePatterns = [
   ".env.testnet", "./.env.testnet",
   ".env.live", "./.env.live",
   ".env.production", "./.env.production",
+  ".env.vercel.gui", "./.env.vercel.gui",
+  ".env.vercel.generated", "./.env.vercel.generated",
   ".secrets/*", "*/.secrets/*",
   ".runtime/*", "*/.runtime/*",
   "deployments/testnet.json", "deployments/devnet.json",
@@ -34,4 +56,15 @@ if (result.status !== 0) {
   console.error("zip command is required for npm run release on this platform");
   process.exit(result.status ?? 1);
 }
-console.log(`Created ${out}`);
+
+const listing = spawnSync("unzip", ["-Z1", out], { encoding: "utf8" });
+if (listing.status === 0) {
+  const members = new Set(String(listing.stdout || "").split(/\r?\n/).filter(Boolean).map((x) => x.replace(/^\.\//, "")));
+  const omitted = requiredReleaseFiles.filter((file) => !members.has(file));
+  if (omitted.length) {
+    rmSync(out, { force: true });
+    console.error(`Release verification failed; archive omitted: ${omitted.join(", ")}`);
+    process.exit(1);
+  }
+}
+console.log(`Created and checked ${out}`);

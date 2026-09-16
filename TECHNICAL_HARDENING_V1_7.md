@@ -31,8 +31,8 @@ Configure `SKILLPASS_SUBJECT_RESOLVERS_JSON` as an object keyed by numeric subje
 
 ## Finality
 
-`SKILLPASS_MIN_CAPABILITY_CONFIRMATIONS` defaults to `0`. Raising it makes protected authorization fail closed if CKB inclusion metadata is unavailable or below the threshold. Decisions and capability-status proofs include chain-tip/finality evidence when available.
+`SKILLPASS_MIN_CAPABILITY_CONFIRMATIONS` defaults to `1` for live/public authorization. Providers may choose a higher threshold. When the threshold is non-zero, authorization fails closed if CKB inclusion metadata is unavailable or below the threshold. Decisions and capability-status proofs include chain-tip/finality evidence when available.
 
 ## Dependency reproducibility
 
-All declared external dependencies remain exact-version pinned and `dependency-versions.lock.json` is verified by `npm run verify:dependency-lock`. A registry-resolved npm `package-lock.json` still needs to be generated in an environment with npm registry access before a high-risk production launch so transitive versions are fully frozen.
+All declared external dependencies remain exact-version pinned and `dependency-versions.lock.json` is verified by `npm run verify:dependency-lock`. A registry-resolved npm `package-lock.json` still needs to be generated and committed from a networked Node 24.20.0 environment before high-risk production use so transitive versions are fully frozen. This source bundle cannot fabricate integrity hashes without registry access.

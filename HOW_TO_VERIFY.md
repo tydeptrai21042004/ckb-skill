@@ -1,6 +1,25 @@
-# HOW TO VERIFY — SkillPass v0.6
+# HOW TO VERIFY — SkillPass v1.7 funding candidate
 
 All verification can start from the extracted local project folder. None of these steps require connecting this project to GitHub.
+
+## A0. Funding-candidate gate
+
+Use Node **24.20.0** and install the workspace dependencies first:
+
+```bash
+npm install --ignore-scripts --no-audit --no-fund
+npm run verify:funding-candidate
+```
+
+Then run the CKB Type Script gate separately:
+
+```bash
+npm run verify:contract
+# or: npm run verify:contract:docker
+```
+
+A registry-resolved `package-lock.json` should be generated/committed in a networked environment before production release; do not hand-author one.
+
 
 ## A. Fast dependency-free verification
 
@@ -13,7 +32,7 @@ npm run benchmark
 npm run verify:deploy
 ```
 
-Expected Node result for this bundle: **50 tests, 50 passed**.
+Expected Node result: **all discovered tests pass with zero failures**. The exact count may increase as security and provider-integration regressions are added.
 
 The paid smoke proves:
 

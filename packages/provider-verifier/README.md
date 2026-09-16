@@ -1,20 +1,36 @@
 # @skillpass/provider-verifier
 
-Provider-side verification primitives for SkillPass. This package is deliberately usable without a shared SkillPass ownership database: the provider supplies its own CKB live-cell resolver and, for Capability v2, its own subject resolver.
+Provider-side verification primitives for SkillPass. The package does not require a shared SkillPass ownership database: each provider keeps its own CKB RPC, accepted Capability deployment, issuer trust, service policy, signing keys, and optional subject resolver.
 
-## Independent authorization
+## Recommended: safe live authorization
+
+Use `verifySkillPassAuthorization()` for external-provider integrations. It validates the accepted Capability Type Script deployment, decodes the live Cell data itself, checks Type args against issuer/capability identity, enforces the provider's confirmation threshold, and only then evaluates policy/current ownership.
 
 ```js
-import { verifyProviderAuthorization } from "@skillpass/provider-verifier";
+import { verifySkillPassAuthorization } from "@skillpass/provider-verifier";
 
-const decision = await verifyProviderAuthorization({
+const decision = await verifySkillPassAuthorization({
   capability,
   policy,
   requesterLockHash,
+  deployment: {
+    codeHash: process.env.CAPABILITY_CODE_HASH,
+    hashType: process.env.CAPABILITY_HASH_TYPE,
+  },
+  minConfirmations: 1,
   resolveLiveCell: async () => {
     const cell = await ckb.getCellLive(capabilityOutPoint, true, true);
-    if (!cell) throw new Error("capability is not live");
-    return { ...cell, lockHash: cell.cellOutput.lock.hash() };
+    if (!cell) return null;
+
+    // confirmations must be computed from the provider's own trusted CKB view.
+    const tip = await ckb.getTip();
+    const includedAt = BigInt(cell.blockNumber);
+    const confirmations = Number(BigInt(tip) - includedAt + 1n);
+    return {
+      ...cell,
+      lockHash: cell.cellOutput.lock.hash(),
+      confirmations,
+    };
   },
   resolveSubject: async (capability) => subjectResolver.resolve(capability),
   paymentRequired: true,
@@ -22,11 +38,13 @@ const decision = await verifyProviderAuthorization({
 });
 ```
 
-A provider remains responsible for checking that the resolved live Cell belongs to the accepted SkillPass Type Script deployment before passing it to this helper. This keeps chain/RPC trust and provider policy local to that provider.
+A consumed/transferred old outpoint fails before authorization. A valid payment never substitutes for ownership.
+
+`verifyProviderAuthorization()` remains available as a low-level compatibility primitive. It assumes the caller already verified the deployment, Capability identity, and finality; new external integrations should prefer `verifySkillPassAuthorization()`.
 
 ## Signed provider manifest and trust pinning
 
-`signProviderManifest()` signs a manifest with Ed25519. `verifyProviderManifest()` verifies signature/tamper integrity. For a real trust decision use `verifyTrustedProviderManifest()` with a public key or SHA-256 SPKI fingerprint obtained independently of the manifest:
+`signProviderManifest()` produces an Ed25519 manifest envelope with a strict UTC `issuedAt`, a required expiry (24 hours by default), and a maximum seven-day lifetime. `verifyProviderManifest()` verifies integrity and timestamp validity. For a trust decision use `verifyTrustedProviderManifest()` with a key/fingerprint obtained independently of the manifest:
 
 ```js
 import {
@@ -40,13 +58,13 @@ const ok = verifyTrustedProviderManifest({
 });
 ```
 
-The manifest may publish its public key for transport convenience, but a self-published key is not a trust anchor.
+The embedded public key is transport convenience, not a trust anchor.
 
 ## Gateway authorization
 
-`createGatewayAssertion()` produces a short-lived Ed25519 assertion bound to provider/service, capability, owner, request hash, policy, operation/delegation and invocation identifiers.
+`createGatewayAssertion()` produces a short-lived Ed25519 assertion. Envelope fields (`version`, `keyId`, `issuedAt`, `expiresAt`, `nonce`) are reserved and cannot be supplied through untrusted claims.
 
-Remote providers should prefer `verifyGatewayRequest()` so signature verification and claim binding happen together:
+Remote providers should prefer `verifyGatewayRequest()` so signature verification and concrete request binding happen together:
 
 ```js
 const authorization = verifyGatewayRequest({
@@ -56,7 +74,9 @@ const authorization = verifyGatewayRequest({
   expectedServiceId: SERVICE_ID,
   expectedRequestHash: hashRequest(body),
   expectedInvocationKey: req.headers["x-skillpass-invocation-key"],
+  expectedCapabilityId: capabilityId,
+  expectedPolicyFingerprint: policyFingerprint,
 });
 ```
 
-For side-effecting services, the provider should also persist/deduplicate `invocationKey`. SkillPass's gateway has its own single-winner execution lease, while upstream idempotency protects crash/retry boundaries outside the gateway process.
+For side-effecting services, persist/deduplicate `invocationKey`. SkillPass's gateway has its own single-winner execution lease, while upstream idempotency protects crash/retry boundaries outside the gateway process.

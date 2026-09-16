@@ -1,6 +1,6 @@
 {
   "name": "ckb-skillpass",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -74,7 +74,8 @@
     "verify:dependency-lock": "node scripts/dependency-lock.mjs --check",
     "pilot:keys": "node scripts/pilot-keygen.mjs",
     "evidence:concurrency": "node scripts/evidence-concurrency.mjs",
-    "verify:grant-ready": "node --test tests/execution-lease.test.mjs tests/provider-trust.test.mjs tests/grant-readiness.test.mjs && npm run verify:dependency-lock && npm run verify:workspaces && npm run verify:deploy"
+    "verify:grant-ready": "node --test tests/execution-lease.test.mjs tests/provider-trust.test.mjs tests/grant-readiness.test.mjs && npm run verify:dependency-lock && npm run verify:workspaces && npm run verify:deploy",
+    "verify:funding-candidate": "node --test && npm run verify:dependency-lock && npm run security:preflight && npm run verify:workspaces && npm run verify:deploy && npm run typecheck:vercel && npm run build:web"
   },
   "workspaces": [
     "apps/*",

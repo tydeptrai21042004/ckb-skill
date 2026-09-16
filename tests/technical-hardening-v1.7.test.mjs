@@ -66,7 +66,7 @@ test("idempotency key binds provider, policy, outpoint, operation and request", 
 
 test("provider verification and signed transport primitives are shipped", () => {
   const verifier = read("packages/provider-verifier/src/index.mjs");
-  for (const symbol of ["verifyProviderAuthorization", "signProviderManifest", "verifyProviderManifest", "createGatewayAssertion", "verifyGatewayAssertion"]) {
+  for (const symbol of ["verifyResolvedCapabilityCell", "verifySkillPassAuthorization", "verifyProviderAuthorization", "signProviderManifest", "verifyProviderManifest", "createGatewayAssertion", "verifyGatewayAssertion"]) {
     assert.match(verifier, new RegExp(`export (?:async )?function ${symbol}`));
   }
   const services = read("apps/live-service/services.mjs");
