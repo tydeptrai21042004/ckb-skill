@@ -644,3 +644,17 @@ ccc-connector {
   .demo-receipt-grid { grid-template-columns: 1fr 1fr; }
   .onboarding-grid.four-items { grid-template-columns: 1fr; }
 }
+
+/* v1.8 funding-candidate: evidence + provider portability surfaces */
+.receipt-actions,.proof-actions{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center}
+.evidence-export-card,.provider-acceptance-card,.expiry-warning{margin-top:1rem;border:1px solid var(--border,rgba(20,25,35,.12));border-radius:14px;padding:1rem;background:rgba(255,255,255,.55)}
+.evidence-export-card{display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.evidence-export-card>div:first-child{display:grid;gap:.25rem}.evidence-export-card small{max-width:62ch;opacity:.72}
+.provider-acceptance-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.75rem}.provider-acceptance-heading>div{display:grid;gap:.15rem}
+.provider-acceptance-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:.65rem}.provider-acceptance-grid>div{display:grid;gap:.25rem;padding:.8rem;border-radius:12px;background:rgba(0,0,0,.025)}
+.provider-acceptance-grid code{font-size:.72rem;opacity:.7;overflow:hidden;text-overflow:ellipsis}.provider-ok{display:flex;align-items:center;gap:.3rem;font-size:.72rem;font-weight:700}
+.expiry-warning{display:flex;gap:.65rem;align-items:flex-start;background:rgba(255,180,0,.08)}.expiry-warning strong{white-space:nowrap}.expiry-warning span{font-size:.9rem;opacity:.82}
+@media (max-width:700px){.evidence-export-card,.provider-acceptance-heading,.expiry-warning{align-items:flex-start;flex-direction:column}}
+.chain-action-receipt{max-width:1180px;margin:0 auto 1rem;padding:1rem 1.1rem;border:1px solid rgba(44,130,90,.22);border-radius:14px;background:rgba(44,130,90,.06);display:flex;align-items:center;justify-content:space-between;gap:1rem}
+.chain-action-receipt>div:first-child{display:grid;gap:.2rem}.chain-action-receipt small{opacity:.72;word-break:break-word}
+@media (max-width:700px){.chain-action-receipt{align-items:flex-start;flex-direction:column}}

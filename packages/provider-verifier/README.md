@@ -80,3 +80,36 @@ const authorization = verifyGatewayRequest({
 ```
 
 For side-effecting services, persist/deduplicate `invocationKey`. SkillPass's gateway has its own single-winner execution lease, while upstream idempotency protects crash/retry boundaries outside the gateway process.
+
+
+## Portable authorization evidence
+
+Providers can sign a stable authorization evidence record and let reviewers verify it outside the gateway:
+
+```js
+import {
+  signAuthorizationEvidence,
+  verifyAuthorizationEvidence,
+  publicKeyFingerprint,
+} from "@skillpass/provider-verifier";
+
+const signed = signAuthorizationEvidence({
+  evidence,
+  privateKeyPem: PROVIDER_EVIDENCE_PRIVATE_KEY,
+  keyId: "provider-a-evidence-v1",
+});
+
+const valid = verifyAuthorizationEvidence({
+  evidence: signed,
+  trustedFingerprint: publicKeyFingerprint(TRUSTED_PROVIDER_PUBLIC_KEY),
+});
+```
+
+`hashAuthorizationEvidence()` deliberately excludes database storage metadata and the signature envelope, so a JSON evidence file remains verifiable after export. The SkillPass reference gateway returns an opaque per-evidence access token; only the SHA-256 token digest is persisted.
+
+For CLI verification of an exported proof:
+
+```bash
+npm run evidence:verify -- evidence.json
+npm run evidence:verify -- evidence.json --fingerprint sha256:...
+```

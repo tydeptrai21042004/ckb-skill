@@ -8,6 +8,9 @@ const CLOCK_SKEW_MS = 60_000;
 const GATEWAY_MAX_TTL_MS = 300_000;
 const RESERVED_GATEWAY_CLAIMS = new Set(["version", "keyId", "issuedAt", "expiresAt", "nonce"]);
 
+const EVIDENCE_ATTESTATION_MAX_AGE_MS = 365 * 24 * 60 * 60 * 1000;
+const EVIDENCE_STORAGE_FIELDS = new Set(["key", "updatedAt", "attestation", "evidenceHash"]);
+
 function canonical(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -74,6 +77,75 @@ export function publicKeyFromPrivateKey(privateKeyPem) {
 export function publicKeyFingerprint(publicKeyPem) {
   const der = createPublicKey(String(publicKeyPem || "")).export({ type: "spki", format: "der" });
   return `sha256:${digestHex(der)}`;
+}
+
+function authorizationEvidencePayload(evidence) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) throw new Error("authorization evidence is required");
+  const payload = { ...evidence };
+  for (const field of EVIDENCE_STORAGE_FIELDS) delete payload[field];
+  return payload;
+}
+
+/** Stable SHA-256 digest for a persisted authorization evidence record. */
+export function hashAuthorizationEvidence(evidence) {
+  return digestHex(canonical(authorizationEvidencePayload(evidence)));
+}
+
+/**
+ * Sign one authorization evidence record so it can be exported and verified
+ * outside the SkillPass server. Storage metadata is deliberately excluded.
+ */
+export function signAuthorizationEvidence({ evidence, privateKeyPem, keyId = "provider-evidence", issuedAt = new Date().toISOString() } = {}) {
+  const normalizedKeyId = String(keyId || "").trim();
+  if (!normalizedKeyId) throw new Error("keyId is required");
+  const issuedMs = parseStrictIso(String(issuedAt));
+  if (issuedMs == null) throw new Error("issuedAt must be an ISO-8601 UTC timestamp");
+  const payload = authorizationEvidencePayload(evidence);
+  const evidenceHash = hashAuthorizationEvidence(payload);
+  const requestId = String(payload.requestId || "").trim();
+  if (!requestId) throw new Error("authorization evidence requestId is required");
+  const privateKey = createPrivateKey(String(privateKeyPem || ""));
+  const envelope = Object.freeze({
+    version: 1,
+    keyId: normalizedKeyId,
+    algorithm: "Ed25519",
+    requestId,
+    evidenceHash: `sha256:${evidenceHash}`,
+    issuedAt: String(issuedAt),
+  });
+  const value = sign(null, Buffer.from(signingMaterial("SkillPass Authorization Evidence v1", envelope)), privateKey).toString("base64url");
+  const publicKeyPem = createPublicKey(privateKey).export({ type: "spki", format: "pem" }).toString();
+  return Object.freeze({ ...payload, evidenceHash, attestation: Object.freeze({ ...envelope, value, publicKeyPem }) });
+}
+
+/** Verify both evidence integrity and its Ed25519 provider attestation. */
+export function verifyAuthorizationEvidence({ evidence, publicKeyPem = "", trustedFingerprint = "", now = Date.now() } = {}) {
+  if (!evidence || typeof evidence !== "object") return false;
+  const attestation = evidence.attestation;
+  if (!attestation || attestation.version !== 1 || attestation.algorithm !== "Ed25519" || !attestation.value) return false;
+  const issuedMs = parseStrictIso(String(attestation.issuedAt || ""));
+  if (issuedMs == null || issuedMs > now + CLOCK_SKEW_MS || now - issuedMs > EVIDENCE_ATTESTATION_MAX_AGE_MS) return false;
+  const computed = hashAuthorizationEvidence(evidence);
+  const storedHash = String(evidence.evidenceHash || "").replace(/^sha256:/i, "").toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(storedHash) || storedHash !== computed) return false;
+  if (String(attestation.evidenceHash || "").toLowerCase() !== `sha256:${computed}`) return false;
+  if (String(attestation.requestId || "") !== String(evidence.requestId || "")) return false;
+  const embedded = String(attestation.publicKeyPem || "");
+  const key = String(publicKeyPem || embedded);
+  if (!key) return false;
+  if (trustedFingerprint && publicKeyFingerprint(key) !== String(trustedFingerprint).toLowerCase()) return false;
+  if (publicKeyPem && embedded && publicKeyFingerprint(embedded) !== publicKeyFingerprint(publicKeyPem)) return false;
+  const envelope = {
+    version: 1, keyId: String(attestation.keyId || ""), algorithm: "Ed25519",
+    requestId: String(attestation.requestId || ""), evidenceHash: String(attestation.evidenceHash || ""),
+    issuedAt: String(attestation.issuedAt || ""),
+  };
+  if (!envelope.keyId) return false;
+  try {
+    return verify(null, Buffer.from(signingMaterial("SkillPass Authorization Evidence v1", envelope)), createPublicKey(key), fromB64url(attestation.value));
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 
-const name = process.argv[2] || "skillpass-v1.7.0-funding-candidate";
+const name = process.argv[2] || "skillpass-v1.8.0-funding-candidate";
 const out = `${name}.zip`;
 rmSync(out, { force: true });
 
@@ -19,6 +19,10 @@ const requiredReleaseFiles = [
   "dependency-versions.lock.json",
   "contracts/capability-type/Cargo.toml",
   "docs/PROVIDER_INTEGRATION.md",
+  "scripts/evidence-verify.mjs",
+  "scripts/provider-scaffold.mjs",
+  "RELEASE_NOTES_V1_8.md",
+  "docs/AUTHORIZATION_EVIDENCE.md",
 ];
 const missing = requiredReleaseFiles.filter((file) => !existsSync(file));
 if (missing.length) {

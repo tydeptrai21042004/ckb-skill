@@ -1,0 +1,40 @@
+SkillPass v1.8.0 changed-files patch
+Baseline: corrected SkillPass v1.7 patch state
+Generated: 2026-09-16
+
+Added: 5
+Modified: 20
+Deleted: 0
+
+[ADDED]
+RELEASE_NOTES_V1_8.md
+docs/AUTHORIZATION_EVIDENCE.md
+scripts/evidence-verify.mjs
+scripts/provider-scaffold.mjs
+tests/feature-expansion-v1.8.test.mjs
+
+[MODIFIED]
+.env.example
+.env.live.example
+.env.production.example
+.env.testnet.example
+.env.vercel.example
+CHANGELOG.md
+HOW_TO_VERIFY.md
+README.md
+apps/live-service/discovery.mjs
+apps/live-service/server.mjs
+apps/web/src/App.tsx
+apps/web/src/styles.css
+dependency-versions.lock.json
+docs/PROVIDER_INTEGRATION.md
+package.json
+packages/provider-verifier/README.md
+packages/provider-verifier/src/index.d.mts
+packages/provider-verifier/src/index.mjs
+packages/provider-verifier/test/provider-verifier.test.mjs
+scripts/release.mjs
+
+[DELETED]
+
+Deletion note: files listed under [DELETED] are not physically represented in this ZIP; remove them manually if any are listed.

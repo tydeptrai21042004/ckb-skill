@@ -1,5 +1,5 @@
 import http from "node:http";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
@@ -32,7 +32,7 @@ import { buildAgentSpec, buildDiscovery, buildOpenApi } from "./discovery.mjs";
 import { buildServiceRegistry, postJsonPinned } from "./services.mjs";
 import { canonicalJson, validateServiceInput } from "@skillpass/service-gateway";
 import { formatAuthorizationIntent } from "@skillpass/auth-protocol";
-import { providerIdDigest, publicKeyFromPrivateKey, signProviderManifest } from "@skillpass/provider-verifier";
+import { hashAuthorizationEvidence, providerIdDigest, publicKeyFromPrivateKey, signAuthorizationEvidence, signProviderManifest } from "@skillpass/provider-verifier";
 import { assertDelegationScope, buildDelegationMessage } from "@skillpass/delegation";
 import {
   assertJsonRequest,
@@ -84,6 +84,9 @@ const AUTHORIZATION_EVIDENCE_TTL_SECONDS = Number(process.env.AUTHORIZATION_EVID
 const PROVIDER_MANIFEST_PRIVATE_KEY = readPemSecret("SKILLPASS_PROVIDER_MANIFEST_PRIVATE_KEY");
 const PROVIDER_MANIFEST_KEY_ID = String(process.env.SKILLPASS_PROVIDER_MANIFEST_KEY_ID || "provider-manifest-2026-09").trim();
 const GATEWAY_SIGNING_PRIVATE_KEY = readPemSecret("SKILLPASS_GATEWAY_SIGNING_PRIVATE_KEY") || PROVIDER_MANIFEST_PRIVATE_KEY;
+const EVIDENCE_SIGNING_PRIVATE_KEY = readPemSecret("SKILLPASS_EVIDENCE_SIGNING_PRIVATE_KEY") || PROVIDER_MANIFEST_PRIVATE_KEY;
+const EVIDENCE_SIGNING_KEY_ID = String(process.env.SKILLPASS_EVIDENCE_SIGNING_KEY_ID || process.env.SKILLPASS_PROVIDER_MANIFEST_KEY_ID || "provider-evidence-2026-09").trim();
+const EVIDENCE_SIGNING_PUBLIC_KEY = EVIDENCE_SIGNING_PRIVATE_KEY ? publicKeyFromPrivateKey(EVIDENCE_SIGNING_PRIVATE_KEY) : "";
 const GATEWAY_SIGNING_KEY_ID = String(process.env.SKILLPASS_GATEWAY_SIGNING_KEY_ID || PROVIDER_MANIFEST_KEY_ID || "gateway-2026-09").trim();
 const REQUIRE_SIGNED_PROVIDER_MANIFEST = process.env.SKILLPASS_REQUIRE_SIGNED_MANIFEST === "" || process.env.SKILLPASS_REQUIRE_SIGNED_MANIFEST == null
   ? IS_PUBLIC_PRODUCTION
@@ -104,9 +107,11 @@ const SERVICE_ID = PRIMARY_SERVICE.id; // backward-compatible primary service id
 const CHALLENGE_RATE_LIMIT = Number(process.env.CHALLENGE_RATE_LIMIT_PER_MINUTE || 12);
 const ANALYZE_RATE_LIMIT = Number(process.env.ANALYZE_RATE_LIMIT_PER_MINUTE || 8);
 const CAPABILITY_STATUS_RATE_LIMIT = Number(process.env.CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE || 24);
+const EVIDENCE_RATE_LIMIT = Number(process.env.EVIDENCE_RATE_LIMIT_PER_MINUTE || 60);
 const GLOBAL_CHALLENGE_RATE_LIMIT = Number(process.env.GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE || 240);
 const GLOBAL_ANALYZE_RATE_LIMIT = Number(process.env.GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE || 120);
 const GLOBAL_CAPABILITY_STATUS_RATE_LIMIT = Number(process.env.GLOBAL_CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE || 600);
+const GLOBAL_EVIDENCE_RATE_LIMIT = Number(process.env.GLOBAL_EVIDENCE_RATE_LIMIT_PER_MINUTE || 1200);
 const ENABLE_DEEP_HEALTH = process.env.ENABLE_DEEP_HEALTH === "true";
 const DEEP_HEALTH_TOKEN = readSecret("DEEP_HEALTH_TOKEN");
 const CHALLENGE_TTL_MS = Number(process.env.CHALLENGE_TTL_MS || 60_000);
@@ -144,9 +149,11 @@ for (const [name, value, max] of [
   ["CHALLENGE_RATE_LIMIT_PER_MINUTE", CHALLENGE_RATE_LIMIT, 120],
   ["ANALYZE_RATE_LIMIT_PER_MINUTE", ANALYZE_RATE_LIMIT, 60],
   ["CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE", CAPABILITY_STATUS_RATE_LIMIT, 240],
+  ["EVIDENCE_RATE_LIMIT_PER_MINUTE", EVIDENCE_RATE_LIMIT, 600],
   ["GLOBAL_CHALLENGE_RATE_LIMIT_PER_MINUTE", GLOBAL_CHALLENGE_RATE_LIMIT, 5000],
   ["GLOBAL_ANALYZE_RATE_LIMIT_PER_MINUTE", GLOBAL_ANALYZE_RATE_LIMIT, 2000],
   ["GLOBAL_CAPABILITY_STATUS_RATE_LIMIT_PER_MINUTE", GLOBAL_CAPABILITY_STATUS_RATE_LIMIT, 10_000],
+  ["GLOBAL_EVIDENCE_RATE_LIMIT_PER_MINUTE", GLOBAL_EVIDENCE_RATE_LIMIT, 20_000],
 ]) {
   if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`${name} must be 1..${max}`);
 }
@@ -453,6 +460,11 @@ function buildProviderManifest() {
       scheme: "Ed25519", header: "x-skillpass-authorization", keyId: GATEWAY_SIGNING_KEY_ID,
       publicKeyPem: publicKeyFromPrivateKey(GATEWAY_SIGNING_PRIVATE_KEY), maxTtlSeconds: 30,
     } : null,
+    authorizationEvidence: EVIDENCE_SIGNING_PRIVATE_KEY ? {
+      scheme: "Ed25519", keyId: EVIDENCE_SIGNING_KEY_ID,
+      publicKeyPem: EVIDENCE_SIGNING_PUBLIC_KEY,
+      retrieval: "/api/evidence/{requestId}?token=...", access: "opaque-token",
+    } : { scheme: "sha256", retrieval: "/api/evidence/{requestId}?token=...", access: "opaque-token" },
     services: services.map((service) => ({
       slug: service.slug, id: service.id, name: service.name, endpoint: service.endpoint,
       operationMode: service.operationMode, idempotencyMode: service.idempotencyMode || null,
@@ -771,6 +783,18 @@ async function inspectLiveCapability({ outPoint, service = null, skipRevocation 
     subjectBinding,
     finality,
     acceptedByServices: acceptingContexts.map((candidate) => candidate.service.slug),
+    acceptedBy: acceptingContexts.map((candidate) => ({
+      slug: candidate.service.slug,
+      id: candidate.service.id,
+      name: candidate.service.name,
+      providerId: candidate.service.providerId || null,
+      providerName: candidate.service.providerName || null,
+      policyId: candidate.policyId,
+      policyFingerprint: candidate.fingerprint,
+      rightMode: candidate.policy.rightMode,
+      delegationAllowed: candidate.policy.delegationAllowed,
+      payment: publicPaymentConfig(candidate.service),
+    })),
     checkedAt: new Date().toISOString(),
   };
 }
@@ -1404,6 +1428,7 @@ async function persistAuthorizationEvidence({ requestId, verified, requestBody, 
     decision: "allow",
     subject: verified.subjectBinding?.subject || null,
   });
+  const accessToken = randomBytes(24).toString("base64url");
   const record = {
     ...base,
     requestId,
@@ -1417,10 +1442,13 @@ async function persistAuthorizationEvidence({ requestId, verified, requestBody, 
     operationId: service.operationMode === "idempotent-action" ? normalizeOperationId(requestBody.operationId, { required: true }) : null,
     paymentSettlementHash: settlement ? createHash("sha256").update(canonicalJson(settlement)).digest("hex") : null,
     expiresAt: authorizationEvidenceExpiry(),
+    accessTokenHash: createHash("sha256").update(accessToken).digest("hex"),
   };
-  const evidenceHash = createHash("sha256").update(canonicalJson(record)).digest("hex");
-  const saved = await serviceState.setAuthorizationEvidence(requestId, { ...record, evidenceHash });
-  return { ...record, ...(saved || {}), evidenceHash };
+  const signed = EVIDENCE_SIGNING_PRIVATE_KEY
+    ? signAuthorizationEvidence({ evidence: record, privateKeyPem: EVIDENCE_SIGNING_PRIVATE_KEY, keyId: EVIDENCE_SIGNING_KEY_ID })
+    : { ...record, evidenceHash: hashAuthorizationEvidence(record), attestation: null };
+  await serviceState.setAuthorizationEvidence(requestId, signed);
+  return { ...signed, accessToken };
 }
 
 function invokeResponse({ res, service, verified, requestBody, delegationBudget, result, settlement, evidence, invocationKey, replayed = false }) {
@@ -1469,6 +1497,13 @@ function invokeResponse({ res, service, verified, requestBody, delegationBudget,
       paymentRequired: PAYMENTS_REQUIRED,
       paymentVerified: PAYMENTS_REQUIRED ? Boolean(settlement) : false,
       evidenceHash: evidence?.evidenceHash || null,
+      evidence: evidence ? {
+        requestId: res.__skillpassRequestId,
+        endpoint: `/api/evidence/${encodeURIComponent(res.__skillpassRequestId)}`,
+        token: evidence.accessToken || null,
+        signed: Boolean(evidence.attestation),
+        keyId: evidence.attestation?.keyId || null,
+      } : null,
     },
     result,
     payment: settlement,
@@ -1708,6 +1743,39 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, report.ok ? 200 : 503, report);
     }
 
+    if (req.method === "POST" && url.pathname === "/api/capability/status/batch") {
+      rejectCrossSiteBrowserRequest(req);
+      assertJsonRequest(req);
+      const body = await jsonBody(req);
+      const items = Array.isArray(body.outPoints) ? body.outPoints : [];
+      if (!items.length || items.length > 10) throw Object.assign(new Error("outPoints must contain 1..10 entries"), { status: 400, code: "INVALID_OUTPOINT_BATCH" });
+      await rateLimit(req, "capability-status-batch", Math.max(1, Math.floor(CAPABILITY_STATUS_RATE_LIMIT / 2)), Math.max(1, Math.floor(GLOBAL_CAPABILITY_STATUS_RATE_LIMIT / 2)));
+      const requestedService = body.service ? serviceContext(body.service).service : null;
+      const results = [];
+      for (const raw of items) {
+        try {
+          const outPoint = outPointFromJson(raw);
+          const inspected = await inspectLiveCapability({ outPoint, service: requestedService });
+          const proof = {
+            schemaVersion: "1.2", network: "ckb-testnet", source: "live-ckb-cell", checkedAt: inspected.checkedAt,
+            deployment: { codeHash: deployment.codeHash, hashType: deployment.hashType },
+            outPoint: { txHash: String(outPoint.txHash).toLowerCase(), index: String(outPoint.index) },
+            capability: {
+              version: inspected.capability.version, capabilityId: inspected.capability.capabilityId, serviceId: inspected.capability.serviceId, service: inspected.service.slug,
+              acceptedByServices: inspected.acceptedByServices, acceptedBy: inspected.acceptedBy, issuerId: inspected.capability.issuerId, expiry: inspected.capability.expiry.toString(),
+              currentOwnerLockHash: inspected.currentOwnerLockHash, transferable: hasFlag(inspected.capability, FLAG_TRANSFERABLE), delegatable: hasFlag(inspected.capability, FLAG_DELEGATABLE),
+              revocable: hasFlag(inspected.capability, FLAG_REVOCABLE), rightMode: inspected.policy.rightMode, bundleId: inspected.policy.bundleId || null,
+              entitlementIds: inspected.policy.entitlementIds, policyId: inspected.policyId, policyFingerprint: inspected.policyFingerprint, finality: inspected.finality,
+            },
+          };
+          results.push({ ok: true, ...proof, proofHash: createHash("sha256").update(canonicalJson(proof)).digest("hex") });
+        } catch (error) {
+          results.push({ ok: false, outPoint: raw, error: error?.code || "CAPABILITY_STATUS_FAILED", message: publicErrorMessage(error) });
+        }
+      }
+      return sendJson(res, 200, { ok: true, count: results.length, results });
+    }
+
     if (req.method === "POST" && url.pathname === "/api/capability/status") {
       rejectCrossSiteBrowserRequest(req);
       assertJsonRequest(req);
@@ -1717,7 +1785,7 @@ const server = http.createServer(async (req, res) => {
       const requestedService = body.service ? serviceContext(body.service).service : null;
       const inspected = await inspectLiveCapability({ outPoint, service: requestedService });
       const proof = {
-        schemaVersion: "1.1",
+        schemaVersion: "1.2",
         network: "ckb-testnet",
         source: "live-ckb-cell",
         checkedAt: inspected.checkedAt,
@@ -1729,6 +1797,7 @@ const server = http.createServer(async (req, res) => {
           serviceId: inspected.capability.serviceId,
           service: inspected.service.slug,
           acceptedByServices: inspected.acceptedByServices,
+          acceptedBy: inspected.acceptedBy,
           issuerId: inspected.capability.issuerId,
           expiry: inspected.capability.expiry.toString(),
           currentOwnerLockHash: inspected.currentOwnerLockHash,
@@ -1749,6 +1818,25 @@ const server = http.createServer(async (req, res) => {
       };
       const proofHash = createHash("sha256").update(canonicalJson(proof)).digest("hex");
       return sendJson(res, 200, { ok: true, ...proof, proofHash });
+    }
+
+    const evidenceMatch = req.method === "GET" ? url.pathname.match(/^\/api\/evidence\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i) : null;
+    if (evidenceMatch) {
+      await rateLimit(req, "evidence", EVIDENCE_RATE_LIMIT, GLOBAL_EVIDENCE_RATE_LIMIT);
+      const requestId = evidenceMatch[1].toLowerCase();
+      const token = String(url.searchParams.get("token") || "");
+      if (!/^[A-Za-z0-9_-]{24,128}$/.test(token)) {
+        throw Object.assign(new Error("evidence access token is required"), { status: 401, code: "EVIDENCE_TOKEN_REQUIRED" });
+      }
+      const stored = await serviceState.getAuthorizationEvidence(requestId);
+      if (!stored) throw Object.assign(new Error("authorization evidence was not found or has expired"), { status: 404, code: "EVIDENCE_NOT_FOUND" });
+      const actual = Buffer.from(createHash("sha256").update(token).digest("hex"), "hex");
+      const expected = /^[0-9a-f]{64}$/i.test(String(stored.accessTokenHash || "")) ? Buffer.from(stored.accessTokenHash, "hex") : Buffer.alloc(32);
+      if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+        throw Object.assign(new Error("authorization evidence token is invalid"), { status: 403, code: "INVALID_EVIDENCE_TOKEN" });
+      }
+      const { key: _key, updatedAt: _updatedAt, ...evidence } = stored;
+      return sendJson(res, 200, { ok: true, evidence });
     }
 
     if (req.method === "GET" && url.pathname === "/api/admin/revocations") {

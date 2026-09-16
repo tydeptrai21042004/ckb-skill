@@ -1,5 +1,25 @@
 # SkillPass Provider Integration
 
+## Fastest clean-room start
+
+Generate a provider-owned integration skeleton instead of copying code from the monorepo:
+
+```bash
+npm run provider:scaffold -- \
+  --provider-id provider-a \
+  --provider-name "Provider A" \
+  --service-slug model-api-v1 \
+  --service-name "Model API" \
+  --service-id 0x... \
+  --issuer-id 0x... \
+  --code-hash 0x... \
+  --hash-type data2 \
+  --min-confirmations 1 \
+  --out ./provider-a-skillpass
+```
+
+The generated folder contains a provider config, a safe `verifySkillPassAuthorization()` wrapper, `.env.example`, package metadata, and a concise integration README. The external provider still owns its own RPC/indexer, keys, policy, and protected service.
+
 SkillPass is designed so a provider can verify a portable service right without sharing SkillPass's ownership database. Each provider keeps its own policy, trusted issuer list, accepted Capability deployment, signing key, CKB RPC, and protected endpoint.
 
 ## Trust model

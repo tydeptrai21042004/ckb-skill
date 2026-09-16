@@ -1,6 +1,9 @@
 export declare function providerIdDigest(providerId: string): string;
 export declare function publicKeyFromPrivateKey(privateKeyPem: string): string;
 export declare function publicKeyFingerprint(publicKeyPem: string): string;
+export declare function hashAuthorizationEvidence(evidence: Record<string, unknown>): string;
+export declare function signAuthorizationEvidence(input: { evidence: Record<string, unknown>; privateKeyPem: string; keyId?: string; issuedAt?: string }): Readonly<Record<string, unknown>>;
+export declare function verifyAuthorizationEvidence(input: { evidence: Record<string, any>; publicKeyPem?: string; trustedFingerprint?: string; now?: number }): boolean;
 export declare function verifyResolvedCapabilityCell(input: {
   cell: Record<string, any>;
   capability?: Record<string, any>;

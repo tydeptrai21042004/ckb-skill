@@ -1,3 +1,12 @@
+## v1.8.0 — External Adoption & Evidence — 2026-09-16
+
+- Added provider-attested authorization evidence, token-protected retrieval, and offline verification.
+- Added batch Capability portfolio status and cross-provider acceptance metadata/UI.
+- Added exportable post-transfer lifecycle receipts and expiry-soon warnings.
+- Added a clean-room provider integration scaffold generator.
+- Extended discovery/OpenAPI and environment templates for evidence signing and retrieval.
+- Kept Capability wire format and on-chain semantics unchanged.
+
 ## v1.7.0 — Funding Candidate — 2026-09-16
 
 - Restored release-critical hidden config/CI assets and added archive completeness checks.

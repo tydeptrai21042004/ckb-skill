@@ -166,11 +166,25 @@ type AuthorizationReceipt = {
     entitlementVerified?: boolean;
     paymentRequired?: boolean;
     paymentVerified?: boolean;
+    evidenceHash?: string | null;
+    evidence?: { requestId: string; endpoint: string; token: string | null; signed: boolean; keyId?: string | null } | null;
   };
   payment?: Record<string, unknown> | null;
 };
 
 type Notice = { tone: "info" | "success" | "error"; message: string };
+
+type TransferReceipt = {
+  version: 1;
+  capabilityId: string;
+  fromOutPoint: { txHash: string; index: string };
+  toAddress: string;
+  txHash: string;
+  newOutPoint: { txHash: string; index: string };
+  confirmedAt: string;
+  postTransferProof?: CapabilityStatus;
+};
+
 
 type CapabilityStatus = {
   ok: boolean;
@@ -195,6 +209,7 @@ type CapabilityStatus = {
     bundleId?: string | null;
     entitlementIds?: string[];
     acceptedByServices?: string[];
+    acceptedBy?: Array<{ slug: string; id: string; name: string; providerId?: string | null; providerName?: string | null; policyId: string; policyFingerprint: string; rightMode?: string; delegationAllowed?: boolean; payment?: { required?: boolean; amount?: string; asset?: string } }>;
     policyId: string;
     policyFingerprint: string;
   };
@@ -420,7 +435,9 @@ export default function App() {
   const [paymentPreimage, setPaymentPreimage] = useState("");
   const [result, setResult] = useState<AnalysisResult>();
   const [lastReceipt, setLastReceipt] = useState<AuthorizationReceipt>();
+  const [evidenceBundle, setEvidenceBundle] = useState<Record<string, unknown>>();
   const [capabilityStatus, setCapabilityStatus] = useState<CapabilityStatus>();
+  const [lastTransfer, setLastTransfer] = useState<TransferReceipt>();
   const [delegateAddress, setDelegateAddress] = useState("");
   const [delegationMinutes, setDelegationMinutes] = useState(60);
   const [delegationMaxUses, setDelegationMaxUses] = useState(20);
@@ -627,9 +644,18 @@ export default function App() {
         outPoint: cap.cell.outPoint,
         recipientAddress: recipient.trim(),
       });
+      const destination = recipient.trim();
+      const fromOutPoint = outPointJson(cap.cell);
       const { txHash } = await sendAndWait(signer, tx);
+      const newOutPoint = { txHash, index: "0x0" };
+      let postTransferProof: CapabilityStatus | undefined;
+      try { postTransferProof = await api<CapabilityStatus>("/api/capability/status", { outPoint: newOutPoint }); } catch { /* transfer is confirmed even if proof API is temporarily unavailable */ }
+      setLastTransfer({
+        version: 1, capabilityId: cap.capability.capabilityId, fromOutPoint, toAddress: destination, txHash, newOutPoint,
+        confirmedAt: new Date().toISOString(), ...(postTransferProof ? { postTransferProof } : {}),
+      });
       setRecipient("");
-      setNotice({ tone: "success", message: `Transfer confirmed on CKB: ${short(txHash, 12)}` });
+      setNotice({ tone: "success", message: `Transfer confirmed on CKB: ${short(txHash, 12)}. The previous outpoint is consumed.` });
       await refresh(false);
     } catch (e) {
       setNotice({ tone: "error", message: `Transfer failed: ${(e as Error).message}` });
@@ -724,11 +750,30 @@ export default function App() {
     return { kind: "success" as const, value };
   }
 
+  async function fetchAuthorizationEvidence() {
+    const ref = lastReceipt?.authorization?.evidence;
+    if (!ref?.endpoint || !ref.token) {
+      setNotice({ tone: "error", message: "This receipt does not include an exportable evidence token." });
+      return;
+    }
+    setBusy("evidence");
+    try {
+      const value = await api<{ ok: boolean; evidence: Record<string, unknown> }>(`${ref.endpoint}?token=${encodeURIComponent(ref.token)}`);
+      setEvidenceBundle(value.evidence);
+      setNotice({ tone: "success", message: `Signed authorization evidence loaded${ref.signed ? " and ready for offline verification" : ""}.` });
+    } catch (e) {
+      setNotice({ tone: "error", message: `Evidence request failed: ${(e as Error).message}` });
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function useService(cap: Found) {
     if (!signer || !config || !address || !selectedService) return;
     setBusy("analyze");
     setResult(undefined);
     setLastReceipt(undefined);
+    setEvidenceBundle(undefined);
     try {
       const outPoint = outPointJson(cap.cell);
       const input = parseServiceInput(selectedService, text);
@@ -924,6 +969,21 @@ export default function App() {
           </div>
         )}
 
+        {experienceMode === "live" && lastTransfer && (
+          <section className="chain-action-receipt" aria-label="Latest transfer receipt">
+            <div>
+              <span className="eyebrow">CKB transfer receipt</span>
+              <strong>Service right transferred and old outpoint consumed</strong>
+              <small>TX {short(lastTransfer.txHash, 10)} · new outpoint {short(lastTransfer.newOutPoint.txHash, 7)}:{lastTransfer.newOutPoint.index}{lastTransfer.postTransferProof?.proofHash ? ` · live proof ${short(lastTransfer.postTransferProof.proofHash, 6)}` : ""}</small>
+            </div>
+            <div className="proof-actions">
+              <button className="button ghost small" onClick={() => void copyText(JSON.stringify(lastTransfer, null, 2), "Transfer receipt")}>Copy receipt</button>
+              <button className="button ghost small" onClick={() => downloadJson(lastTransfer, `skillpass-transfer-${short(lastTransfer.capabilityId, 6).replace("…", "-")}.json`)}>Export JSON</button>
+              <button className="button ghost small" onClick={() => setLastTransfer(undefined)}>Dismiss</button>
+            </div>
+          </section>
+        )}
+
         {experienceMode === "demo" ? (
           <DemoWorkspace
             liveReady={Boolean(config)}
@@ -980,7 +1040,7 @@ export default function App() {
                         type="button"
                         className={`pass-option ${selected ? "selected" : ""}`}
                         key={key}
-                        onClick={() => { setSelectedKey(key); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); setRecipient(""); }}
+                        onClick={() => { setSelectedKey(key); setResult(undefined); setLastReceipt(undefined); setEvidenceBundle(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); setRecipient(""); }}
                       >
                         <span className={`pass-state ${active ? "active" : "expired"}`}><span />{active ? "Active" : "Expired"}</span>
                         <strong>{services.find((service) => serviceAcceptsCapability(service, cap.capability))?.name ?? "SkillPass"}</strong>
@@ -1043,7 +1103,7 @@ export default function App() {
                       {compatibleServices.length > 1 && (
                         <label className="bundle-service-picker">
                           <span>Included services</span>
-                          <select value={selectedService?.slug ?? ""} onChange={(e) => { setSelectedServiceSlug(e.target.value); setText(""); setResult(undefined); setLastReceipt(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); }}>
+                          <select value={selectedService?.slug ?? ""} onChange={(e) => { setSelectedServiceSlug(e.target.value); setText(""); setResult(undefined); setLastReceipt(undefined); setEvidenceBundle(undefined); setCapabilityStatus(undefined); setDelegationCredential(undefined); }}>
                             {compatibleServices.map((service) => <option key={service.slug} value={service.slug}>{service.name}</option>)}
                           </select>
                         </label>
@@ -1063,6 +1123,9 @@ export default function App() {
                       </div>
                       <span>Valid until {formatExpiry(selectedCap.capability.expiry)}</span>
                     </div>
+                    {selectedActive && Number(selectedCap.capability.expiry) > 0 && Number(selectedCap.capability.expiry) - Math.floor(Date.now() / 1000) < 7 * 24 * 3600 && (
+                      <div className="expiry-warning"><strong>Expires soon</strong><span>This service right expires within 7 days. Transfer and delegation do not extend its lifetime.</span></div>
+                    )}
 
                     <label className="editor-label" htmlFor="service-input">{serviceInputLabel(selectedService)}</label>
                     <textarea
@@ -1152,8 +1215,28 @@ export default function App() {
                               <strong>{lastReceipt.authorization.principal === "delegate" ? "Delegated access" : "Owner access"} verified</strong>
                               <small>Request {short(lastReceipt.authorization.requestId || "", 8)} · live entitlement {lastReceipt.authorization.entitlementVerified ? "✓" : "—"} · payment {lastReceipt.authorization.paymentRequired ? (lastReceipt.authorization.paymentVerified ? "✓" : "pending") : "not required"}</small>
                             </div>
-                            <button className="button ghost small" onClick={() => void copyText(JSON.stringify(lastReceipt, null, 2), "Receipt")}>Copy receipt</button>
+                            <div className="receipt-actions">
+                              <button className="button ghost small" onClick={() => void copyText(JSON.stringify(lastReceipt, null, 2), "Receipt")}>Copy receipt</button>
+                              {lastReceipt.authorization.evidence?.token && (
+                                <button className="button ghost small" disabled={busy === "evidence"} onClick={() => void fetchAuthorizationEvidence()}>
+                                  {busy === "evidence" ? "Loading proof…" : "Load signed evidence"}
+                                </button>
+                              )}
+                            </div>
                           </div>
+                          {evidenceBundle && (
+                            <div className="evidence-export-card">
+                              <div>
+                                <span className="eyebrow">Portable audit proof</span>
+                                <strong>Authorization evidence ready</strong>
+                                <small>Hashed request + Capability outpoint + provider policy + finality + optional payment proof. No protected request body is included.</small>
+                              </div>
+                              <div className="proof-actions">
+                                <button className="button ghost small" onClick={() => void copyText(JSON.stringify(evidenceBundle, null, 2), "Authorization evidence")}>Copy proof</button>
+                                <button className="button ghost small" onClick={() => downloadJson(evidenceBundle, `skillpass-evidence-${lastReceipt.authorization.requestId || "request"}.json`)}>Export JSON</button>
+                              </div>
+                            </div>
+                          )}
                         )}
                       </div>
                     )}
@@ -1184,6 +1267,25 @@ export default function App() {
                           <div className="proof-actions">
                             <button type="button" className="button ghost small" onClick={() => void copyText(JSON.stringify(capabilityStatus, null, 2), "Ownership proof")}>Copy proof</button>
                             <button type="button" className="button ghost small" onClick={() => downloadJson(capabilityStatus, `skillpass-proof-${short(selectedCap.capability.capabilityId, 6).replace("…", "-")}.json`)}>Export JSON</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {capabilityStatus?.capability.acceptedBy && capabilityStatus.capability.acceptedBy.length > 0 && (
+                        <div className="provider-acceptance-card">
+                          <div className="provider-acceptance-heading">
+                            <div><span className="eyebrow">Cross-provider portability</span><strong>Accepted by {capabilityStatus.capability.acceptedBy.length} configured service{capabilityStatus.capability.acceptedBy.length === 1 ? "" : "s"}</strong></div>
+                            <span className="meta-chip">Live CKB check</span>
+                          </div>
+                          <div className="provider-acceptance-grid">
+                            {capabilityStatus.capability.acceptedBy.map((item) => (
+                              <div key={`${item.providerId || "provider"}:${item.slug}`}>
+                                <span className="provider-ok"><Icon name="check" size={13} /> Accepted</span>
+                                <strong>{item.name}</strong>
+                                <small>{item.providerName || item.providerId || "Independent provider"}</small>
+                                <code>{short(item.policyFingerprint || item.policyId, 7)}</code>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}

@@ -1,4 +1,4 @@
-# SkillPass v1.7 — Portable Service Ownership on CKB
+# SkillPass v1.8 — Portable Service Ownership on CKB
 
 ## Project direction
 
@@ -27,6 +27,19 @@ The strongest SkillPass use case is **a service right that should move with its 
 
 > **Funding/product foundation:** start with [`docs/GRANT_READINESS_PLAN.md`](docs/GRANT_READINESS_PLAN.md) and [`docs/PROVIDER_INTEGRATION.md`](docs/PROVIDER_INTEGRATION.md), then see [`docs/FUNDING_READINESS_2026.md`](docs/FUNDING_READINESS_2026.md), [`docs/SERVICE_GATEWAY.md`](docs/SERVICE_GATEWAY.md), and [`docs/PRODUCTION_READINESS_V1_2.md`](docs/PRODUCTION_READINESS_V1_2.md). Optional automated-client integration is documented separately in [`docs/AGENT_DELEGATION.md`](docs/AGENT_DELEGATION.md) and [`docs/AGENT_PROTOCOL.md`](docs/AGENT_PROTOCOL.md).
 
+
+## What v1.8 adds on top of v1.7
+
+- **Provider-attested authorization evidence** — every successful protected request can produce a token-protected, exportable evidence record whose request hash, Capability outpoint, provider policy, finality, delegation/payment hashes, and decision are integrity-protected; when a provider Ed25519 key is configured the evidence is independently verifiable offline.
+- **Evidence retrieval API** — authorized clients receive an opaque evidence token and can fetch `/api/evidence/{requestId}?token=...`; the token itself is never persisted in plaintext.
+- **Portfolio status API** — `/api/capability/status/batch` checks up to 10 Capability outpoints and returns per-item results without failing the entire portfolio.
+- **Cross-provider acceptance matrix** — live ownership verification now also reports every configured service/provider policy that accepts the entitlement, and the web UI visualizes this portability.
+- **Transfer receipts** — confirmed transfers create an exportable lifecycle receipt containing the consumed outpoint, successor outpoint, transaction hash, recipient, and a best-effort fresh live-Cell proof.
+- **Provider bootstrap kit** — `npm run provider:scaffold -- ...` generates a clean-room external-provider verifier skeleton with no monorepo-relative imports.
+- **Offline evidence verifier** — `npm run evidence:verify -- evidence.json` validates the exported Ed25519 evidence attestation and can optionally pin a public key or fingerprint.
+- **Expiry warnings** — the web UI warns when a live service right has less than seven days remaining.
+
+See [`docs/AUTHORIZATION_EVIDENCE.md`](docs/AUTHORIZATION_EVIDENCE.md) and [`RELEASE_NOTES_V1_8.md`](RELEASE_NOTES_V1_8.md).
 
 ## What v1.7 includes
 

@@ -117,13 +117,15 @@ export function buildDiscovery({ deployment, services, serviceId, trustedIssuerI
       readiness: "/readyz",
       status: "/api/status",
       capabilityStatus: "/api/capability/status",
-      authorizationEvidence: "persisted server-side for bounded audit retention",
+      capabilityStatusBatch: "/api/capability/status/batch",
+      authorizationEvidence: { model: "hashed-and-provider-attested", retrieval: "/api/evidence/{requestId}?token=...", retention: "bounded-server-side", access: "opaque-token" },
     },
     api: {
       openapi: "/api/openapi.json",
       runtimeConfig: "/api/config",
       services: "/api/services",
       providerManifest: "/api/provider-manifest",
+      authorizationEvidence: "/api/evidence/{requestId}?token=...",
       agentSpec: "/.well-known/skillpass-agent.txt",
     },
   });
@@ -151,6 +153,23 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
         summary: "Inspect a SkillPass capability from fresh CKB state and return an evidence bundle",
         requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outPoint"], properties: { outPoint: outPointSchema, service: { type: "string", description: "Optional endpoint service slug when one entitlement is accepted by multiple providers" } } } } } },
         responses: { "200": { description: "Capability is live and satisfies its registered provider policy" }, "403": { description: "Capability is consumed, provider-revoked, or violates service policy" } },
+      },
+    },
+    "/api/capability/status/batch": {
+      post: {
+        summary: "Inspect up to 10 Capability outpoints in one portfolio request",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["outPoints"], properties: { outPoints: { type: "array", minItems: 1, maxItems: 10, items: outPointSchema }, service: { type: "string" } } } } } },
+        responses: { "200": { description: "Per-outpoint live status results; individual failures are returned inline" } },
+      },
+    },
+    "/api/evidence/{requestId}": {
+      get: {
+        summary: "Retrieve one token-protected authorization evidence record",
+        parameters: [
+          { name: "requestId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "token", in: "query", required: true, schema: { type: "string", minLength: 24 }, description: "Opaque evidence access token returned only with the authorized invocation receipt" },
+        ],
+        responses: { "200": { description: "Hash-stable authorization evidence with optional Ed25519 provider attestation" }, "403": { description: "Invalid evidence token" }, "404": { description: "Evidence expired or not found" } },
       },
     },
     "/api/challenge": {
@@ -211,8 +230,8 @@ export function buildOpenApi({ services, paymentsRequired = false, maxInputChars
     openapi: "3.1.0",
     info: {
       title: "SkillPass protected service gateway API",
-      version: "1.3.0",
-      description: "Multi-service CKB entitlement authorization with shared bundle entitlements, owned-right/revocable-license policies, optional owner-signed bounded delegation, and optional Fiber/x402 per-use payment.",
+      version: "1.4.0",
+      description: "Multi-service CKB entitlement authorization with shared bundle entitlements, owned-right/revocable-license policies, provider-attested audit evidence, batch capability inspection, optional owner-signed bounded delegation, and optional Fiber/x402 per-use payment.",
     },
     paths,
   });

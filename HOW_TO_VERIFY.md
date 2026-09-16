@@ -1,4 +1,4 @@
-# HOW TO VERIFY — SkillPass v1.7 funding candidate
+# HOW TO VERIFY — SkillPass v1.8 funding candidate
 
 All verification can start from the extracted local project folder. None of these steps require connecting this project to GitHub.
 
@@ -20,6 +20,40 @@ npm run verify:contract
 
 A registry-resolved `package-lock.json` should be generated/committed in a networked environment before production release; do not hand-author one.
 
+
+
+## A1. v1.8 external-adoption feature gate
+
+```bash
+npm run verify:features
+```
+
+Generate a clean-room provider kit:
+
+```bash
+npm run provider:scaffold -- \
+  --provider-id provider-a \
+  --service-slug model-api-v1 \
+  --service-id 0x... \
+  --issuer-id 0x... \
+  --code-hash 0x... \
+  --out /tmp/provider-a-skillpass
+```
+
+After a successful protected request, export the signed authorization evidence from the web UI and verify it offline:
+
+```bash
+npm run evidence:verify -- skillpass-evidence-REQUEST_ID.json
+# stronger trust pinning:
+npm run evidence:verify -- skillpass-evidence-REQUEST_ID.json --fingerprint sha256:...
+```
+
+The live capability-status API also supports a bounded portfolio request:
+
+```text
+POST /api/capability/status/batch
+{ "outPoints": [ ... up to 10 ... ] }
+```
 
 ## A. Fast dependency-free verification
 

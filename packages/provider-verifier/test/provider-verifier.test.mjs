@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { createGatewayAssertion, signProviderManifest, verifyGatewayAssertion, verifyProviderManifest, verifyResolvedCapabilityCell, verifySkillPassAuthorization } from "../src/index.mjs";
+import { createGatewayAssertion, hashAuthorizationEvidence, signAuthorizationEvidence, signProviderManifest, verifyAuthorizationEvidence, verifyGatewayAssertion, verifyProviderManifest, verifyResolvedCapabilityCell, verifySkillPassAuthorization } from "../src/index.mjs";
 import { encodeCapabilityHex, encodeTypeArgs } from "@skillpass/capability-codec";
 import { createServicePolicy } from "@skillpass/service-rights";
 
@@ -93,4 +93,28 @@ test("safe verifier binds deployment, capability identity and confirmations befo
   });
   assert.equal(decision.authorized, true);
   assert.equal(decision.confirmations, 2);
+});
+
+
+test("authorization evidence can be signed, exported, and verified offline", () => {
+  const k = keys();
+  const evidence = {
+    version: 1,
+    requestId: "req-123",
+    requestHash: `0x${"10".repeat(32)}`,
+    capabilityId: `0x${"20".repeat(32)}`,
+    capabilityOutPoint: { txHash: `0x${"30".repeat(32)}`, index: "0x0" },
+    providerId: `0x${"40".repeat(32)}`,
+    serviceId: `0x${"50".repeat(32)}`,
+    policyHash: "", subjectId: "", subjectOwnerLockHash: "", delegationId: "", paymentProofHash: "",
+    decision: "allow", timestamp: "2026-09-16T00:00:00.000Z",
+    providerKey: "provider-a", policyId: "bundle-v1", policyFingerprint: "sha256:test",
+    currentOwnerLockHash: `0x${"60".repeat(32)}`, chain: { confirmations: 3 },
+    invocationKey: "abc", operationId: null, paymentSettlementHash: null, expiresAt: 1_800_000_000_000,
+    accessTokenHash: "a".repeat(64),
+  };
+  const signed = signAuthorizationEvidence({ evidence, privateKeyPem: k.privateKeyPem, keyId: "provider-a-evidence", issuedAt: "2026-09-16T00:00:00.000Z" });
+  assert.equal(signed.evidenceHash, hashAuthorizationEvidence(evidence));
+  assert.equal(verifyAuthorizationEvidence({ evidence: signed, publicKeyPem: k.publicKeyPem, now: Date.parse("2026-09-16T00:10:00.000Z") }), true);
+  assert.equal(verifyAuthorizationEvidence({ evidence: { ...signed, decision: "deny" }, publicKeyPem: k.publicKeyPem, now: Date.parse("2026-09-16T00:10:00.000Z") }), false);
 });
