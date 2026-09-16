@@ -1209,6 +1209,7 @@ export default function App() {
                           <pre>{JSON.stringify(result, null, 2)}</pre>
                         </details>
                         {lastReceipt?.authorization && (
+                          <>
                           <div className="receipt-card">
                             <div>
                               <span className="eyebrow">Verification receipt</span>
@@ -1237,6 +1238,7 @@ export default function App() {
                               </div>
                             </div>
                           )}
+                          </>
                         )}
                       </div>
                     )}
