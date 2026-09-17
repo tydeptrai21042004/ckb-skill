@@ -1,0 +1,25 @@
+Week 10 verification evidence — existing SkillPass repository
+
+Command:
+  node --test tests/feature-expansion-v1.8.test.mjs
+
+Result:
+TAP version 13
+# Subtest: OpenAPI advertises batch capability status and token-protected evidence retrieval
+ok 1
+# Subtest: provider scaffold creates a clean-room verifier kit
+ok 2
+# Subtest: live service exposes signed evidence and multi-provider portfolio feature surfaces
+ok 3
+# Subtest: web UI exposes portable audit proof, provider acceptance matrix, and expiry warning
+ok 4
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+
+Executed against the Week 10 repository snapshot supplied for this report.
