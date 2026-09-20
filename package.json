@@ -75,10 +75,13 @@
     "pilot:keys": "node scripts/pilot-keygen.mjs",
     "evidence:concurrency": "node scripts/evidence-concurrency.mjs",
     "verify:grant-ready": "node --test tests/execution-lease.test.mjs tests/provider-trust.test.mjs tests/grant-readiness.test.mjs && npm run verify:dependency-lock && npm run verify:workspaces && npm run verify:deploy",
-    "verify:funding-candidate": "node --test && npm run verify:dependency-lock && npm run security:preflight && npm run verify:workspaces && npm run verify:deploy && npm run typecheck:vercel && npm run build:web",
+    "verify:funding-candidate": "npm run verify:funding-structure && node --test && npm run verify:dependency-lock && npm run security:preflight && npm run verify:workspaces && npm run verify:deploy && npm run typecheck:vercel && npm run build:web",
     "provider:scaffold": "node scripts/provider-scaffold.mjs",
     "evidence:verify": "node scripts/evidence-verify.mjs",
-    "verify:features": "node --test tests/feature-expansion-v1.8.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs apps/live-service/state.test.mjs"
+    "verify:features": "node --test tests/feature-expansion-v1.8.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs apps/live-service/state.test.mjs",
+    "verify:funding-structure": "node scripts/funding-structure.mjs",
+    "verify:care-compat": "node scripts/verify-care-compat.mjs",
+    "evidence:testnet": "node scripts/testnet-evidence.mjs"
   },
   "workspaces": [
     "apps/*",

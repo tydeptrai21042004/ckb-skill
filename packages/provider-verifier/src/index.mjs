@@ -1,6 +1,8 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify } from "node:crypto";
-import { decodeCapability, encodeTypeArgs } from "@skillpass/capability-codec";
-import { authorizeRequest, verifyServicePolicy, verifySubjectBinding } from "@skillpass/service-rights";
+const codecModule = await import("@skillpass/capability-codec").catch(() => import("../../capability-codec/src/index.mjs"));
+const rightsModule = await import("@skillpass/service-rights").catch(() => import("../../service-rights/src/index.mjs"));
+const { decodeCapability, encodeTypeArgs } = codecModule;
+const { authorizeRequest, verifyServicePolicy, verifySubjectBinding } = rightsModule;
 
 const MANIFEST_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 const MANIFEST_MAX_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;

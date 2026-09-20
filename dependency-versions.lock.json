@@ -60,7 +60,7 @@
     "package.json": {
       "name": "ckb-skillpass",
       "version": "1.8.0",
-      "sha256": "c5d29a9ec4f9fb5a09c4bac7f9a656c3dd56e246f391bc30cd99dc78d677190f",
+      "sha256": "392233949114363c4ab96779d6e29722d1b48c0ea04a54a8de4997741c7afdf8",
       "devDependencies": {
         "@types/node": "24.13.3",
         "typescript": "5.9.2"

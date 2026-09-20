@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "application": "SkillPass Care",
+  "role": "reference-application",
+  "repository": "https://github.com/tydeptrai21042004/SkillPass-Care",
+  "canonicalCapabilityVersion": 2,
+  "protocolPackages": {
+    "@skillpass/capability-codec": "0.7.0",
+    "@skillpass/service-rights": "1.0.0",
+    "@skillpass/provider-verifier": "1.0.0",
+    "@skillpass/ckb-client": "1.0.0"
+  },
+  "requiredInvariants": [
+    "current owner comes from the canonical live Capability Cell lock",
+    "transfer preserves Capability data and Type Script identity",
+    "Care does not define a second transferable-right protocol",
+    "Care service-event state cannot override SkillPass ownership state"
+  ]
+}

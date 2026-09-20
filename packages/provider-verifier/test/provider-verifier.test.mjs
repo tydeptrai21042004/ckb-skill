@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { createGatewayAssertion, hashAuthorizationEvidence, signAuthorizationEvidence, signProviderManifest, verifyAuthorizationEvidence, verifyGatewayAssertion, verifyProviderManifest, verifyResolvedCapabilityCell, verifySkillPassAuthorization } from "../src/index.mjs";
-import { encodeCapabilityHex, encodeTypeArgs } from "@skillpass/capability-codec";
-import { createServicePolicy } from "@skillpass/service-rights";
+import { encodeCapabilityHex, encodeTypeArgs } from "../../capability-codec/src/index.mjs";
+import { createServicePolicy } from "../../service-rights/src/index.mjs";
 
 function keys() {
   const pair = generateKeyPairSync("ed25519");

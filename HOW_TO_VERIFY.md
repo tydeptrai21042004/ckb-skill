@@ -22,6 +22,30 @@ A registry-resolved `package-lock.json` should be generated/committed in a netwo
 
 
 
+## A0.1 Funding structure and reference-app compatibility
+
+Before dependency-backed checks, verify the funding package structure:
+
+```bash
+npm run verify:funding-structure
+```
+
+If SkillPass Care is checked out alongside this repository:
+
+```bash
+npm run verify:care-compat -- ../SkillPass-Care-main
+```
+
+Check whether a real Testnet evidence manifest has been attached:
+
+```bash
+npm run evidence:testnet
+# final submission gate:
+node scripts/testnet-evidence.mjs --require
+```
+
+The non-`--require` form reports `PENDING` rather than pretending the current example deployment is real evidence.
+
 ## A1. v1.8 external-adoption feature gate
 
 ```bash
