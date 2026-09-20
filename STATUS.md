@@ -11,7 +11,8 @@ This status file is intentionally conservative so funding reviewers can distingu
 | Provider verifier | Implemented | issuer/service/owner/finality policy checks |
 | Signed provider manifests/evidence | Implemented | cryptographic tooling/tests present |
 | Multi-provider local pilot | Implemented | local isolated-provider profile |
-| SkillPass Care compatibility contract | Implemented | two-repo machine checks added |
+| SkillPass Care integration profile | Implemented | explicit two-state boundary: SkillPass ownership + Care coverage/service lifecycle |
+| Provider conformance harness | Implemented | dependency-free Alice/Bob before/after lifecycle harness for external providers |
 | Real public Testnet deployment evidence | **Pending** | example deployment still contains placeholders |
 | Public Alice -> Bob Testnet evidence | **Pending** | `evidence/testnet/manifest.json` not yet attached |
 | External provider integration | **Pending** | internal scaffolding is not external adoption |

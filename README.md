@@ -26,7 +26,7 @@ The funding candidate is intentionally narrower than the full repository feature
 1. canonical SkillPass protocol release;
 2. real CKB Testnet issue + Alice->Bob transfer evidence;
 3. independently operated provider verification;
-4. SkillPass Care as the first reference application;
+4. SkillPass Care as a rich reference product built on the protocol;
 5. external integration and small user/provider validation.
 
 See [`FUNDING.md`](./FUNDING.md), [`STATUS.md`](./STATUS.md), and [`docs/FUNDING_ACCEPTANCE_MATRIX.md`](./docs/FUNDING_ACCEPTANCE_MATRIX.md).
@@ -45,19 +45,25 @@ Capability V2 additionally supports subject and policy commitments for applicati
 
 ## Reference application: SkillPass Care
 
-SkillPass Care demonstrates the protocol with service coverage for a second-hand/refurbished product:
+SkillPass Care demonstrates more than ownership transfer. It is a vertical product for second-hand/refurbished service coverage with its own mutable coverage lifecycle:
 
 ```text
-product commitment
-      |
+product commitment + Care plan
+            |
 SkillPass Capability V2
-      |
-Alice -> Bob transfer on CKB
-      |
-independent repair/service providers
+            |
+Alice uses service at Provider A
+3 visits -> 2 visits
+            |
+Alice -> Bob portable-right transfer on CKB
+            |
+coverage remains 2 visits
+            |
+Bob uses service at Provider B
+2 visits -> 1 visit
 ```
 
-Care is an application, **not a second transferable-right protocol**. See [`docs/REFERENCE_APPLICATIONS.md`](./docs/REFERENCE_APPLICATIONS.md).
+SkillPass remains authoritative for **portable ownership and authorization**. Care remains authoritative for **coverage plan, quota, service history, issuer controls and repair-provider workflow**. This two-state boundary keeps the base protocol reusable without flattening the reference product into a Capability viewer. See [`docs/REFERENCE_APPLICATIONS.md`](./docs/REFERENCE_APPLICATIONS.md) and [`docs/SKILLPASS_CARE_BOUNDARY.md`](./docs/SKILLPASS_CARE_BOUNDARY.md).
 
 ## Core packages
 
@@ -66,6 +72,7 @@ Care is an application, **not a second transferable-right protocol**. See [`docs
 | `@skillpass/capability-codec` | canonical Capability V1/V2 encoding and identity |
 | `@skillpass/service-rights` | service-right policy and subject-binding rules |
 | `@skillpass/provider-verifier` | independent provider verification/evidence |
+| `@skillpass/provider-conformance` | portable-ownership acceptance harness for independent providers |
 | `@skillpass/ckb-client` | live CKB discovery, issuance and transfer building |
 | `@skillpass/auth-protocol` | canonical request/authorization intent |
 
@@ -94,6 +101,7 @@ Important verification commands:
 npm run verify:contract
 npm run verify:grant-ready
 npm run verify:features
+npm run verify:provider-conformance
 npm run evidence:verify
 ```
 

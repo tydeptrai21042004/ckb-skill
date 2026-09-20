@@ -60,7 +60,7 @@
     "package.json": {
       "name": "ckb-skillpass",
       "version": "1.8.0",
-      "sha256": "392233949114363c4ab96779d6e29722d1b48c0ea04a54a8de4997741c7afdf8",
+      "sha256": "9f593e54cf835a061cf38f00d3eb71375ccc0cfe338173a0667f95d41a964616",
       "devDependencies": {
         "@types/node": "24.13.3",
         "typescript": "5.9.2"
@@ -109,6 +109,11 @@
         "pg": "8.23.0",
         "redis": "6.2.1"
       }
+    },
+    "packages/provider-conformance/package.json": {
+      "name": "@skillpass/provider-conformance",
+      "version": "1.0.0",
+      "sha256": "78672e693ceb49009f21aff3205c2c871f648afbd1ecf3e2bc5e73f527095663"
     },
     "packages/provider-verifier/package.json": {
       "name": "@skillpass/provider-verifier",

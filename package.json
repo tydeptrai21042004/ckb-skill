@@ -81,7 +81,9 @@
     "verify:features": "node --test tests/feature-expansion-v1.8.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs apps/live-service/state.test.mjs",
     "verify:funding-structure": "node scripts/funding-structure.mjs",
     "verify:care-compat": "node scripts/verify-care-compat.mjs",
-    "evidence:testnet": "node scripts/testnet-evidence.mjs"
+    "evidence:testnet": "node scripts/testnet-evidence.mjs",
+    "verify:provider-conformance": "node --test packages/provider-conformance/test/conformance.test.mjs",
+    "verify:protocol-core": "node --test packages/capability-codec/test/codec.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs packages/provider-conformance/test/conformance.test.mjs tests/v1.6-portable-service-ownership.test.mjs"
   },
   "workspaces": [
     "apps/*",

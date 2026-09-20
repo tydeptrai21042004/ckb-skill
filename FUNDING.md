@@ -25,7 +25,7 @@ These are **existing work** and should not be represented as future funded deliv
 1. **Canonical release/reproducibility** — clean install, CI, documented package boundary, final lockfile, one funding-verification command.
 2. **Real CKB Testnet lifecycle** — public deployment metadata, issuance to Alice, Alice->Bob transfer, public tx hashes and outpoints.
 3. **Independent provider proof** — isolated Provider A and B verify the same live SkillPass right with no shared owner database.
-4. **SkillPass Care reference integration** — Care consumes the canonical protocol boundary and demonstrates second-owner service eligibility.
+4. **SkillPass Care reference product integration** — Care consumes the canonical ownership/authorization boundary while preserving its own product-bound coverage plan, remaining-service quota, service history, issuer controls and cross-provider service workflow.
 5. **External validation** — at least one external provider/developer integration plus a small provider/user workflow study.
 
 ## Acceptance criteria
@@ -61,7 +61,21 @@ SkillPass Care must remain downstream of the protocol:
 CKB -> SkillPass Capability V2 -> SkillPass verifier -> SkillPass Care -> provider service
 ```
 
-Care-specific service history or quotas are application/provider evidence. They are not silently added as mutable fields to the ownership Cell during this milestone.
+Care-specific coverage state is intentionally first-class application state rather than being deleted or forced into the ownership Cell. In particular, Care may maintain coverage quota, service history, issuer suspension/revocation and provider workflow state. The integration rule is narrower: **Care cannot override who owns the portable right.** Ownership comes from fresh SkillPass/CKB state.
+
+The flagship Care acceptance flow should demonstrate continuity, not only transfer:
+
+```text
+Alice owns coverage with 3 service units
+Provider A verifies Alice and records service -> 2 remain
+Alice transfers the SkillPass right to Bob
+Care coverage remains at 2 units
+Alice is denied after transfer
+Provider B independently verifies Bob
+Bob receives service -> 1 remains
+```
+
+A stale Alice authorization must not be allowed to consume Care quota after the referenced Capability Cell has been consumed by the transfer.
 
 ## Explicit non-goals for this grant
 

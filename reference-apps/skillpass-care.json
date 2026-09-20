@@ -1,8 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "application": "SkillPass Care",
-  "role": "reference-application",
+  "role": "reference-product",
   "repository": "https://github.com/tydeptrai21042004/SkillPass-Care",
+  "relationship": "SkillPass supplies portable ownership and authorization; Care supplies product-coverage policy and service lifecycle.",
   "canonicalCapabilityVersion": 2,
   "protocolPackages": {
     "@skillpass/capability-codec": "0.7.0",
@@ -10,10 +11,29 @@
     "@skillpass/provider-verifier": "1.0.0",
     "@skillpass/ckb-client": "1.0.0"
   },
+  "skillPassOwns": [
+    "portable entitlement identity",
+    "current-owner source of truth from the live Capability Cell",
+    "transfer invariant",
+    "request-bound owner authorization",
+    "provider-side live-cell verification"
+  ],
+  "applicationOwns": [
+    "product binding metadata",
+    "coverage plan and remaining service quota",
+    "service-event history",
+    "issuer suspension/revocation workflow",
+    "repair-provider business rules",
+    "buyer/seller/product handoff experience"
+  ],
   "requiredInvariants": [
-    "current owner comes from the canonical live Capability Cell lock",
+    "current portable-right owner comes from the canonical live Capability Cell lock",
     "transfer preserves Capability data and Type Script identity",
-    "Care does not define a second transferable-right protocol",
-    "Care service-event state cannot override SkillPass ownership state"
-  ]
+    "Care coverage state cannot override SkillPass ownership state",
+    "Care may maintain mutable coverage/service state without mutating the SkillPass ownership Cell",
+    "service execution must reject stale ownership evidence after the referenced Capability Cell is consumed"
+  ],
+  "toolingPackages": {
+    "@skillpass/provider-conformance": "1.0.0"
+  }
 }
