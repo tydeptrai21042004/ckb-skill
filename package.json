@@ -83,7 +83,13 @@
     "verify:care-compat": "node scripts/verify-care-compat.mjs",
     "evidence:testnet": "node scripts/testnet-evidence.mjs",
     "verify:provider-conformance": "node --test packages/provider-conformance/test/conformance.test.mjs",
-    "verify:protocol-core": "node --test packages/capability-codec/test/codec.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs packages/provider-conformance/test/conformance.test.mjs tests/v1.6-portable-service-ownership.test.mjs"
+    "verify:protocol-core": "node --test packages/capability-codec/test/codec.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs packages/provider-conformance/test/conformance.test.mjs tests/v1.6-portable-service-ownership.test.mjs",
+    "evidence:testnet:shape": "node scripts/testnet-evidence.mjs --shape-only",
+    "evidence:testnet:require": "node scripts/testnet-evidence.mjs --require",
+    "providers:init-testnet": "node scripts/init-independent-providers.mjs",
+    "providers:testnet:before": "node scripts/independent-provider-lifecycle.mjs --phase before",
+    "providers:testnet:after": "node scripts/independent-provider-lifecycle.mjs --phase after",
+    "verify:funding-phase1": "node --test tests/funding-phase1-hardening.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs && npm run verify:dependency-lock && npm run verify:workspaces && npm run verify:deploy"
   },
   "workspaces": [
     "apps/*",
@@ -95,5 +101,8 @@
   },
   "allowScripts": {
     "esbuild@0.25.12": true
+  },
+  "dependencies": {
+    "@ckb-ccc/ccc": "1.2.7"
   }
 }

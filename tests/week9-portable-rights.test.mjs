@@ -17,11 +17,11 @@ test("live service validates provider policy before owner and payment", () => {
   const inspectStart = src.indexOf("async function inspectLiveCapability");
   const policy = src.indexOf("verifyServicePolicy({ capability, policy: context.policy", inspectStart);
   const verifyStart = src.indexOf("async function verifyLiveCapability", inspectStart);
-  const owner = src.indexOf("requester does not control the current live capability cell", verifyStart);
+  const canonical = src.indexOf("await verifySkillPassAuthorization({", verifyStart);
   const handlerStart = src.indexOf("async function handleInvokeRequest");
   const auth = src.indexOf("authenticateProtectedRequest(requestBody, service)", handlerStart);
   const quote = src.indexOf("createPaymentQuote(req, requestBody, service)", handlerStart);
-  assert.ok(policy > inspectStart && verifyStart > policy && owner > verifyStart, "provider policy must be checked before owner success");
+  assert.ok(policy > inspectStart && verifyStart > policy && canonical > verifyStart, "provider policy must be checked before canonical owner authorization");
   assert.ok(auth > handlerStart && quote > auth, "payment quote must happen after entitlement verification path");
 });
 

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "provider": { "id": "provider-a", "name": "Independent Provider A" },
+  "rpcEnv": "PROVIDER_A_CKB_RPC_URL",
+  "capabilityDeployment": { "codeHash": "0xREPLACE_FROM_MANIFEST", "hashType": "data2" },
+  "service": { "id": "0xREPLACE_FROM_MANIFEST" },
+  "trustedIssuerIds": ["0xREPLACE_FROM_MANIFEST"],
+  "minConfirmations": 1,
+  "ownerSourceOfTruth": "live-ckb-cell",
+  "entitlementDatabase": null
+}

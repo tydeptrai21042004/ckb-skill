@@ -10,8 +10,6 @@ import {
   FLAG_DELEGATABLE,
   FLAG_REVOCABLE,
   FLAG_TRANSFERABLE,
-  decodeCapability,
-  encodeTypeArgs,
   hasFlag,
   isActive,
   normalizeHex32,
@@ -32,7 +30,15 @@ import { buildAgentSpec, buildDiscovery, buildOpenApi } from "./discovery.mjs";
 import { buildServiceRegistry, postJsonPinned } from "./services.mjs";
 import { canonicalJson, validateServiceInput } from "@skillpass/service-gateway";
 import { formatAuthorizationIntent } from "@skillpass/auth-protocol";
-import { hashAuthorizationEvidence, providerIdDigest, publicKeyFromPrivateKey, signAuthorizationEvidence, signProviderManifest } from "@skillpass/provider-verifier";
+import {
+  hashAuthorizationEvidence,
+  providerIdDigest,
+  publicKeyFromPrivateKey,
+  signAuthorizationEvidence,
+  signProviderManifest,
+  verifyResolvedCapabilityCell,
+  verifySkillPassAuthorization,
+} from "@skillpass/provider-verifier";
 import { assertDelegationScope, buildDelegationMessage } from "@skillpass/delegation";
 import {
   assertJsonRequest,
@@ -725,13 +731,17 @@ async function resolveSubjectBinding({ capability, capabilityOwnerLockHash, capa
 async function inspectLiveCapability({ outPoint, service = null, skipRevocation = false }) {
   const cell = await withTimeout(client.getCellLive(outPoint, true, true), "CKB RPC");
   if (!cell) throw Object.assign(new Error("capability cell is missing or already consumed"), { status: 403, code: "CELL_NOT_LIVE" });
-  const type = cell.cellOutput.type;
-  if (!type || type.codeHash !== deployment.codeHash || type.hashType !== deployment.hashType) {
-    throw Object.assign(new Error("cell is not a SkillPass capability from this deployment"), { status: 403, code: "WRONG_DEPLOYMENT" });
-  }
-  const capability = decodeCapability(cell.outputData);
-  if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
-    throw Object.assign(new Error("capability identity/data mismatch"), { status: 403, code: "IDENTITY_MISMATCH" });
+  const currentOwnerLockHash = normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash");
+  let capability;
+  try {
+    const validated = verifyResolvedCapabilityCell({
+      cell: { cellOutput: cell.cellOutput, outputData: cell.outputData, lockHash: currentOwnerLockHash },
+      deployment: { codeHash: deployment.codeHash, hashType: deployment.hashType },
+      minConfirmations: 0,
+    });
+    capability = validated.capability;
+  } catch (error) {
+    throw asAuthorizationHttpError(error);
   }
 
   const now = BigInt(Math.floor(Date.now() / 1000));
@@ -766,7 +776,6 @@ async function inspectLiveCapability({ outPoint, service = null, skipRevocation 
     }
   }
 
-  const currentOwnerLockHash = normalizeHex32(cell.cellOutput.lock.hash(), "currentOwnerLockHash");
   const [finality, subjectBinding] = await Promise.all([
     finalityEvidence(cell),
     resolveSubjectBinding({ capability, capabilityOwnerLockHash: currentOwnerLockHash, capabilityOutPoint: outPoint, service: context.service }),
@@ -799,11 +808,46 @@ async function inspectLiveCapability({ outPoint, service = null, skipRevocation 
   };
 }
 
+function verifierCompatibleCell(inspected) {
+  const confirmations = inspected.finality.confirmations == null ? null : Number(inspected.finality.confirmations);
+  return {
+    cellOutput: inspected.cell.cellOutput,
+    outputData: inspected.cell.outputData,
+    lockHash: inspected.currentOwnerLockHash,
+    ...(confirmations == null ? {} : { confirmations }),
+  };
+}
+
+function asAuthorizationHttpError(error) {
+  if (error?.status) return error;
+  const code = String(error?.code || "AUTHORIZATION_FAILED");
+  const status = code === "CAPABILITY_NOT_FINAL" ? 409 : code === "FINALITY_METADATA_UNAVAILABLE" ? 503 : 403;
+  return Object.assign(new Error(error?.message || "SkillPass authorization failed"), { status, code });
+}
+
 async function verifyLiveCapability({ outPoint, requesterAddress, service }) {
   const inspected = await inspectLiveCapability({ outPoint, service });
   const requester = await ccc.Address.fromString(requesterAddress, client);
-  if (!inspected.cell.cellOutput.lock.eq(requester.script)) {
-    throw Object.assign(new Error("requester does not control the current live capability cell"), { status: 403, code: "NOT_OWNER" });
+  const requesterLockHash = normalizeHex32(requester.script.hash(), "requesterLockHash");
+  try {
+    // The reference service deliberately uses the same public high-level
+    // verifier that independent providers consume. inspectLiveCapability()
+    // supplies display/audit metadata; authorization itself is canonicalized
+    // here so the demo and external providers cannot drift.
+    await verifySkillPassAuthorization({
+      capability: inspected.capability,
+      policy: inspected.policy,
+      requesterLockHash,
+      deployment: { codeHash: deployment.codeHash, hashType: deployment.hashType },
+      minConfirmations: MIN_CAPABILITY_CONFIRMATIONS,
+      resolveLiveCell: async () => verifierCompatibleCell(inspected),
+      resolveSubject: inspected.capability.version === 2 && Number(inspected.capability.bindingMode || 0) !== 0
+        ? async () => inspected.subjectBinding.subject
+        : null,
+      nowUnixSeconds: BigInt(Math.floor(Date.now() / 1000)),
+    });
+  } catch (error) {
+    throw asAuthorizationHttpError(error);
   }
   return inspected;
 }

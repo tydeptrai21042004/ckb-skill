@@ -1,0 +1,19 @@
+{
+  "network": "testnet",
+  "sourceCommit": "REPLACE_WITH_GIT_COMMIT",
+  "protocolVersion": "1.8.0",
+  "codeHash": "0xREPLACE_WITH_64_HEX",
+  "hashType": "data2",
+  "depTxHash": "0xREPLACE_WITH_64_HEX",
+  "depIndex": 0,
+  "issuerId": "0xREPLACE_WITH_64_HEX",
+  "serviceId": "0xREPLACE_WITH_64_HEX",
+  "capabilityId": "0xREPLACE_WITH_64_HEX",
+  "issueTxHash": "0xREPLACE_WITH_64_HEX",
+  "preTransferOutpoint": { "txHash": "0xREPLACE_WITH_64_HEX", "index": 0 },
+  "transferTxHash": "0xREPLACE_WITH_64_HEX",
+  "postTransferOutpoint": { "txHash": "0xREPLACE_WITH_64_HEX", "index": 0 },
+  "aliceLockHash": "0xREPLACE_WITH_64_HEX",
+  "bobLockHash": "0xREPLACE_WITH_64_HEX",
+  "minConfirmations": 1
+}

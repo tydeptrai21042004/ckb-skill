@@ -10,7 +10,7 @@ import {
   BINDING_ATOMIC,
   BINDING_LICENSE,
   SUBJECT_NONE,
-} from "../../capability-codec/src/index.mjs";
+} from "@skillpass/capability-codec";
 
 export class ServiceRightError extends Error {
   constructor(code, message) {
