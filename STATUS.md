@@ -12,7 +12,8 @@ This status file is intentionally conservative so funding reviewers can distingu
 | Signed provider manifests/evidence | Implemented | cryptographic tooling/tests present |
 | Multi-provider local pilot | Implemented | local isolated-provider profile |
 | SkillPass Care integration profile | Implemented | explicit two-state boundary: SkillPass ownership + Care coverage/service lifecycle |
-| Provider conformance harness | Implemented | dependency-free Alice/Bob before/after lifecycle harness for external providers |
+| Provider conformance harness | Implemented | Alice/Bob before/after lifecycle plus two independently configured provider profiles |
+| Provider adversarial matrix | Implemented | fail-closed deployment/live-cell/finality/identity/owner/policy cases under `tests/provider-adversarial.test.mjs` |
 | Real public Testnet deployment evidence | **Pending** | example deployment still contains placeholders |
 | Public Alice -> Bob Testnet evidence | **Pending** | `evidence/testnet/manifest.json` not yet attached |
 | External provider integration | **Pending** | internal scaffolding is not external adoption |

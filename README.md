@@ -76,7 +76,7 @@ SkillPass remains authoritative for **portable ownership and authorization**. Ca
 | `@skillpass/ckb-client` | live CKB discovery, issuance and transfer building |
 | `@skillpass/auth-protocol` | canonical request/authorization intent |
 
-Delegation, agent SDK, service gateway, and Fiber/x402 settlement are useful extensions but are not required to validate the core funding thesis.
+Delegation, agent SDK, service gateway, and Fiber/x402 settlement are useful extensions but are **not part of the Phase-1 protocol acceptance scope**. SkillPass does not attempt to replace Fiber payments, DID/reputation systems, verifiable credentials, or generic token-gating frameworks. See [`docs/non-goals.md`](./docs/non-goals.md) for the overlap boundary.
 
 ## Verification
 
@@ -98,10 +98,12 @@ A final tagged funding release should include a generated `package-lock.json` an
 Important verification commands:
 
 ```bash
+npm run verify:protocol-core
+npm run test:provider-adversarial
+npm run verify:provider-conformance
 npm run verify:contract
 npm run verify:grant-ready
 npm run verify:features
-npm run verify:provider-conformance
 npm run evidence:verify
 ```
 

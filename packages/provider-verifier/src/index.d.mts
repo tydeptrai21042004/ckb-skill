@@ -9,7 +9,20 @@ export declare function verifyResolvedCapabilityCell(input: {
   capability?: Record<string, any>;
   deployment: { codeHash: string; hashType: string };
   minConfirmations?: number;
-}): Readonly<Record<string, any>>;
+}): Readonly<{
+  cell: Record<string, any>;
+  capability: Record<string, any>;
+  lockHash: string;
+  confirmations: number | null;
+  requiredConfirmations: number;
+  chain: Readonly<{
+    outPoint: Readonly<{ txHash: string; index: number }> | null;
+    blockNumber: string | null;
+    blockHash: string | null;
+    confirmations: number | null;
+    requiredConfirmations: number;
+  }>;
+}>;
 export declare function verifySkillPassAuthorization(input: Record<string, any>): Promise<Readonly<Record<string, any>>>;
 export declare function verifyProviderAuthorization(input: Record<string, unknown>): Promise<Readonly<Record<string, unknown>>>;
 export declare function signProviderManifest(input: { manifest: Record<string, unknown>; privateKeyPem: string; keyId?: string; issuedAt?: string; expiresAt?: string }): Readonly<Record<string, unknown>>;

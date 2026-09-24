@@ -45,6 +45,44 @@ function validateManifestTimes({ issuedAt, expiresAt, now = Date.now(), allowFut
 }
 
 function cellType(cell) { return cell?.type ?? cell?.cellOutput?.type ?? null; }
+
+function cellStatus(cell) {
+  const raw = cell?.status ?? cell?.cellStatus ?? cell?.liveStatus ?? null;
+  return raw == null ? null : String(raw).trim().toLowerCase();
+}
+
+function normalizeOptionalHex32(value) {
+  if (value == null || value === "") return null;
+  const text = String(value).toLowerCase();
+  return /^0x[0-9a-f]{64}$/.test(text) ? text : null;
+}
+
+function normalizeOptionalOutPoint(value) {
+  if (!value || typeof value !== "object") return null;
+  const txHash = normalizeOptionalHex32(value.txHash ?? value.tx_hash);
+  const indexRaw = value.index ?? value.outputIndex ?? value.output_index;
+  if (!txHash || indexRaw == null || indexRaw === "") return null;
+  const index = typeof indexRaw === "number" ? indexRaw : Number.parseInt(String(indexRaw), String(indexRaw).startsWith("0x") ? 16 : 10);
+  if (!Number.isSafeInteger(index) || index < 0) return null;
+  return Object.freeze({ txHash, index });
+}
+
+function chainMetadata(cell, confirmations, requiredConfirmations) {
+  const blockHash = normalizeOptionalHex32(cell?.blockHash ?? cell?.block_hash);
+  const blockNumberRaw = cell?.blockNumber ?? cell?.block_number ?? null;
+  let blockNumber = null;
+  if (blockNumberRaw !== null && blockNumberRaw !== undefined && blockNumberRaw !== "") {
+    try { blockNumber = BigInt(blockNumberRaw).toString(); } catch { blockNumber = null; }
+  }
+  return Object.freeze({
+    outPoint: normalizeOptionalOutPoint(cell?.outPoint ?? cell?.out_point),
+    blockNumber,
+    blockHash,
+    confirmations,
+    requiredConfirmations,
+  });
+}
+
 function cellLockHash(cell) {
   if (cell?.lockHash) return String(cell.lockHash);
   const lock = cell?.cellOutput?.lock;
@@ -156,6 +194,10 @@ export function verifyAuthorizationEvidence({ evidence, publicKeyPem = "", trust
  */
 export function verifyResolvedCapabilityCell({ cell, capability, deployment, minConfirmations = 1 } = {}) {
   if (!cell || typeof cell !== "object") throw verifierError("CELL_NOT_LIVE", "capability cell is missing or already consumed");
+  const status = cellStatus(cell);
+  if (status && status !== "live") {
+    throw verifierError("CELL_NOT_LIVE", `capability cell status is ${status}, not live`, { cellStatus: status });
+  }
   if (!deployment || typeof deployment !== "object" || !deployment.codeHash || !deployment.hashType) {
     throw new Error("deployment.codeHash and deployment.hashType are required");
   }
@@ -197,7 +239,15 @@ export function verifyResolvedCapabilityCell({ cell, capability, deployment, min
     }
   }
 
-  return Object.freeze({ cell, capability: decoded, lockHash: lockHash.toLowerCase(), confirmations, requiredConfirmations: minConfirmations });
+  const chain = chainMetadata(cell, confirmations, minConfirmations);
+  return Object.freeze({
+    cell,
+    capability: decoded,
+    lockHash: lockHash.toLowerCase(),
+    confirmations,
+    requiredConfirmations: minConfirmations,
+    chain,
+  });
 }
 
 /**
@@ -243,7 +293,7 @@ export async function verifySkillPassAuthorization({
     paymentVerified,
     subject,
   });
-  return Object.freeze({ ...decision, confirmations: resolved.confirmations, requiredConfirmations: resolved.requiredConfirmations });
+  return Object.freeze({ ...decision, confirmations: resolved.confirmations, requiredConfirmations: resolved.requiredConfirmations, chain: resolved.chain });
 }
 
 /**
