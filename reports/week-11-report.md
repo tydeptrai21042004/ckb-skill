@@ -1,102 +1,149 @@
 # Week 11 Report — SkillPass, SkillPass Care, and CellFlow
 
-**Builder:** Dang  
-**Week:** 11  
-**Date:** 25 September 2026
+**Builder:** Dang Ba Ty  
+**Track:** Community Keeps Building Builders  
+**Project:** SkillPass / SkillPass Care / CellFlow  
+**SkillPass repository:** https://github.com/tydeptrai21042004/ckb-skill  
+**SkillPass public app:** https://ckb-skill.vercel.app/  
+**SkillPass Care public app:** https://skill-pass-care-api.vercel.app/  
+**CellFlow repository:** https://github.com/tydeptrai21042004/CellFlow  
+**Formal CKBuilder feedback issue:** https://github.com/Nervos-Community-Catalyst/CKBuilder-projects/issues/37  
+**Week:** 11
+
+---
 
 ## 1. Summary
 
-This week I focused on strengthening the two existing SkillPass projects and creating a new CKB developer-infrastructure project.
+Week 11 focused on three connected goals:
 
-The main outcomes were:
+1. **continue improving the two existing projects, SkillPass and SkillPass Care**;
+2. **submit SkillPass / SkillPass Care through the formal CKBuilder feedback process requested by Neon**; and
+3. **create a new CKB developer-infrastructure project, CellFlow**, focused on durable transaction recovery, reconciliation, and evidence.
 
-- submitted **SkillPass / SkillPass Care** to the formal CKBuilder feedback process through issue **#37**;
-- continued hardening the core **SkillPass** portable service-right protocol;
-- improved **SkillPass Care** as the concrete second-hand/refurbished product-coverage reference application;
-- created **CellFlow**, a new CKB-native durable transaction-operations and recovery layer for TypeScript applications;
-- deployed and improved a production-style CellFlow operations UI;
-- expanded deterministic tests and failure/recovery coverage.
+The existing SkillPass direction remains unchanged at the protocol level:
 
----
+> a portable service right is represented by a CKB Capability Cell, and the current holder is derived from live Cell state rather than from a shared entitlement-owner database.
 
-## 2. Formal CKBuilder feedback submission
+SkillPass Care remains the product-focused reference application:
 
-Following Neon's recommendation, I submitted the project through the formal CKBuilder feedback process:
+> remaining service coverage should continue across a product ownership transfer, while Care-specific quota, history, and provider workflow stay outside the base ownership protocol.
 
-**Issue #37:**  
-https://github.com/Nervos-Community-Catalyst/CKBuilder-projects/issues/37
+The new CellFlow project addresses a separate operational problem:
 
-The issue keeps the project boundary explicit:
+> after an application sends a CKB transaction, how can it safely recover from RPC timeout, ambiguous broadcast results, serverless restarts, delayed confirmation, or reorgs without blindly rebroadcasting or losing the application intent?
 
-- **SkillPass** is the portable service-right ownership and authorization layer.
-- **SkillPass Care** is a reference application for second-hand/refurbished product coverage.
-
-The feedback request focuses on:
-
-- Capability Cell lifecycle design;
-- live-owner authorization;
-- Alice → Bob transfer semantics;
-- stale-owner rejection;
-- independent provider verification;
-- multi-provider acceptance;
-- real CKB Testnet evidence;
-- the boundary between SkillPass protocol state and SkillPass Care application state.
-
-This formal review is now being used as the next validation step before any DAO funding proposal.
+Week 11 therefore did not replace the existing projects. It clarified their boundaries and added a new reusable infrastructure layer for CKB application operations.
 
 ---
 
-## 3. SkillPass improvements
+## 2. Week 10 → Week 11
 
-SkillPass remains focused on **portable service rights on CKB**.
+| Area | Week 10 | Week 11 |
+|---|---|---|
+| SkillPass | Portable service-right protocol + provider/evidence hardening | Further protocol/funding boundary cleanup, provider verification, conformance and live-state verification focus |
+| SkillPass Care | Product-focused reference prototype | Stronger ownership/Care-state separation, concurrency/idempotency hardening, canonical ownership boundary |
+| External feedback | Informal/community feedback and technical review | **Formal CKBuilder issue #37 submitted** following Neon's recommendation |
+| Funding path | Considering a small DAO Phase 1 | Formal feedback now comes first; DAO scope will be refined after review |
+| New infrastructure | Not yet separated | **CellFlow created** as a distinct durable CKB transaction-operations project |
+| Testing / reliability | Project-specific verification | CellFlow now includes a larger deterministic lifecycle/reorg/assertion/UI/deployment test suite |
+| Main remaining proof | Real Testnet Alice → Bob evidence | Still the highest-priority validation artifact |
 
-The protocol represents a service entitlement through a CKB Capability Cell, with the current controller derived from the **live Cell lock** instead of a shared entitlement-owner database.
+The main Week 11 change is therefore **structure and validation discipline**: clearer project boundaries, a formal review path, and a dedicated CKB transaction-operations layer instead of adding unrelated features to SkillPass itself.
 
-This week I continued improving the protocol around:
+---
 
-- canonical Capability V1/V2 encoding;
-- service-right policy and subject binding;
-- independent provider verification;
-- provider conformance / multi-provider acceptance;
-- live CKB discovery and ownership verification;
-- stale-owner rejection after transfer;
-- authorization evidence and auditability;
-- clearer separation between the funding-critical protocol path and optional extensions.
+## 3. Existing SkillPass proposal improved
 
-The target lifecycle remains:
+I continued improving the original SkillPass repository rather than moving all new work into the reference application.
+
+The current SkillPass snapshot keeps the funding candidate intentionally narrow:
+
+1. canonical SkillPass protocol release;
+2. real CKB Testnet issuance and Alice → Bob transfer evidence;
+3. independently operated provider verification;
+4. SkillPass Care as a reference product;
+5. external integration and small provider/user validation.
+
+### 3.1 Capability protocol and ownership model
+
+The core model remains CKB-native:
+
+- immutable entitlement identity and policy fields are represented through Capability Cell data / Type Script rules;
+- the **live Cell lock** is the authoritative current controller;
+- ownership changes through Cell consumption and successor output creation;
+- stale state is rejected through live-state/outpoint resolution;
+- providers independently verify the same public ownership state.
+
+Capability V2 continues to support application-specific subject/policy commitments without moving mutable Care application state into the base protocol.
+
+### 3.2 Independent provider verification
+
+The current repository includes a stronger provider-facing surface around:
+
+- trusted issuer configuration;
+- accepted Capability Type Script deployment;
+- provider-owned service policy;
+- current live Cell discovery;
+- requester/lock ownership checks;
+- portable authorization evidence;
+- provider conformance testing.
+
+The intention remains that providers should not depend on a shared SkillPass entitlement-owner database.
+
+### 3.3 Clearer funding and non-goal boundary
+
+The current repository explicitly treats delegation, agent SDKs, service gateway extensions and Fiber/x402 settlement as optional extensions rather than Phase-1 acceptance requirements.
+
+The core funding proof is still much narrower:
 
 ```text
-Alice owns the live Capability Cell
+Alice owns live Capability Cell
         |
         +--> Provider A: ALLOW
         +--> Provider B: ALLOW
         |
-        | Alice transfers the live Cell
+        | transfer on CKB
         v
-Bob owns the successor Cell
+Bob owns successor Cell
         |
         +--> Alice: DENY
         +--> Bob @ Provider A: ALLOW
         +--> Bob @ Provider B: ALLOW
 ```
 
-The current funding-oriented scope is intentionally narrower than the full repository and prioritizes real Testnet evidence, independently operated provider verification, and external integration validation.
-
-**Demo:**  
-https://ckb-skill.vercel.app/
+This narrower boundary makes the project easier to review and keeps the CKB-specific claim testable.
 
 ---
 
-## 4. SkillPass Care improvements
+## 4. SkillPass Care improved
 
-SkillPass Care continues to act as the more product-oriented reference application for **second-hand/refurbished product-service coverage**.
+SkillPass Care remains a separate reference application built around the SkillPass ownership boundary.
 
-The application keeps ownership and mutable product/service state separate:
+The current Care design keeps two kinds of state separate:
 
-- **SkillPass / CKB** is authoritative for the current portable service-right owner.
-- **SkillPass Care** is authoritative for product commitment, coverage plan, remaining service units, service history, provider workflow, and issuer suspension/revocation.
+### SkillPass / CKB state
 
-The reference lifecycle is:
+Authoritative for:
+
+- current portable-right owner;
+- live ownership state;
+- ownership transfer;
+- stale-owner rejection.
+
+### SkillPass Care application state
+
+Authoritative for:
+
+- product commitment;
+- Care plan;
+- remaining service units;
+- service history;
+- provider workflow;
+- issuer suspension/revocation.
+
+This means Care does not become the shared entitlement-owner database.
+
+### 4.1 Current reference lifecycle
 
 ```text
 STANDARD_90D issued to Alice
@@ -111,138 +158,315 @@ Alice transfers the SkillPass right to Bob
         +--> Alice's old ownership becomes stale
 
 After transfer
+        |
         +--> Alice: DENY
         +--> Provider B verifies Bob
         +--> Bob uses one service unit
               2 -> 1
 ```
 
-This week the Care implementation was improved around:
+### 4.2 Reliability work in the current Care snapshot
 
-- canonical ownership integration boundaries;
-- provider-side verification;
-- service-event evidence;
+The current repository includes additional hardening around:
+
+- owner-approved request binding;
+- typed service-event records;
+- before/after version tracking;
 - request/evidence identity binding;
-- idempotent retry behavior;
-- PostgreSQL row locking and optimistic versioning;
-- atomic event insertion;
-- cross-provider service continuity;
-- fail-closed behavior when a real canonical SkillPass binding is unavailable.
+- exact-retry idempotency;
+- conflict detection for changed retry details;
+- shared transition logic between memory and PostgreSQL stores;
+- row locking plus optimistic versioning;
+- atomic service-event insertion;
+- ownership re-check before service consumption;
+- serialized in-memory entitlement mutations;
+- cross-provider Alice/Provider A → Bob/Provider B continuity tests.
 
-**Demo:**  
-https://skill-pass-care-api.vercel.app/
+The canonical CKB production mode intentionally remains **fail closed** unless a real `SkillPassOwnershipPort` is supplied.
+
+That is important because a production-looking Care UI should not be presented as proof that canonical CKB ownership is already connected.
 
 ---
 
-## 5. New project — CellFlow
+## 5. Formal CKBuilder feedback process
 
-This week I also created **CellFlow**, a separate CKB-native developer-infrastructure project.
+Following Neon's recommendation, I submitted SkillPass / SkillPass Care through the formal CKBuilder project-review process:
 
-CellFlow targets a different problem from SkillPass:
+https://github.com/Nervos-Community-Catalyst/CKBuilder-projects/issues/37
 
-> what happens after an application sends a CKB transaction but the result is ambiguous because of RPC timeout, serverless restart, delayed confirmation, or reorg?
+The issue keeps the boundary explicit:
 
-CellFlow sits after transaction construction/signing and before final application state.
+- **SkillPass** = portable service-right ownership and authorization layer;
+- **SkillPass Care** = second-hand/refurbished product-coverage reference application.
 
-It provides:
+The main questions submitted for feedback include:
 
-- durable business intent persistence;
-- deterministic transaction identity before broadcast;
-- separated submission / chain / workflow states;
-- CKB RPC reconciliation;
-- ambiguous-submit recovery without blind rebroadcast;
-- configurable confirmation depth;
-- explicit reorg handling;
-- expected Cell verification;
-- current live-Cell verification;
-- deterministic evidence export;
-- signed webhooks;
-- optimistic concurrency;
-- reconciliation and webhook worker leases;
-- Vercel durable workflow integration;
-- a production-style operations dashboard;
-- API key / webhook management;
-- an interactive local-only SkillPass lifecycle example.
+- whether the Capability Cell lifecycle is sufficiently clear and CKB-native;
+- whether live-owner authorization is defined correctly;
+- how much real Testnet evidence should be required before funding discussion;
+- what providers should independently pin and verify;
+- how the SkillPass / Care boundary should be kept narrow;
+- whether the second-owner product-coverage use case is a strong reference application.
 
-The current operational model is:
+This formal review now comes before any DAO proposal.
+
+### Evidence — formal CKBuilder submission
+
+![CKBuilder formal feedback issue #37](./evidence/02-ckbuilder-feedback-issue-37.png)
+
+The screenshot shows the submitted CKBuilder-projects issue **#37** with the SkillPass / SkillPass Care project summary.
+
+---
+
+## 6. New project — CellFlow
+
+Week 11 also introduced **CellFlow**, a separate CKB-native developer-infrastructure project.
+
+CellFlow is not another entitlement protocol. It addresses transaction operations after an application has already built/signed a transaction.
+
+Its role is:
 
 ```text
-01 Intent     -> persist business intent
-02 Identity   -> determine tx hash before broadcast
-03 Reconcile  -> observe canonical CKB state
-04 Verify     -> verify the expected live Cell
+CKB application / wallet
+        |
+        | build + sign transaction
+        v
+CellFlow
+        |
+        +--> persist business intent
+        +--> know tx identity before broadcast
+        +--> reconcile CKB RPC state
+        +--> survive restart / ambiguous response
+        +--> wait for project confirmation policy
+        +--> verify expected Cell state
+        +--> emit evidence / signed webhook
 ```
 
-CellFlow is intentionally **not** a wallet, signer, custody system, explorer, or generic blockchain indexer.
+### 6.1 Main implemented capabilities
 
-### Stability work
+The current V0.2 snapshot includes:
 
-The current repository includes **47 deterministic tests** covering lifecycle, reorg, assertions, UI/deployment contracts, and hardening scenarios.
+- strict TypeScript state-machine/domain layer;
+- PostgreSQL/Neon durable repository;
+- `(project_id, intent_id)` idempotency;
+- separated **submission**, **chain**, and **workflow** status axes;
+- CKB RPC reconciliation;
+- one RPC endpoint per observation;
+- configurable confirmation policy;
+- explicit reorg handling;
+- deterministic transaction identity before broadcast;
+- ambiguous-submit recovery without blind rebroadcast;
+- expected output Cell assertions;
+- current live-Cell verification;
+- atomic state/event/webhook outbox writes;
+- webhook/reconciliation leases;
+- optimistic concurrency retry;
+- encrypted per-endpoint webhook secrets;
+- signed webhook delivery;
+- deterministic evidence export;
+- Vercel Workflow durable reconciliation;
+- Vercel Cron repair path;
+- operator CLI;
+- API-key and webhook management;
+- production-style operations dashboard;
+- local-only SkillPass Alice → Bob walkthrough.
 
-The UI was also upgraded with:
+### 6.2 Current test coverage
 
-- database and CKB RPC health;
-- operations KPIs;
-- intent search/filtering;
-- lifecycle status views;
-- audit/detail drawer;
-- expected-Cell assertion visibility;
-- API-key management;
-- webhook management;
-- local-only guided SkillPass Alice → Bob example.
+The current CellFlow snapshot reports **47 deterministic tests** covering:
 
-**Repository:**  
-https://github.com/tydeptrai21042004/CellFlow
+- transaction lifecycle transitions;
+- ambiguous submission;
+- reorg handling;
+- confirmation depth;
+- expected Cell assertions;
+- live Cell assertions;
+- hardening contracts;
+- UI/deployment contracts.
+
+The focus is not just whether the happy path works, but whether the system remains consistent across retries, failures, and duplicated serverless workers.
+
+### Evidence — deployed CellFlow operations UI
+
+![CellFlow V0.2 operations UI](./evidence/01-cellflow-v02-operations-ui.png)
+
+The screenshot demonstrates the deployed CellFlow V0.2 operations interface, including the durable transaction-operations model, project connection area, and CKB RPC health surface.
+
+**Evidence boundary:** in this captured screen, the UI shows `CKB RPC HEALTHY` while the database indicator is `DB DOWN`. Therefore this screenshot is evidence of the deployed CellFlow UI and RPC-facing operations surface, **not** evidence that the database persistence layer was healthy at the exact moment of capture.
 
 ---
 
-## 6. Evidence
+## 7. Project boundaries after Week 11
 
-Attached evidence screenshot:
+The three projects now have clearer and non-overlapping responsibilities:
 
-**`week-11-evidence.png`**
-
-It contains:
-
-1. the deployed CellFlow V0.2 operations UI; and
-2. the submitted CKBuilder feedback issue #37 for SkillPass / SkillPass Care.
-
----
-
-## 7. Current project boundaries
-
-The three projects now have clearer responsibilities:
-
-| Project | Responsibility |
+| Project | Main responsibility |
 |---|---|
 | **SkillPass** | Portable service-right ownership and authorization on CKB |
-| **SkillPass Care** | Product-specific coverage, quota, service history, and provider workflow |
-| **CellFlow** | Durable CKB transaction lifecycle, recovery, reconciliation, and evidence |
+| **SkillPass Care** | Product-specific coverage, quota, service history, issuer/provider workflow |
+| **CellFlow** | Durable CKB transaction lifecycle, recovery, reconciliation, expected-state verification and evidence |
 
-This separation is intended to prevent overlapping responsibilities:
+The simplest distinction is:
 
 ```text
 SkillPass
-   = who currently controls the service right?
+   = who currently controls the portable service right?
 
 SkillPass Care
-   = what product/service coverage remains?
+   = what product/service coverage remains and what has been consumed?
 
 CellFlow
    = what happened to the CKB transaction and expected Cell state?
 ```
 
+This separation is intentional. CellFlow should not become SkillPass, and SkillPass should not become a generic transaction workflow engine.
+
 ---
 
-## 8. Next steps
+## 8. Important honesty boundary
 
-For Week 12, the priority is validation rather than adding unrelated features:
+Week 11 improves implementation quality and project structure, but several important claims are still intentionally **not** treated as complete.
 
-1. complete a real **CKB Testnet Alice → Bob lifecycle** for SkillPass;
-2. record transaction/outpoint evidence and old-owner rejection;
-3. validate independent provider verification against the same canonical ownership state;
-4. connect the SkillPass Care lifecycle more directly to canonical SkillPass ownership;
-5. use CellFlow to capture durable transaction/reconciliation evidence for the Testnet lifecycle;
-6. collect and respond to feedback from CKBuilder issue #37 and the related forum discussion.
+### Demonstrated / implemented
 
-The goal is to move from a strong implementation/demo state toward **externally reviewable Testnet evidence and independent integration validation**.
+- public SkillPass application;
+- product-focused SkillPass Care application;
+- formal CKBuilder feedback issue #37;
+- provider-verification and evidence-oriented SkillPass architecture;
+- Care application-state / ownership-state separation;
+- CellFlow durable transaction-operations implementation;
+- CellFlow production-style UI and deterministic test suite.
+
+### Still not claimed as complete
+
+- final real CKB Testnet SkillPass issuance + Alice → Bob transfer evidence;
+- retained transaction/outpoint evidence proving the full ownership transition;
+- externally operated provider using the canonical live SkillPass state;
+- production Care binding to a real canonical SkillPass ownership adapter;
+- that the CellFlow UI screenshot alone proves every persistence/reconciliation path in a live production environment.
+
+The next phase should close these validation gaps rather than add broad new feature categories.
+
+---
+
+## 9. Week 11 evidence checklist
+
+| Evidence | Status |
+|---|---|
+| SkillPass repository improved | Done in current snapshot |
+| SkillPass provider-verification / conformance direction | Done in current snapshot |
+| SkillPass Care repository improved | Done in current snapshot |
+| Care ownership/application-state boundary | Done in current snapshot |
+| Formal CKBuilder feedback issue #37 | **Done** |
+| CKBuilder issue screenshot | **Included** |
+| New CellFlow project | **Done** |
+| CellFlow durable lifecycle/recovery implementation | Done in current snapshot |
+| CellFlow operations UI | **Deployed / screenshot included** |
+| CellFlow deterministic tests | **47 reported in current snapshot** |
+| Real SkillPass Alice → Bob Testnet transaction evidence | **Not complete; next priority** |
+| Independent external provider using live canonical SkillPass state | **Not complete; next priority** |
+| Production Care → canonical SkillPass binding | **Not complete; fail-closed by design** |
+
+---
+
+## 10. What I learned this week
+
+### Formal feedback should come before funding discussion
+
+Neon's recommendation helped clarify the process. The correct next step is to let the formal CKBuilder review and forum discussion produce technical recommendations before finalizing a DAO proposal.
+
+### Related products still need explicit boundaries
+
+SkillPass and SkillPass Care are related, but they should not be presented as the same system. SkillPass is the ownership/authorization protocol; Care is a vertical product with its own mutable business state.
+
+### Operational reliability is a separate infrastructure problem
+
+The CellFlow work showed that transaction submission, ownership protocol design, and application business state are different concerns.
+
+A CKB application may know exactly what transaction it wants to send and still need a durable answer to:
+
+> was the transaction submitted, observed, committed, reorged, confirmed, and did the expected Cell remain live?
+
+This deserves a reusable layer rather than being reimplemented independently in every application.
+
+### Testnet evidence remains more valuable than another feature expansion
+
+The main remaining proof for SkillPass is still the same: a reproducible real-chain Alice → Bob lifecycle with retained evidence and independent provider verification.
+
+---
+
+## 11. Next steps
+
+### Priority 1 — Real SkillPass Testnet lifecycle
+
+Complete and retain evidence for:
+
+1. issue one real service-right Cell;
+2. Alice is the initial live owner;
+3. Provider A independently verifies Alice;
+4. Alice transfers the Cell to Bob;
+5. the old Alice outpoint becomes stale;
+6. Alice is denied after confirmation;
+7. Bob is accepted;
+8. Provider B independently reaches the same ownership result.
+
+### Priority 2 — Connect Care to canonical SkillPass ownership
+
+Use the canonical SkillPass ownership result as the ownership authority while leaving Care quota/history/provider workflow in Care's own application state.
+
+### Priority 3 — Use CellFlow for retained transaction evidence
+
+Use CellFlow to record:
+
+- business intent;
+- deterministic transaction identity;
+- submission/reconciliation states;
+- confirmation depth;
+- expected/live Cell checks;
+- evidence export.
+
+This would make the real SkillPass Testnet lifecycle easier to audit and reproduce.
+
+### Priority 4 — Respond to CKBuilder issue #37 feedback
+
+Convert external review comments into:
+
+- protocol changes;
+- explicit non-goals;
+- Testnet acceptance criteria;
+- funding-scope revisions.
+
+### Priority 5 — External provider validation
+
+Ask at least one external reviewer/provider to run the verifier independently rather than relying only on the main application deployment.
+
+---
+
+## 12. Questions for community / mentor feedback
+
+1. Does the current split between **SkillPass**, **SkillPass Care**, and **CellFlow** make the project boundaries clearer?
+2. For the first funding milestone, what minimum real Testnet evidence would be considered sufficient for the Alice → Bob ownership lifecycle?
+3. Should SkillPass Care remain only a reference application, or is the product-coverage direction strong enough to be evaluated as a separate product proposal later?
+4. Is CellFlow's focus on ambiguous-submit recovery, reconciliation, live-Cell verification, and evidence sufficiently distinct from existing CKB developer tooling?
+5. Which one of these three areas should receive the strongest focus before any DAO proposal is submitted?
+
+---
+
+## 13. Week 11 conclusion
+
+Week 11 was mainly about **hardening, clearer project boundaries, and formal validation**.
+
+I improved the two existing projects:
+
+- **SkillPass** as the CKB-native portable service-right protocol;
+- **SkillPass Care** as the second-hand/refurbished product-coverage reference application.
+
+I also followed Neon's recommendation and submitted the work through the formal CKBuilder feedback process in issue #37.
+
+Finally, I created **CellFlow** as a separate CKB transaction-operations layer for durable intent tracking, ambiguous-submit recovery, reconciliation, expected/live Cell verification, and audit evidence.
+
+The current direction can be summarized as:
+
+> **SkillPass determines portable ownership, SkillPass Care manages product-specific service state, and CellFlow makes the underlying CKB transaction lifecycle durable and auditable.**
+
+The next milestone should be a reproducible real CKB Testnet lifecycle with retained transaction/outpoint evidence and independent provider verification, using the formal feedback from issue #37 to refine the exact acceptance criteria.
