@@ -6,7 +6,9 @@ const warnings = [];
 const required = [
   ".env.example", ".env.testnet.example", ".env.live.example", ".env.production.example", ".env.vercel.example",
   ".gitignore", ".dockerignore", ".github/workflows/security-readiness.yml",
+  ".github/workflows/protocol.yml", ".github/workflows/contract.yml", ".github/workflows/web.yml", ".github/workflows/funding-release.yml",
   "FUNDING.md", "HOW_TO_VERIFY.md", "docs/FUNDING_ACCEPTANCE_MATRIX.md", "docs/REFERENCE_APPLICATIONS.md",
+  "docs/LOCK_OWNERSHIP_SECURITY.md", "docs/FUNDING_EVIDENCE.md", "setup-funding-env.sh", "prepare-funding-release.sh",
   "docs/SKILLPASS_CARE_BOUNDARY.md", "reference-apps/skillpass-care.json", "evidence/testnet/README.md",
   "packages/provider-conformance/src/index.mjs", "packages/provider-conformance/README.md"
 ];
@@ -28,10 +30,9 @@ if (careProfile.toolingPackages?.["@skillpass/provider-conformance"] !== "1.0.0"
 
 const deployment = JSON.parse(await readFile("deployments/testnet.example.json", "utf8"));
 if (!String(deployment.codeHash || "").includes("REPLACE")) warnings.push("testnet.example.json no longer looks like a placeholder template; verify naming/status");
-try {
-  await access("package-lock.json");
-} catch {
-  warnings.push("package-lock.json is still missing; generate it from a networked environment before the final funding-candidate tag");
+for (const lock of ["package-lock.json", "contracts/capability-type/Cargo.lock"]) {
+  try { await access(lock); }
+  catch { failures.push(`missing ${lock}; run ./prepare-funding-release.sh on the pinned Node 24/Rust 1.95.0 toolchain`); }
 }
 
 if (warnings.length) {

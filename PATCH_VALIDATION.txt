@@ -1,0 +1,23 @@
+Patch validation performed on 2026-09-27
+
+PASS: bash -n setup-funding-env.sh
+PASS: bash -n prepare-funding-release.sh
+PASS: node scripts/security-preflight.mjs
+PASS: node scripts/dependency-lock.mjs --check
+PASS: 34/34 targeted tests
+  - tests/funding-phase1-hardening.test.mjs
+  - tests/security-readiness-v1.4.test.mjs
+  - tests/production-deployment.test.mjs
+  - tests/deployment-assets.test.mjs
+  - tests/v1.6-portable-service-ownership.test.mjs
+PASS: setup-funding-env.sh testnet generated a 64-hex facilitator token and preserved deployment placeholders
+PASS: scripts/release.mjs refuses to create a funding release while package-lock.json or contracts/capability-type/Cargo.lock is missing
+PASS: prepare-funding-release.sh refuses the wrong Node major version
+
+Environment limitation:
+- Node available in sandbox: v22.16.0
+- Repo requires: Node 24.x
+- npm registry DNS unavailable from sandbox
+- cargo unavailable in sandbox
+
+No Testnet transaction hashes, provider signatures, wallet secrets, database URLs, or private keys were fabricated.

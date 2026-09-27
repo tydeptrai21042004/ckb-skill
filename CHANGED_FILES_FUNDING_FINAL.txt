@@ -1,0 +1,31 @@
+SkillPass funding-readiness changed/new files
+
+RESTORED / ADDED
+.dockerignore
+.env.example
+.env.live.example
+.env.production.example
+.env.testnet.example
+.env.vercel.example
+.gitignore
+.github/workflows/security-readiness.yml
+.github/workflows/protocol.yml
+.github/workflows/contract.yml
+.github/workflows/web.yml
+.github/workflows/funding-release.yml
+docs/LOCK_OWNERSHIP_SECURITY.md
+docs/FUNDING_EVIDENCE.md
+setup-funding-env.sh
+prepare-funding-release.sh
+FUNDING_PATCH_README.md
+
+UPDATED
+scripts/release.mjs
+scripts/funding-structure.mjs
+dependency-versions.lock.json
+
+INTENTIONALLY NOT GENERATED IN THIS SANDBOX
+package-lock.json
+contracts/capability-type/Cargo.lock
+
+Reason: the sandbox has Node 22 instead of the repo-pinned Node 24 and cannot reach npm registry; Cargo is not installed. Run ./prepare-funding-release.sh on Node 24 + Rust 1.95.0 with registry access. The funding/release gates now fail closed until both lockfiles exist.
