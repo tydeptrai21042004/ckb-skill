@@ -75,11 +75,22 @@ export function validateTransition({ inputData, outputData, inputLockHash, outpu
   return after;
 }
 
+/** Validate the Type-Script side of owner surrender. The CKB lock on the
+ * consumed input proves owner authorization; this reference model verifies the
+ * retiring Capability is well formed and belongs to the same script identity.
+ */
+export function validateSurrender({ inputData, typeArgs }) {
+  const cap = decodeCapability(inputData);
+  const args = decodeTypeArgs(typeArgs);
+  if (!equalHex(cap.issuerId, args.issuerId) || !equalHex(cap.capabilityId, args.capabilityId)) {
+    throw new ProtocolError("ARGS_IDENTITY_MISMATCH", "input CapabilityData does not match Type Script args");
+  }
+  return cap;
+}
+
 export function validateGroupShape({ inputCount, outputCount }) {
   if (inputCount === 0 && outputCount === 1) return "ISSUE";
   if (inputCount === 1 && outputCount === 1) return "TRANSITION";
-  if (inputCount === 1 && outputCount === 0) {
-    throw new ProtocolError("BURN_FORBIDDEN", "capability destruction is not enabled in capability v1");
-  }
-  throw new ProtocolError("INVALID_GROUP_SHAPE", `expected 0->1 or 1->1, got ${inputCount}->${outputCount}`);
+  if (inputCount === 1 && outputCount === 0) return "SURRENDER";
+  throw new ProtocolError("INVALID_GROUP_SHAPE", `expected 0->1, 1->1, or 1->0, got ${inputCount}->${outputCount}`);
 }

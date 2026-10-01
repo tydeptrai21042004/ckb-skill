@@ -236,6 +236,12 @@ export function verifySubjectBinding({ capability, capabilityOwnerLockHash, subj
   if (!equalHex(subjectOwner, capabilityOwner)) {
     throw new ServiceRightError("SUBJECT_OWNER_MISMATCH", "service right and bound subject no longer have the same owner");
   }
+  if (capability.bindingMode === BINDING_ATOMIC && subject.atomicBindingVerified !== true) {
+    throw new ServiceRightError(
+      "ATOMIC_BINDING_UNVERIFIED",
+      "BINDING_ATOMIC requires a subject-specific adapter to prove the co-transfer invariant; equal current owners alone are insufficient",
+    );
+  }
   return Object.freeze({ bound: true, subject: Object.freeze({ id: subjectId, lockHash: subjectOwner }), bindingMode: capability.bindingMode });
 }
 

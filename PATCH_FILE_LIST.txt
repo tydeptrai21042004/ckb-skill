@@ -1,0 +1,33 @@
+CKB SkillPass ecosystem-hardening patch — changed files only
+Generated: 2026-10-01
+
+.dockerignore
+.env.example
+.env.live.example
+.env.production.example
+.env.testnet.example
+.env.vercel.example
+.gitignore
+.github/workflows/security-readiness.yml
+.github/workflows/protocol.yml
+.github/workflows/contract.yml
+.github/workflows/web.yml
+.github/workflows/funding-release.yml
+CHANGELOG.md
+CKB_ECOSYSTEM_HARDENING_PATCH.md
+README.md
+STATUS.md
+contracts/capability-type/src/main.rs
+contracts/capability-type/tests/contract.rs
+dependency-versions.lock.json
+docs/CAPABILITY_V2.md
+docs/IDENTIFIERS_AND_COMMITMENTS.md
+docs/state-machine.md
+packages/ckb-client/package.json
+packages/ckb-client/src/live.ts
+packages/ckb-client/src/testnet-example.ts
+packages/protocol-core/src/index.mjs
+packages/protocol-core/test/transition.test.mjs
+packages/service-rights/src/index.mjs
+tests/capability-v2-market-direction.test.mjs
+tests/ckb-client-lifecycle-source.test.mjs

@@ -1,0 +1,17 @@
+Validation performed in the working environment:
+
+PASS: 38 targeted JS regression/readiness tests
+PASS: scripts/security-preflight.mjs
+PASS: scripts/dependency-lock.mjs --check
+PASS: node --check on modified .mjs test/protocol files
+
+Not executed here:
+- Rust/ckb-testtool contract suite: pinned Cargo/Rust toolchain is not installed in this runtime.
+- @skillpass/ckb-client TypeScript typecheck: external workspace dependencies were not installed; npm package-lock generation timed out and no lockfile was fabricated.
+
+Before Testnet deployment:
+1. use Node 24.x and Rust 1.95.0;
+2. run ./prepare-funding-release.sh;
+3. run make -C contracts/capability-type test;
+4. rebuild and deploy the changed Capability contract as a NEW code cell;
+5. update accepted deployment codeHash/hashType and collect real Testnet evidence.

@@ -7,7 +7,7 @@ Capability v2 is a backward-compatible extension of SkillPass' compact service-r
 V2 keeps the V1 identity fields and adds immutable commitments:
 
 - `subjectType`: NONE, SPORE, DOB, AGENT, DEVICE, or CUSTOM.
-- `bindingMode`: HOLDER, SUBJECT_OWNER, ATOMIC, or LICENSE.
+- `bindingMode`: HOLDER, SUBJECT_OWNER, ATOMIC (reserved/adapter-proven), or LICENSE.
 - `subjectId`: 32-byte application-defined subject commitment.
 - `policyHash`: 32-byte commitment to the commercial/authorization policy accepted at issuance.
 
@@ -15,9 +15,11 @@ The Capability Type Script keeps `(issuerId, capabilityId)` in args, so provider
 
 ## Security semantics
 
-`SUBJECT_OWNER` means providers must resolve the committed subject from fresh state and verify that the subject owner and Capability owner are the same. `ATOMIC` is intentionally fail-closed in the generic transfer builder: a subject-aware adapter must construct the co-transfer. The current Capability contract protects the V2 binding bytes from mutation, but does not pretend to understand every possible subject protocol. A production atomic adapter must validate the target subject protocol and co-transfer invariant.
+`SUBJECT_OWNER` means providers must resolve the committed subject from fresh state and verify that the subject owner and Capability owner are the same.
 
-This separation avoids hard-coding Spore, DOB, or one agent standard into the base Capability contract.
+`ATOMIC` is a **reserved adapter-proven mode**, not a guarantee supplied by the generic Capability Type Script. The base contract only keeps the binding bytes immutable; it does not parse or co-validate arbitrary subject protocols. The generic issue/transfer builder therefore refuses to create or transfer new `ATOMIC` rights. A subject-specific adapter must both construct the subject+Capability transition and return explicit `atomicBindingVerified=true` evidence to provider verification. Mere equality of current owners is insufficient.
+
+This separation avoids hard-coding Spore, DOB, or one agent standard into the base Capability contract while also avoiding a misleading atomicity claim.
 
 ## Provider federation
 

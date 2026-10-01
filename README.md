@@ -1,6 +1,6 @@
 # SkillPass
 
-**Portable service rights on CKB.**
+**CKB-native portable service entitlements.**
 
 SkillPass represents a service entitlement as a CKB Capability Cell. The current holder is derived from the **live Cell lock**, so independent providers can recognize an ownership change without synchronizing a shared entitlement-owner database.
 
@@ -38,6 +38,7 @@ SkillPass uses CKB primitives directly:
 - **Cell data / Type Script** — immutable service-right identity and policy fields;
 - **Cell lock** — authoritative current controller;
 - **Cell consumption + successor output** — ownership transition;
+- **owner surrender (`Capability -> ordinary Cell`)** — retire the right and reclaim occupied CKB capacity;
 - **outpoint/live-state resolution** — stale-owner rejection;
 - **provider-side verification** — independent authorization from public chain state.
 
@@ -76,7 +77,9 @@ SkillPass remains authoritative for **portable ownership and authorization**. Ca
 | `@skillpass/ckb-client` | live CKB discovery, issuance and transfer building |
 | `@skillpass/auth-protocol` | canonical request/authorization intent |
 
-Delegation, agent SDK, service gateway, and Fiber/x402 settlement are useful extensions but are **not part of the Phase-1 protocol acceptance scope**. SkillPass does not attempt to replace Fiber payments, DID/reputation systems, verifiable credentials, or generic token-gating frameworks. See [`docs/non-goals.md`](./docs/non-goals.md) for the overlap boundary.
+Delegation, agent SDK, service gateway, and Fiber/x402 settlement are useful **integration adapters**, but are **not part of the Phase-1 entitlement protocol acceptance scope**. SkillPass does not attempt to replace CCC transaction/wallet infrastructure, Spore digital objects, Fiber payments, x402 payment schemes, DID/reputation systems, verifiable credentials, or generic token-gating frameworks. See [`docs/non-goals.md`](./docs/non-goals.md) for the overlap boundary.
+
+The intended composition is: **CCC = CKB interaction**, **Spore/other subject protocols = optional bound object**, **SkillPass = portable entitlement/authorization**, and **Fiber/x402 = optional per-use payment after entitlement succeeds**.
 
 ## Verification
 

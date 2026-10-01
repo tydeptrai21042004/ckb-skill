@@ -1,4 +1,4 @@
-import { ccc } from "@ckb-ccc/connector-react";
+import { ccc } from "@ckb-ccc/ccc";
 import {
   decodeCapability,
   encodeCapabilityHex,
@@ -121,6 +121,9 @@ export async function buildIssueCapabilityTx(params: IssueParams) {
 
   const capabilityVersion = params.version ?? 1;
   if (![1, 2].includes(capabilityVersion)) throw new Error("capability version must be 1 or 2");
+  if (capabilityVersion === 2 && params.bindingMode === BINDING_ATOMIC) {
+    throw new Error("BINDING_ATOMIC is reserved for a subject-specific adapter that can prove the co-transfer invariant; the generic Capability contract does not enforce subject atomicity");
+  }
   const v2Fields = capabilityVersion === 2 ? {
     subjectType: params.subjectType,
     bindingMode: params.bindingMode,
@@ -266,6 +269,62 @@ export async function buildTransferCapabilityTx(params: {
   if (tx.outputsData[0] !== cell.outputData) throw new Error("capability data changed while completing transfer fee");
   if (!output.lock.eq(recipient.script)) throw new Error("capability recipient lock changed while completing transfer fee");
   return tx;
+}
+
+/**
+ * Retire a Capability and return its occupied capacity to an ordinary Cell
+ * controlled by the same owner. Surrender is allowed even after expiry and
+ * does not require FLAG_TRANSFERABLE because no new owner is created.
+ */
+export async function buildSurrenderCapabilityTx(params: {
+  signer: ccc.Signer;
+  deployment: Deployment;
+  outPoint: ccc.OutPointLike;
+}) {
+  validateDeployment(params.deployment);
+  const cell = await params.signer.client.getCellLive(params.outPoint, true, true);
+  if (!cell) throw new Error("Capability cell is not live (missing or consumed)");
+  const type = cell.cellOutput.type;
+  if (!type) throw new Error("Cell has no Capability Type Script");
+  if (type.codeHash !== params.deployment.codeHash || type.hashType !== params.deployment.hashType) {
+    throw new Error("Cell is not from the configured SkillPass deployment");
+  }
+
+  const capability = decodeCapability(cell.outputData);
+  if (type.args.toLowerCase() !== encodeTypeArgs(capability).toLowerCase()) {
+    throw new Error("Capability data does not match Type Script identity args");
+  }
+  const signerAddress = await params.signer.getRecommendedAddressObj();
+  if (!cell.cellOutput.lock.eq(signerAddress.script)) {
+    throw new Error("connected signer is not the current capability owner");
+  }
+
+  const tx = ccc.Transaction.default();
+  addCapabilityCellDep(tx, params.deployment);
+  tx.addInput(cell);
+  // Remove the Capability Type Script while returning the occupied capacity to
+  // the same owner. Fee completion may add ordinary funding/change Cells.
+  tx.addOutput(
+    {
+      capacity: cell.cellOutput.capacity,
+      lock: cell.cellOutput.lock,
+    },
+    "0x",
+  );
+  await tx.completeFeeBy(params.signer);
+
+  if (!tx.inputs[0]?.previousOutput || tx.inputs[0].previousOutput.txHash !== cell.outPoint.txHash || tx.inputs[0].previousOutput.index !== cell.outPoint.index) {
+    throw new Error("capability input changed while completing surrender fee");
+  }
+  if (tx.outputs.some((output) => isCapabilityType(output.type, params.deployment))) {
+    throw new Error("surrender must not create a successor SkillPass capability Cell");
+  }
+  for (const input of tx.inputs.slice(1)) {
+    if (isCapabilityType(input.cellOutput?.type, params.deployment)) {
+      throw new Error("refusing to consume another SkillPass capability Cell as a surrender fee input");
+    }
+  }
+  return { tx, capability };
 }
 
 export async function sendAndWait(signer: ccc.Signer, tx: ccc.Transaction, timeoutMs = 120_000) {

@@ -1,3 +1,12 @@
+## v1.8.1 — CKB protocol hardening — 2026-10-01
+
+- Added owner-authorized Capability surrender (`1 -> 0` Type Script group) so retired/expired rights can release occupied CKB capacity.
+- Added a CCC surrender transaction builder that returns capacity to an ordinary owner Cell and refuses accidental consumption of a second Capability as a fee input.
+- Hardened `BINDING_ATOMIC`: generic issuance is refused and provider verification requires explicit subject-adapter proof instead of treating owner equality as atomicity.
+- Added canonical service/policy commitment derivation guidance and clarified CCC/Spore/Fiber/x402 ecosystem boundaries.
+- Restored safe hidden environment/ignore/CI assets omitted from the exported ZIP.
+- Kept Capability V1/V2 binary encoding unchanged.
+
 ## v1.8.0 — External Adoption & Evidence — 2026-09-16
 
 - Added provider-attested authorization evidence, token-protected retrieval, and offline verification.

@@ -5,7 +5,7 @@ import {
   encodeCapabilityHex,
   encodeTypeArgs,
 } from "../../capability-codec/src/index.mjs";
-import { validateGroupShape, validateIssue, validateTransition } from "../src/index.mjs";
+import { validateGroupShape, validateIssue, validateSurrender, validateTransition } from "../src/index.mjs";
 
 const ISSUER = `0x${"11".repeat(32)}`;
 const CAP_ID = `0x${"22".repeat(32)}`;
@@ -85,9 +85,19 @@ test("every immutable field mutation fails", () => {
   }
 });
 
-test("group shape accepts only issue and one-to-one transition", () => {
+test("group shape accepts issue, one-to-one transition, and owner surrender", () => {
   assert.equal(validateGroupShape({ inputCount: 0, outputCount: 1 }), "ISSUE");
   assert.equal(validateGroupShape({ inputCount: 1, outputCount: 1 }), "TRANSITION");
-  assert.throws(() => validateGroupShape({ inputCount: 1, outputCount: 0 }), /destruction is not enabled/);
-  assert.throws(() => validateGroupShape({ inputCount: 0, outputCount: 2 }), /expected 0->1 or 1->1/);
+  assert.equal(validateGroupShape({ inputCount: 1, outputCount: 0 }), "SURRENDER");
+  assert.throws(() => validateGroupShape({ inputCount: 0, outputCount: 2 }), /expected 0->1, 1->1, or 1->0/);
+});
+
+test("surrender validates identity but does not require transferability or active expiry", () => {
+  const retired = validateSurrender({ inputData: data({ flags: 0, expiry: 1n }), typeArgs: ARGS });
+  assert.equal(retired.capabilityId, CAP_ID);
+  assert.equal(retired.flags, 0);
+  assert.throws(
+    () => validateSurrender({ inputData: data({ capabilityId: OWNER_B }), typeArgs: ARGS }),
+    /does not match Type Script args/,
+  );
 });

@@ -75,6 +75,20 @@ test("subject ownership mismatch fails closed even when capability owner is vali
   }), (e) => e.code === "SUBJECT_OWNER_MISMATCH");
 });
 
+test("atomic binding fails closed unless a subject adapter proves co-transfer semantics", () => {
+  const capability = v2({ bindingMode: BINDING_ATOMIC });
+  assert.throws(() => verifySubjectBinding({
+    capability,
+    capabilityOwnerLockHash: OWNER,
+    subject: { id: SUBJECT, lockHash: OWNER, live: true },
+  }), (e) => e.code === "ATOMIC_BINDING_UNVERIFIED");
+  assert.equal(verifySubjectBinding({
+    capability,
+    capabilityOwnerLockHash: OWNER,
+    subject: { id: SUBJECT, lockHash: OWNER, live: true, atomicBindingVerified: true },
+  }).bound, true);
+});
+
 test("authorization composes entitlement, subject ownership and payment", () => {
   const policy = createServicePolicy({ serviceId: SERVICE, trustedIssuerId: ISSUER, requireSubjectBinding: true });
   const result = authorizeRequest({

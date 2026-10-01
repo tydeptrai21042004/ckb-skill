@@ -41,7 +41,6 @@ enum Error {
     ImmutableFieldChanged = 11,
     TransferForbidden = 12,
     InvalidGroupShape = 13,
-    BurnForbidden = 14,
     InvalidCreationId = 15,
 }
 
@@ -185,6 +184,20 @@ fn verify_transition(
     Ok(())
 }
 
+/// Retire a Capability by consuming its typed Cell without creating a
+/// successor Capability output. The input lock script remains responsible for
+/// proving that the current owner authorized the transaction. The Type Script
+/// only verifies that the retiring Cell is a well-formed instance of this
+/// exact (issuer_id, capability_id) identity.
+fn verify_surrender(
+    input: &[u8],
+    issuer_arg: &[u8; 32],
+    capability_arg: &[u8; 32],
+) -> Result<(), Error> {
+    let cap = parse_capability(input)?;
+    enforce_identity(&cap, issuer_arg, capability_arg)
+}
+
 fn main() -> Result<(), Error> {
     let input_count = QueryIter::new(load_cell_data, Source::GroupInput).count();
     let output_count = QueryIter::new(load_cell_data, Source::GroupOutput).count();
@@ -200,7 +213,10 @@ fn main() -> Result<(), Error> {
             let output = load_cell_data(0, Source::GroupOutput)?;
             verify_transition(input.as_ref(), output.as_ref(), &issuer_arg, &capability_arg)
         }
-        (1, 0) => Err(Error::BurnForbidden),
+        (1, 0) => {
+            let input = load_cell_data(0, Source::GroupInput)?;
+            verify_surrender(input.as_ref(), &issuer_arg, &capability_arg)
+        }
         _ => Err(Error::InvalidGroupShape),
     }
 }

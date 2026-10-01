@@ -47,22 +47,25 @@ Only the Cell lock may change. If input and output lock hashes differ, the `tran
 
 ## Invalid group shapes
 
-The current contract accepts only:
+The current contract accepts:
 
 ```text
 0 Capability inputs -> 1 Capability output   ISSUE
 1 Capability input  -> 1 Capability output   TRANSFER / REFRESH
+1 Capability input  -> 0 Capability outputs  SURRENDER
 ```
 
 It rejects duplicate/split/merge shapes such as `0 -> 2`, `1 -> 2`, `2 -> 1`, and `2 -> 2`.
 
-## Destruction
+## Owner surrender / retirement
 
 ```text
-Capability -> Ø
+Capability(owner) -> ordinary owner Cell
 ```
 
-is rejected. Explicit on-chain burn/revocation semantics are not part of Phase 1. Application/provider suspension or revocation must not be confused with destruction of the canonical ownership Cell.
+A holder may consume the Capability Cell without creating a successor Capability output. The consumed Cell's **lock script** is what proves owner authorization; the Type Script validates the retiring Capability data/args identity. Surrender is allowed even when the right is expired or non-transferable because it does not transfer authority to another principal.
+
+This lifecycle operation is intentionally distinct from provider-side suspension/revocation. Surrender retires the on-chain ownership object and allows its occupied CKB capacity to be returned to an ordinary Cell. Provider suspension/revocation only changes whether a provider will honor an otherwise live Capability.
 
 ## Service authorization
 

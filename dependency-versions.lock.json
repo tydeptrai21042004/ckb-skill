@@ -87,10 +87,9 @@
     "packages/ckb-client/package.json": {
       "name": "@skillpass/ckb-client",
       "version": "1.0.0",
-      "sha256": "e52992c79d8ebce3a1265080ec090ecb06639d997e7a7d7809aaacb1f01a271f",
+      "sha256": "054f2d847b1a0602f3d9509df62f910f082bf18baaa1386b7b69876d09082e07",
       "dependencies": {
         "@ckb-ccc/ccc": "1.2.7",
-        "@ckb-ccc/connector-react": "1.1.9",
         "@skillpass/auth-protocol": "1.0.0",
         "@skillpass/capability-codec": "0.7.0"
       },

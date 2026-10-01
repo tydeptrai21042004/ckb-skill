@@ -375,7 +375,7 @@ fn malformed_data_fails() {
 }
 
 #[test]
-fn burn_is_forbidden() {
+fn owner_can_surrender_and_reclaim_capacity_into_plain_cell() {
     let mut fx = setup();
     let issuer = hash32(&fx.owner_a);
     let cap_id = [9u8; 32];
@@ -383,9 +383,51 @@ fn burn_is_forbidden() {
     let data = capability_data(TRANSFERABLE, [1u8; 32], issuer, cap_id, 2_000_000_000);
     let input = create_input(&mut fx.context, fx.owner_a.clone(), Some(cap_type), data);
 
-    let tx = TransactionBuilder::default().input(input).build();
+    // The transaction still has an ordinary output returning capacity to the
+    // current owner, but there is no successor output in this Type Script group.
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output(fx.owner_a.clone(), None))
+        .output_data(Bytes::new().pack())
+        .build();
     let tx = fx.context.complete_tx(tx);
-    assert!(fx.context.verify_tx(&tx, MAX_CYCLES).is_err());
+    fx.context.verify_tx(&tx, MAX_CYCLES).expect("owner-authorized surrender");
+}
+
+#[test]
+fn expired_non_transferable_capability_can_be_surrendered() {
+    let mut fx = setup();
+    let issuer = hash32(&fx.owner_a);
+    let cap_id = [8u8; 32];
+    let cap_type = build_cap_type(&fx, issuer, cap_id);
+    let data = capability_data(0, [1u8; 32], issuer, cap_id, 1);
+    let input = create_input(&mut fx.context, fx.owner_a.clone(), Some(cap_type), data);
+
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output(fx.owner_a.clone(), None))
+        .output_data(Bytes::new().pack())
+        .build();
+    let tx = fx.context.complete_tx(tx);
+    fx.context.verify_tx(&tx, MAX_CYCLES).expect("expired right remains surrenderable");
+}
+
+#[test]
+fn v2_capability_can_be_surrendered_without_mutating_binding_data() {
+    let mut fx = setup();
+    let issuer = hash32(&fx.owner_a);
+    let cap_id = [7u8; 32];
+    let cap_type = build_cap_type(&fx, issuer, cap_id);
+    let data = valid_subject_bound_v2(issuer, cap_id);
+    let input = create_input(&mut fx.context, fx.owner_a.clone(), Some(cap_type), data);
+
+    let tx = TransactionBuilder::default()
+        .input(input)
+        .output(output(fx.owner_a.clone(), None))
+        .output_data(Bytes::new().pack())
+        .build();
+    let tx = fx.context.complete_tx(tx);
+    fx.context.verify_tx(&tx, MAX_CYCLES).expect("v2 surrender");
 }
 
 

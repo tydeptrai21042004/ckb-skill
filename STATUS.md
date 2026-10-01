@@ -6,7 +6,7 @@ This status file is intentionally conservative so funding reviewers can distingu
 |---|---|---|
 | Capability Type Script source/tests | Implemented | contract logic and tests present |
 | Capability V1/V2 codec | Implemented | subject/policy commitments included |
-| Transfer transaction builder | Implemented | preserves capability data/type identity |
+| Transfer/surrender transaction builders | Implemented | transfer preserves data/type identity; surrender retires the typed Cell and returns capacity to the owner |
 | Live capability discovery/client logic | Implemented | requires configured deployment/RPC |
 | Provider verifier | Implemented | issuer/service/owner/finality policy checks |
 | Signed provider manifests/evidence | Implemented | cryptographic tooling/tests present |
@@ -18,5 +18,5 @@ This status file is intentionally conservative so funding reviewers can distingu
 | Public Alice -> Bob Testnet evidence | **Pending** | `evidence/testnet/manifest.json` not yet attached |
 | External provider integration | **Pending** | internal scaffolding is not external adoption |
 | User/provider pilot evidence | **Pending** | interview/pilot plan exists; results not yet claimed |
-| Root npm transitive lockfile | **Pending** | must be generated from registry metadata before final tag |
+| Root npm transitive lockfile | **Pending** | must be generated from registry metadata before final tag; this patch does not fabricate registry-derived metadata |
 | Mainnet readiness | Out of scope | not claimed |
