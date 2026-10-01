@@ -37,7 +37,7 @@
     "apps/web/package.json": {
       "name": "@skillpass/web",
       "version": "1.0.0",
-      "sha256": "abc814df4731a6f17d71df20b20b93104296795ccf9662a695921894b3008e6d",
+      "sha256": "975186d044129cc630198825688054417dc76684a0957e84968bae892f54a639",
       "dependencies": {
         "@ckb-ccc/connector-react": "1.1.9",
         "@skillpass/capability-codec": "0.7.0",
@@ -60,7 +60,7 @@
     "package.json": {
       "name": "ckb-skillpass",
       "version": "1.8.0",
-      "sha256": "e28816d40ff2412bdc941daf5ae015e998696946cbdbde17208dfc920765f086",
+      "sha256": "a1382fb091bcc297711bd9b8a1f2097ba143835e96c9e34fd7afc5b27100b469",
       "dependencies": {
         "@ckb-ccc/ccc": "1.2.7"
       },
@@ -87,9 +87,10 @@
     "packages/ckb-client/package.json": {
       "name": "@skillpass/ckb-client",
       "version": "1.0.0",
-      "sha256": "054f2d847b1a0602f3d9509df62f910f082bf18baaa1386b7b69876d09082e07",
+      "sha256": "e52992c79d8ebce3a1265080ec090ecb06639d997e7a7d7809aaacb1f01a271f",
       "dependencies": {
         "@ckb-ccc/ccc": "1.2.7",
+        "@ckb-ccc/connector-react": "1.1.9",
         "@skillpass/auth-protocol": "1.0.0",
         "@skillpass/capability-codec": "0.7.0"
       },

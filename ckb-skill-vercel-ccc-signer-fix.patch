@@ -1,0 +1,143 @@
+--- a/package.json
++++ b/package.json
+@@ -101,7 +101,8 @@
+     "typescript": "5.9.2"
+   },
+   "allowScripts": {
+-    "esbuild@0.25.12": true
++    "esbuild@0.25.12": true,
++    "esbuild@0.27.7": true
+   },
+   "dependencies": {
+     "@ckb-ccc/ccc": "1.2.7"
+--- a/apps/web/package.json
++++ b/apps/web/package.json
+@@ -30,8 +30,5 @@
+   },
+   "engines": {
+     "node": "24.x"
+-  },
+-  "allowScripts": {
+-    "esbuild@0.25.12": true
+   }
+ }
+--- a/packages/ckb-client/package.json
++++ b/packages/ckb-client/package.json
+@@ -4,6 +4,7 @@
+   "type": "module",
+   "dependencies": {
+     "@ckb-ccc/ccc": "1.2.7",
++    "@ckb-ccc/connector-react": "1.1.9",
+     "@skillpass/auth-protocol": "1.0.0",
+     "@skillpass/capability-codec": "0.7.0"
+   },
+--- a/packages/ckb-client/src/live.ts
++++ b/packages/ckb-client/src/live.ts
+@@ -1,4 +1,4 @@
+-import { ccc } from "@ckb-ccc/ccc";
++import { ccc } from "@ckb-ccc/connector-react";
+ import {
+   decodeCapability,
+   encodeCapabilityHex,
+--- a/dependency-versions.lock.json
++++ b/dependency-versions.lock.json
+@@ -37,7 +37,7 @@
+     "apps/web/package.json": {
+       "name": "@skillpass/web",
+       "version": "1.0.0",
+-      "sha256": "abc814df4731a6f17d71df20b20b93104296795ccf9662a695921894b3008e6d",
++      "sha256": "975186d044129cc630198825688054417dc76684a0957e84968bae892f54a639",
+       "dependencies": {
+         "@ckb-ccc/connector-react": "1.1.9",
+         "@skillpass/capability-codec": "0.7.0",
+@@ -60,7 +60,7 @@
+     "package.json": {
+       "name": "ckb-skillpass",
+       "version": "1.8.0",
+-      "sha256": "e28816d40ff2412bdc941daf5ae015e998696946cbdbde17208dfc920765f086",
++      "sha256": "a1382fb091bcc297711bd9b8a1f2097ba143835e96c9e34fd7afc5b27100b469",
+       "dependencies": {
+         "@ckb-ccc/ccc": "1.2.7"
+       },
+@@ -87,9 +87,10 @@
+     "packages/ckb-client/package.json": {
+       "name": "@skillpass/ckb-client",
+       "version": "1.0.0",
+-      "sha256": "054f2d847b1a0602f3d9509df62f910f082bf18baaa1386b7b69876d09082e07",
++      "sha256": "e52992c79d8ebce3a1265080ec090ecb06639d997e7a7d7809aaacb1f01a271f",
+       "dependencies": {
+         "@ckb-ccc/ccc": "1.2.7",
++        "@ckb-ccc/connector-react": "1.1.9",
+         "@skillpass/auth-protocol": "1.0.0",
+         "@skillpass/capability-codec": "0.7.0"
+       },
+--- /dev/null
++++ b/tests/ccc-type-coherence.test.mjs
+@@ -0,0 +1,32 @@
++import test from "node:test";
++import assert from "node:assert/strict";
++import { readFile } from "node:fs/promises";
++
++async function json(path) {
++  return JSON.parse(await readFile(path, "utf8"));
++}
++
++test("web app and web-facing CKB client use the same CCC connector Signer family", async () => {
++  const webPkg = await json("apps/web/package.json");
++  const clientPkg = await json("packages/ckb-client/package.json");
++  const app = await readFile("apps/web/src/App.tsx", "utf8");
++  const live = await readFile("packages/ckb-client/src/live.ts", "utf8");
++
++  const webConnector = webPkg.dependencies?.["@ckb-ccc/connector-react"];
++  const clientConnector = clientPkg.dependencies?.["@ckb-ccc/connector-react"];
++
++  assert.ok(webConnector, "web must declare @ckb-ccc/connector-react");
++  assert.equal(clientConnector, webConnector, "web and @skillpass/ckb-client must pin the same connector-react version");
++  assert.match(app, /from\s+["']@ckb-ccc\/connector-react["']/, "App.tsx must use connector-react");
++  assert.match(live, /from\s+["']@ckb-ccc\/connector-react["']/, "live.ts must use the same connector-react namespace as App.tsx");
++  assert.doesNotMatch(live, /from\s+["']@ckb-ccc\/ccc["']/, "live.ts must not expose Signer types from a second CCC bundle");
++});
++
++test("install-script approvals live only at workspace root", async () => {
++  const rootPkg = await json("package.json");
++  const webPkg = await json("apps/web/package.json");
++
++  assert.equal(webPkg.allowScripts, undefined, "workspace allowScripts is ignored by npm and must not be present");
++  assert.equal(rootPkg.allowScripts?.["esbuild@0.25.12"], true);
++  assert.equal(rootPkg.allowScripts?.["esbuild@0.27.7"], true);
++});
+--- /dev/null
++++ b/VERCEL_CCC_SIGNER_FIX.md
+@@ -0,0 +1,32 @@
++# Vercel CCC Signer build fix
++
++## Failure
++
++Vercel TypeScript reported that a `Signer` from the CCC connector tree was not assignable to a `Signer` from the direct CCC/core tree. CCC `Signer` contains protected state, so TypeScript treats two independently installed copies as nominally incompatible even when their public APIs look identical.
++
++## Root cause
++
++`apps/web/src/App.tsx` obtains its wallet signer from `@ckb-ccc/connector-react`, while `packages/ckb-client/src/live.ts` had been changed to import `ccc` from `@ckb-ccc/ccc`. The public functions in `live.ts` therefore required a different `ccc.Signer` class than the one returned by the React connector.
++
++## Fix
++
++- `packages/ckb-client/src/live.ts` again imports `ccc` from `@ckb-ccc/connector-react`.
++- `packages/ckb-client/package.json` pins `@ckb-ccc/connector-react` to the exact same `1.1.9` version as the web app.
++- Backend/server code can continue to use `@ckb-ccc/ccc`; only the browser-facing signer boundary must share the connector's class family.
++- `allowScripts` was removed from `apps/web/package.json` because npm ignores it in workspaces and was centralized at the root for both esbuild versions observed in the Vercel install log.
++- `tests/ccc-type-coherence.test.mjs` prevents the signer-family mismatch from being reintroduced.
++- `dependency-versions.lock.json` was regenerated.
++
++## Apply
++
++Overlay the files in this ZIP at the repository root, commit, and redeploy. For a clean local verification use:
++
++```bash
++rm -rf node_modules apps/web/node_modules packages/ckb-client/node_modules
++npm install
++npm run verify:dependency-lock
++node --test tests/ccc-type-coherence.test.mjs
++npm run build:web
++```
++
++If Vercel still restores a stale dependency layout after the commit, redeploy once with **Clear build cache**. The source-level mismatch itself is fixed by this patch; clearing cache is only for an old cached `node_modules` tree.
