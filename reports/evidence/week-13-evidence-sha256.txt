@@ -1,0 +1,2 @@
+394d276e9ac6b68b3a9b197fb69adae349b12659b89fb2ebab9e1d87f3fc8a2e  week-13-cellguard-terminal-demo.png
+37c791f77c0e524ac85e74437a47db3b798617d277af0fd2fdb0a738277e8308  week-13-fibercontinuity-issue-41.png
