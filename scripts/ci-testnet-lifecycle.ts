@@ -311,7 +311,16 @@ async function main() {
   console.log("REAL CKB TESTNET LIFECYCLE PASSED. See evidence artifacts for all hashes and RPC checks.");
 }
 
-main().catch((error: any) => {
-  console.error("REAL CKB TESTNET LIFECYCLE FAILED:", error?.stack || String(error));
-  process.exitCode = 1;
-});
+// This is a one-shot GitHub Actions command, not a long-running service.
+// CCC may retain RPC/polling handles after the final on-chain check. Once
+// main() resolves, all evidence and GitHub summary writes have been awaited.
+// Flush terminal output before exiting so GitHub Actions can advance.
+void main().then(
+  () => {
+    process.stdout.write("", () => process.exit(0));
+  },
+  (error: any) => {
+    console.error("REAL CKB TESTNET LIFECYCLE FAILED:", error?.stack || String(error));
+    process.stderr.write("", () => process.exit(1));
+  },
+);
