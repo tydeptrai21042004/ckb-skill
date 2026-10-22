@@ -15,3 +15,12 @@ ckb-std = { version = "=1.1.0", features = ["type-id", "build-with-clang"] }
 
 [dev-dependencies]
 ckb-testtool = "=1.1.1"
+
+# Minimize the *on-chain Cell capacity* consumed by the deployed ELF.
+# Lower binary bytes means less testnet CKB is needed for contract deployment.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

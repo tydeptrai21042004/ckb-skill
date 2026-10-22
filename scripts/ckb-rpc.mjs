@@ -12,22 +12,34 @@ export function normalizeRpcUrl(value) {
   return url.toString();
 }
 
+// Bound every HTTP request. Public nodes occasionally stall instead of returning
+// an RPC error; CI must fail promptly rather than hang for tens of minutes.
+const RPC_TIMEOUT_MS = 12_000;
+
 export function createCkbRpc(url = process.env.CKB_RPC_URL || "https://testnet.ckb.dev") {
   const endpoint = normalizeRpcUrl(url);
   let id = 0;
   return Object.freeze({
     endpoint,
     async call(method, params = []) {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/json", "user-agent": "SkillPass-Evidence/1.0" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
-        redirect: "error",
-      });
-      if (!response.ok) throw Object.assign(new Error(`CKB RPC ${method} returned HTTP ${response.status}`), { code: "CKB_RPC_HTTP_ERROR" });
-      const payload = await response.json();
-      if (payload?.error) throw rpcError(method, payload);
-      return payload?.result;
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json", "user-agent": "SkillPass-Evidence/1.0" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: ++id, method, params }),
+          redirect: "error",
+          signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
+        });
+        if (!response.ok) throw Object.assign(new Error(`CKB RPC ${method} returned HTTP ${response.status}`), { code: "CKB_RPC_HTTP_ERROR" });
+        const payload = await response.json();
+        if (payload?.error) throw rpcError(method, payload);
+        return payload?.result;
+      } catch (error) {
+        if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+          throw Object.assign(new Error(`CKB RPC ${method} timed out after ${RPC_TIMEOUT_MS} ms at ${new URL(endpoint).host}`), {code: "CKB_RPC_TIMEOUT"});
+        }
+        throw error;
+      }
     },
   });
 }

@@ -51,6 +51,26 @@ async function requireTestnet(rpcUrl: string) {
   return rpc;
 }
 
+/**
+ * Fast read-only capacity preflight. Unlike signer.getBalance(), this uses one
+ * bounded indexer request and does not enumerate every wallet Cell. Only cells
+ * with empty data are counted, avoiding occupied capacity in data-bearing
+ * Capability/contract Cells. This is a conservative funding estimate.
+ */
+async function getFundingCapacity(rpc: ReturnType<typeof createCkbRpc>, lock: ccc.Script): Promise<bigint> {
+  const result = await rpc.call("get_cells_capacity", [{
+    script: {code_hash: lock.codeHash, hash_type: lock.hashType, args: lock.args},
+    script_type: "lock",
+    script_search_mode: "exact",
+    filter: {output_data_len_range: ["0x0", "0x1"]},
+  }]);
+  const capacity = result?.capacity;
+  if (typeof capacity !== "string" || !/^0x[0-9a-fA-F]+$/.test(capacity)) {
+    throw new Error("CKB indexer get_cells_capacity returned no valid capacity; cannot verify funding safely");
+  }
+  return BigInt(capacity);
+}
+
 async function awaitLive(rpc: ReturnType<typeof createCkbRpc>, outpoint: {txHash: string; index: number}, expected: boolean) {
   for (let n = 0; n < 15; n++) {
     const actual = (await liveCellStatus(rpc, outpoint)) === "live";
@@ -136,52 +156,63 @@ async function main() {
   if (!PRIMARY_URL.startsWith("https://") || !SECONDARY_URL.startsWith("https://")) {
     throw new Error("Real testnet RPC URLs must both be HTTPS");
   }
+  // FIRST read the local binary; no network request is needed for size checks.
+  // This is the exact RISC-V production ELF, not a placeholder or mock.
+  const binary = new Uint8Array(await readFile("contracts/capability-type/build/release/capability-type"));
+  if (binary.byteLength < 1024 || binary[0] !== 0x7f || binary[1] !== 0x45 || binary[2] !== 0x4c || binary[3] !== 0x46) {
+    throw new Error("Compiled contract is absent, too small or not an ELF binary; run make -C contracts/capability-type build");
+  }
+  const codeHash = ccc.hashCkb(binary);
+  const minimumCkb = binary.byteLength + 2000;
+  const lowerBound = ccc.fixedPointFrom(String(minimumCkb));
+  console.log(`Preflight: RISC-V ELF=${binary.byteLength} bytes; minimum funding target ~${minimumCkb} CKB`);
+
+  const sourceCommit = process.env.GITHUB_SHA || "local-run-without-git-sha";
+  const start = {status: "started", network: TESTNET_NETWORK, aliceAddress: TESTNET_FUNDING_ADDRESS,
+    bobAddress: TESTNET_BOB_ADDRESS, sourceCommit, checkedAt: new Date().toISOString()};
+  await save("ci-stage.json", start);
+
+  // Verify network identity, then query spendable wallet capacity directly on
+  // the indexer. This happens BEFORE any CCC signer connection, Cell selection,
+  // transaction construction, or secondary-provider checks.
   const primary = await requireTestnet(PRIMARY_URL);
-  await requireTestnet(SECONDARY_URL);
   const client = new ccc.ClientPublicTestnet(PRIMARY_URL);
+  if (low(client.addressPrefix) !== "ckt") throw new Error("Refusing non-testnet CCC client");
+  const publiclyDecodedAlice = await ccc.Address.fromString(TESTNET_FUNDING_ADDRESS, client);
+  const balance = await getFundingCapacity(primary, publiclyDecodedAlice.script);
+  console.log(`Fast testnet wallet preflight: ${ccc.fixedPointToString(balance)} CKB available (empty-data cells); required ~${minimumCkb} CKB`);
+  if (balance < lowerBound) {
+    await save("ci-stage.json", {...start, status: "INSUFFICIENT_FUNDS",
+      availableCKB: ccc.fixedPointToString(balance), requiredCKB: String(minimumCkb),
+      contractBytes: binary.byteLength, codeHash});
+    throw new Error(`Insufficient testnet funds: ${ccc.fixedPointToString(balance)} CKB available, ~${minimumCkb} CKB needed for ${binary.byteLength}-byte ELF. Stopping before slow wallet/network operations. Fund via https://faucet.nervos.org/ or reduce contract binary size.`);
+  }
+
+  // The funding preflight passed. Only now construct the signer and verify the
+  // independent provider RPC. The checked address must match the signer key.
   const signer = new ccc.SignerCkbPrivateKey(client, secret);
   await signer.connect();
   const derivedAddress = await signer.getRecommendedAddress();
   if (derivedAddress !== TESTNET_FUNDING_ADDRESS) {
     throw new Error("The hardcoded testnet signing key does not match the funding address. Refusing to spend any CKB.");
   }
-  if (low(client.addressPrefix) !== "ckt") throw new Error("Refusing non-testnet CCC client");
   const owner = await signer.getRecommendedAddressObj();
   const bob = await ccc.Address.fromString(TESTNET_BOB_ADDRESS, client);
   const aliceLockHash = owner.script.hash();
   const bobLockHash = bob.script.hash();
   if (low(aliceLockHash) === low(bobLockHash)) throw new Error("Alice and Bob must be distinct CKB locks");
+  await requireTestnet(SECONDARY_URL);
   console.log(`REAL TESTNET (${TESTNET_NETWORK}); Alice: ${derivedAddress}; Bob: ${TESTNET_BOB_ADDRESS}`);
   console.log(`Primary RPC: ${new URL(PRIMARY_URL).host}; secondary: ${new URL(SECONDARY_URL).host}`);
-
-  const sourceCommit = process.env.GITHUB_SHA || "local-run-without-git-sha";
-  const start = {status: "started", network: TESTNET_NETWORK, aliceAddress: derivedAddress,
-    bobAddress: TESTNET_BOB_ADDRESS, sourceCommit, checkedAt: new Date().toISOString()};
-  await save("ci-stage.json", start);
   const sendTracked = async (tx: ccc.Transaction, stage: string, prior: Record<string, string>) => {
     const txHash = await signer.sendTransaction(tx);
-    // Persist the real on-chain candidate hash BEFORE waiting for a block. If
-    // the RPC confirmation call times out, the user can still recover evidence.
+    // Persist the real broadcast hash BEFORE waiting for a block. Never retry
+    // an uncertain broadcast automatically: the first tx may have succeeded.
     await save("ci-stage.json", {...start, ...prior, status: `${stage}-broadcast`, [`${stage}TxHash`]: txHash});
     const confirmed = await signer.client.waitTransaction(txHash, 1, 300_000, 2_000);
     if (!confirmed) throw new Error(`Transaction ${stage} ${txHash} did not confirm in 300 seconds`);
     return txHash;
   };
-
-  // This MUST be the compiled production RISC-V binary, never a placeholder.
-  const binary = new Uint8Array(await readFile("contracts/capability-type/build/release/capability-type"));
-  if (binary.byteLength < 1024 || binary[0] !== 0x7f || binary[1] !== 0x45 || binary[2] !== 0x4c || binary[3] !== 0x46) {
-    throw new Error("Compiled contract is absent, too small or not an ELF binary; run make -C contracts/capability-type build");
-  }
-  const codeHash = ccc.hashCkb(binary);
-  const balance = await signer.getBalance();
-  console.log(`Testnet balance: ${ccc.fixedPointToString(balance)} CKB; contract ELF size ${binary.byteLength} bytes`);
-  // CKB occupied capacity for a contract cell includes executable bytes. Require
-  // a modest buffer above the ~bytes-as-CKB deposit, issuance and transaction fees.
-  const lowerBound = ccc.fixedPointFrom(String(binary.byteLength + 2000));
-  if (balance < lowerBound) {
-    throw new Error(`Insufficient testnet funds: need at least ~${binary.byteLength + 2000} CKB (safe capacity buffer); fund the address through https://faucet.nervos.org/`);
-  }
 
   const deployTx = ccc.Transaction.from({
     // Put the immutable code Cell under Bob's distinct lock: Alice's automatic
