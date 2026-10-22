@@ -1,0 +1,73 @@
+name: Real CKB Testnet — Deploy + Lifecycle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A single funded UTXO wallet must not run concurrent deployments/transfers.
+concurrency:
+  group: skillpass-real-testnet-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  real-testnet:
+    name: Deploy compiled contract, issue, transfer, verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CKB_RPC_URL: https://testnet.ckb.dev
+      CKB_SECONDARY_RPC_URL: https://testnet.ckbapp.dev
+      TESTNET_EVIDENCE_DIR: evidence/testnet
+
+    steps:
+      - name: Checkout committed source
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install pinned-project JavaScript dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run offline protocol/security tests (fail closed)
+        run: |
+          npm run verify:protocol-core
+          npm run test:provider-adversarial
+          npm run verify:provider-conformance
+          npm run typecheck:ckb
+
+      - name: Install Rust 1.95.0 and bare-metal CKB contract target
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.95.0'
+          targets: riscv64imac-unknown-none-elf
+          components: rust-src
+
+      - name: Build real Capability Type Script ELF
+        run: make -C contracts/capability-type build
+
+      - name: Deploy to Pudge and test real issue/transfer/independent providers
+        run: npm exec --no -- tsx scripts/ci-testnet-lifecycle.ts
+
+      - name: Independently recheck the final manifest against testnet RPC
+        run: npm run evidence:testnet:require
+
+      - name: Upload unredacted public on-chain evidence (never secrets)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ckb-testnet-evidence-${{ github.run_id }}
+          path: |
+            evidence/testnet/ci-stage.json
+            evidence/testnet/deployment.json
+            evidence/testnet/manifest.json
+            evidence/testnet/providers/lifecycle-before.json
+            evidence/testnet/providers/lifecycle-after.json
+            evidence/testnet/onchain-verification.json
+            evidence/testnet/run-summary.json
+          if-no-files-found: warn
+          retention-days: 30
