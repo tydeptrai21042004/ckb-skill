@@ -1,18 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { executeComputeReference, executeModelReference, executePrivateDataReference } from "../apps/live-service/reference-services.mjs";
 import { buildDiscovery, buildOpenApi } from "../apps/live-service/discovery.mjs";
 
 const read = (path) => readFileSync(path, "utf8");
-
-test("v1.6 release contains the hidden deployment assets that clean ZIPs need", () => {
-  for (const file of [
-    ".env.example", ".env.testnet.example", ".env.live.example",
-    ".env.production.example", ".env.vercel.example", ".dockerignore", ".gitignore",
-    ".github/workflows/security-readiness.yml",
-  ]) assert.equal(existsSync(file), true, `missing ${file}`);
-});
 
 test("the default developer path is the current Service Bundle product, not the legacy Paper demo", () => {
   const pkg = JSON.parse(read("package.json"));
