@@ -93,3 +93,9 @@ It gives the proposal two credible deliverables rather than two overlapping prot
 
 - **SkillPass** demonstrates a reusable CKB-native portable-right primitive across the generic Model API / Private Data API / Compute API bundle.
 - **SkillPass Care** demonstrates a richer product lifecycle: coverage continuity, quota/service history, issuer controls, resale transfer and cross-provider service.
+
+## 7. Reference bridge contract (new)
+
+`packages/care-bridge/` contains a fail-closed bridge with a deliberately separate Care-owned transactional quota/event callback. The CKB adapter `scripts/ckb-care-owner-adapter.mjs` uses the canonical provider verifier and fresh live Cell reads; Care must independently supply replay-safe wallet-signature verification and durable atomic quota mutation.
+
+A green **offline** bridge test demonstrates the stale-owner, transfer and quota behavior of a simulated Care store, **not** a full integration with the external SkillPass Care repository or a production Testnet transaction. Treat SC-01 and SC-02 as open until that application wires the adapters and its own CI runs the real end-to-end lifecycle.

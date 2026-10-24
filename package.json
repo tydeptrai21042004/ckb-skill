@@ -90,7 +90,9 @@
     "providers:testnet:before": "node scripts/independent-provider-lifecycle.mjs --phase before",
     "providers:testnet:after": "node scripts/independent-provider-lifecycle.mjs --phase after",
     "verify:funding-phase1": "node --test tests/funding-phase1-hardening.test.mjs packages/provider-verifier/test/provider-verifier.test.mjs tests/provider-adversarial.test.mjs && npm run verify:provider-conformance && npm run verify:dependency-lock && npm run verify:workspaces && npm run verify:deploy",
-    "test:provider-adversarial": "node --test tests/provider-adversarial.test.mjs"
+    "test:provider-adversarial": "node --test tests/provider-adversarial.test.mjs",
+    "test:care-bridge": "node --test packages/care-bridge/test/bridge.test.mjs",
+    "test:testnet-gates": "node --test tests/lifecycle-assertions.test.mjs tests/ci-provider-worker.test.mjs tests/testnet-workflow-config.test.mjs"
   },
   "workspaces": [
     "apps/*",

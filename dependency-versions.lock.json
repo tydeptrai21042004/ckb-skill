@@ -60,7 +60,7 @@
     "package.json": {
       "name": "ckb-skillpass",
       "version": "1.8.0",
-      "sha256": "a1382fb091bcc297711bd9b8a1f2097ba143835e96c9e34fd7afc5b27100b469",
+      "sha256": "97f561ffd824365068c2bbc74ee1696e39b6e4582d1b2cf2517d9688660a9629",
       "dependencies": {
         "@ckb-ccc/ccc": "1.2.7"
       },
@@ -83,6 +83,11 @@
       "name": "@skillpass/capability-codec",
       "version": "0.7.0",
       "sha256": "9e93247e4125dafd209ee93586b1428b7e4ab5bd406863ee9f76c0d886993d38"
+    },
+    "packages/care-bridge/package.json": {
+      "name": "@skillpass/care-bridge",
+      "version": "0.1.0",
+      "sha256": "fb97e7ecb3c69ede4ac0d2f5647d822180ecd4c4cee4ff5801c5ba2ab187b3da"
     },
     "packages/ckb-client/package.json": {
       "name": "@skillpass/ckb-client",

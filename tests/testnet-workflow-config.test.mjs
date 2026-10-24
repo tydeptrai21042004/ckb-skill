@@ -7,6 +7,7 @@ import {
 
 const workflow = await readFile('.github/workflows/real-ckb-testnet.yml','utf8');
 const runner = await readFile('scripts/ci-testnet-lifecycle.ts','utf8');
+const providerWorker = await readFile('scripts/ci-provider-worker.mjs','utf8');
 
 test('public addresses are distinct CKB testnet addresses', () => {
  assert.equal(TESTNET_NETWORK, 'ckb_testnet');
@@ -28,8 +29,9 @@ test('lifecycle cannot claim success without verified on-chain evidence',()=>{
  for(const item of [
   'get_blockchain_info', 'TESTNET_FUNDING_PRIVATE_KEY', 'derivedAddress !== TESTNET_FUNDING_ADDRESS',
   'buildIssueCapabilityTx', 'buildTransferCapabilityTx', 'verifyManifestAgainstCkb',
-  'verifySkillPassAuthorization', 'status: "PASSED"',
+  'ci-provider-worker.mjs', 'status: "PASSED"',
  ]) assert.ok(runner.includes(item), `missing ${item}`);
+ assert.match(providerWorker, /verifySkillPassAuthorization/);
  assert.match(TESTNET_FUNDING_PRIVATE_KEY, /^0x[0-9a-f]{64}$/i);
  assert.doesNotMatch(runner, /process\.env\.CKB_TESTNET_PRIVATE_KEY/);
 });

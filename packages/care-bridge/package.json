@@ -1,0 +1,11 @@
+{
+  "name": "@skillpass/care-bridge",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "license": "Apache-2.0",
+  "files": ["src", "README.md"]
+}

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { access, readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { decodeCapability, encodeTypeArgs } from "../packages/capability-codec/src/index.mjs";
 import {
   createCkbRpc,
   dataCodeHash,
+  hexBytes,
   getHistoricalCell,
   getTransaction,
   liveCellStatus,
@@ -24,6 +26,12 @@ export function validateManifestShape(manifest) {
   }
   if (manifest.network !== "testnet") failures.push("network must be testnet for the funding pilot evidence");
   if (!Number.isInteger(manifest.depIndex) || manifest.depIndex < 0) failures.push("depIndex must be a non-negative integer");
+  if (manifest.minConfirmations !== undefined && (!Number.isSafeInteger(manifest.minConfirmations) || manifest.minConfirmations < 1 || manifest.minConfirmations > 1_000)) {
+    failures.push("minConfirmations must be an integer in 1..1000");
+  }
+  if (manifest.contractBinarySha256 !== undefined && !/^sha256:[0-9a-fA-F]{64}$/.test(String(manifest.contractBinarySha256))) {
+    failures.push("contractBinarySha256 must be sha256:<64-hex> when supplied");
+  }
   if (!["data", "data1", "data2", "type"].includes(String(manifest.hashType || ""))) failures.push("hashType must be data, data1, data2, or type");
   for (const key of ["codeHash", "depTxHash", "issuerId", "serviceId", "capabilityId", "issueTxHash", "transferTxHash", "aliceLockHash", "bobLockHash"]) {
     if (manifest[key] && !/^0x[0-9a-fA-F]{64}$/.test(String(manifest[key]))) failures.push(`${key} must be 32-byte 0x hex`);
@@ -53,6 +61,10 @@ export async function verifyManifestAgainstCkb({ manifest, rpcUrl } = {}) {
   if (failures.length) return { passed: false, failures, checks: [] };
   const rpc = createCkbRpc(rpcUrl || process.env.CKB_RPC_URL || "https://testnet.ckb.dev");
   const checks = [];
+  const chainInfo = await rpc.call("get_blockchain_info", []);
+  if (chainInfo?.chain !== "ckb_testnet") return {
+    passed: false, failures: [`RPC reports unexpected chain ${String(chainInfo?.chain)}`], checks: [],
+  };
   const check = (condition, message) => {
     checks.push({ passed: Boolean(condition), message });
     if (!condition) failures.push(message);
@@ -68,6 +80,11 @@ export async function verifyManifestAgainstCkb({ manifest, rpcUrl } = {}) {
 
   const expectedCodeHash = manifest.hashType === "type" ? scriptHash(depCell.cellOutput.type) : dataCodeHash(depCell.outputData);
   check(equalHex(expectedCodeHash, manifest.codeHash), "contract deployment output resolves to the declared codeHash");
+  if (manifest.contractBinarySha256) {
+    const binaryDigest = `sha256:${createHash("sha256").update(hexBytes(depCell.outputData)).digest("hex")}`;
+    check(binaryDigest.toLowerCase() === String(manifest.contractBinarySha256).toLowerCase(),
+      "on-chain deployed contract bytes match the compiled ELF SHA-256");
+  }
 
   check(equalScript(pre.cellOutput.type, post.cellOutput.type), "Capability Type Script is identical before and after transfer");
   check(equalHex(pre.outputData, post.outputData), "Capability data is byte-identical before and after transfer");
@@ -93,9 +110,15 @@ export async function verifyManifestAgainstCkb({ manifest, rpcUrl } = {}) {
     liveCellStatus(rpc, manifest.preTransferOutpoint),
     liveCellStatus(rpc, manifest.postTransferOutpoint),
   ]);
-  check(preStatus !== "live", `Alice pre-transfer outpoint is no longer live (status=${preStatus})`);
+  check(preStatus === "dead", `Alice pre-transfer outpoint was consumed (status=${preStatus})`);
   check(postStatus === "live", `Bob successor Capability outpoint is live (status=${postStatus})`);
-  check(post.confirmations >= Number(manifest.minConfirmations ?? 1), `Bob successor Cell has required confirmations (${post.confirmations})`);
+  const minConfirmations = Number(manifest.minConfirmations ?? 1);
+  check(Number.isSafeInteger(minConfirmations) && minConfirmations >= 1 && minConfirmations <= 1_000,
+    "confirmation requirement is a positive bounded integer");
+  for (const [name, cell] of [["contract", depCell], ["issue", pre], ["transfer", post]]) {
+    check(cell.txStatus === "committed", `${name} transaction was committed (status=${cell.txStatus})`);
+    check(cell.confirmations >= minConfirmations, `${name} transaction meets confirmation threshold`);
+  }
 
   return {
     passed: failures.length === 0,

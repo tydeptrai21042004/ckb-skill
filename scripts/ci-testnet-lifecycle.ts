@@ -7,22 +7,24 @@
  */
 import { ccc } from "@ckb-ccc/ccc";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import {
   TESTNET_NETWORK, TESTNET_RPC_DEFAULT, TESTNET_RPC_SECONDARY,
   TESTNET_FUNDING_ADDRESS, TESTNET_BOB_ADDRESS, TESTNET_FUNDING_PRIVATE_KEY,
 } from "./testnet-wallets.mjs";
-import { createCkbRpc, getHistoricalCell, getLiveCell, liveCellStatus, dataCodeHash } from "./ckb-rpc.mjs";
+import { createCkbRpc, getHistoricalCell, liveCellStatus, dataCodeHash } from "./ckb-rpc.mjs";
 import { verifyManifestAgainstCkb } from "./testnet-evidence.mjs";
 import { buildIssueCapabilityTx, buildTransferCapabilityTx } from "../packages/ckb-client/src/live.ts";
-import { decodeCapability, FLAG_TRANSFERABLE, FLAG_DELEGATABLE } from "@skillpass/capability-codec";
+import { FLAG_TRANSFERABLE, FLAG_DELEGATABLE } from "@skillpass/capability-codec";
 import { SERVICE_BUNDLE_V1_ENTITLEMENT_ID } from "@skillpass/capability-codec/service-ids";
-import { verifySkillPassAuthorization } from "@skillpass/provider-verifier";
-import { createServicePolicy } from "@skillpass/service-rights";
 
 const EVIDENCE = resolve(process.env.TESTNET_EVIDENCE_DIR || "evidence/testnet");
 const PRIMARY_URL = process.env.CKB_RPC_URL || TESTNET_RPC_DEFAULT;
 const SECONDARY_URL = process.env.CKB_SECONDARY_RPC_URL || TESTNET_RPC_SECONDARY;
+const REUSE_DEPLOYMENT_FILE = String(process.env.CKB_REUSE_DEPLOYMENT_FILE || "").trim();
 const hex32 = (input: unknown): input is `0x${string}` =>
   typeof input === "string" && /^0x[0-9a-fA-F]{64}$/.test(input);
 const low = (input: unknown) => String(input ?? "").toLowerCase();
@@ -73,76 +75,64 @@ async function getFundingCapacity(rpc: ReturnType<typeof createCkbRpc>, lock: cc
 
 async function awaitLive(rpc: ReturnType<typeof createCkbRpc>, outpoint: {txHash: string; index: number}, expected: boolean) {
   for (let n = 0; n < 15; n++) {
-    const actual = (await liveCellStatus(rpc, outpoint)) === "live";
-    if (actual === expected) return;
+    const status = await liveCellStatus(rpc, outpoint);
+    if (status === (expected ? "live" : "dead")) return;
     await sleep(3000);
   }
   throw new Error(`Expected ${outpoint.txHash}:${outpoint.index} live=${expected}, RPC did not converge`);
 }
 
-/** Two independently configured provider instances query two actual RPC endpoints. */
+/** Separate Node processes run each provider policy using their own pinned configuration. */
 async function checkProviders(args: {
   phase: "before" | "after";
   deployment: {codeHash: string; hashType: string};
   serviceId: string;
   issuerId: string;
-  capabilityData: string;
+  capabilityId: string;
   aliceLockHash: string;
   bobLockHash: string;
   pre: {txHash: string; index: number};
   post?: {txHash: string; index: number};
 }) {
-  const policy = createServicePolicy({
-    serviceId: args.serviceId,
-    trustedIssuerIds: [args.issuerId],
-    requireTransferable: true,
-  });
-  const capability = decodeCapability(args.capabilityData);
+  const context = {
+    codeHash: args.deployment.codeHash, hashType: args.deployment.hashType,
+    serviceId: args.serviceId, issuerId: args.issuerId, capabilityId: args.capabilityId,
+    aliceLockHash: args.aliceLockHash, bobLockHash: args.bobLockHash,
+    pre: args.pre, post: args.post ?? null,
+  };
+  await save(`providers/ci-context-${args.phase}.json`, context);
+  const exec = promisify(execFile);
   const providers = [];
   for (const [id, url] of [["provider-a", PRIMARY_URL], ["provider-b", SECONDARY_URL]] as const) {
-    const rpc = await requireTestnet(url);
-    const checks = args.phase === "before"
-      ? [
-          {id: "before-alice-allow", who: args.aliceLockHash, point: args.pre, expected: true},
-          {id: "before-bob-deny", who: args.bobLockHash, point: args.pre, expected: false},
-        ]
-      : [
-          {id: "after-alice-deny", who: args.aliceLockHash, point: args.pre, expected: false},
-          {id: "after-bob-allow", who: args.bobLockHash, point: args.post!, expected: true},
-        ];
-    const results = [];
-    for (const item of checks) {
-      let allowed = false;
-      let code = "ALLOW";
-      try {
-        const verdict = await verifySkillPassAuthorization({
-          capability, policy, requesterLockHash: item.who,
-          deployment: args.deployment,
-          minConfirmations: 1,
-          resolveLiveCell: async () => getLiveCell(rpc, item.point),
-        });
-        allowed = verdict.authorized === true;
-        if (!allowed) code = "DENY";
-      } catch (error: any) {
-        code = String(error?.code || error?.name || "UNKNOWN_ERROR");
-        // An RPC outage, failed finality check, wrong deployment or malformed
-        // on-chain data is NOT evidence that the requester was correctly denied.
-        // Only the two expected authorization failures count as a negative test.
-        if (item.expected || !["NOT_OWNER", "CELL_NOT_LIVE"].includes(code)) throw error;
-      }
-      const passed = allowed === item.expected;
-      results.push({id: item.id, expected: item.expected, actual: allowed, passed, code});
-      console.log(`${passed ? "PASS" : "FAIL"} ${id} ${item.id}: ${allowed ? "allow" : "deny"}`);
-    }
-    providers.push({provider: {id}, rpcHost: new URL(url).host, results, passed: results.every((r) => r.passed)});
+    const config = {
+      id, rpcUrl: url,
+      codeHash: args.deployment.codeHash, hashType: args.deployment.hashType,
+      serviceId: args.serviceId, trustedIssuerId: args.issuerId,
+      minConfirmations: 1, ownerSourceOfTruth: "live-ckb-cell", entitlementDatabase: null,
+    };
+    await save(`providers/ci-${id}.json`, config);
+    const outputFile = resolve(EVIDENCE, `providers/${id}-${args.phase}.json`);
+    // Each invocation is an entirely fresh process, not two verifier calls in
+    // the same process. This does not imply organizational independence.
+    const { stdout, stderr } = await exec(process.execPath, [
+      "scripts/ci-provider-worker.mjs", args.phase,
+      resolve(EVIDENCE, `providers/ci-${id}.json`),
+      resolve(EVIDENCE, `providers/ci-context-${args.phase}.json`), outputFile,
+    ], {timeout: 120_000, maxBuffer: 1_000_000});
+    if (stdout.trim()) console.log(stdout.trim());
+    if (stderr.trim()) console.error(stderr.trim());
+    const report = JSON.parse(await readFile(outputFile, "utf8"));
+    if (!report.passed || report.provider?.id !== id) throw new Error(`${id} failed independent process checks`);
+    providers.push(report);
   }
   const report = {
-    schemaVersion: 1, kind: "skillpass-real-testnet-independent-provider-lifecycle",
+    schemaVersion: 2, kind: "skillpass-real-testnet-separate-provider-processes",
     network: TESTNET_NETWORK, phase: args.phase, checkedAt: new Date().toISOString(),
-    providers, passed: providers.every((provider) => provider.passed),
+    providers, passed: providers.length === 2 && providers.every(p => p.passed),
+    independentOrganizationsVerified: false,
   };
   await save(`providers/lifecycle-${args.phase}.json`, report);
-  if (!report.passed) throw new Error(`Real testnet provider checks FAILED in ${args.phase} phase`);
+  if (!report.passed) throw new Error(`Provider checks FAILED in ${args.phase} phase`);
 }
 
 async function main() {
@@ -156,6 +146,9 @@ async function main() {
   if (!PRIMARY_URL.startsWith("https://") || !SECONDARY_URL.startsWith("https://")) {
     throw new Error("Real testnet RPC URLs must both be HTTPS");
   }
+  if (new URL(PRIMARY_URL).host === new URL(SECONDARY_URL).host) {
+    throw new Error("Provider RPC hosts must be different for the two-node testnet lifecycle gate");
+  }
   // FIRST read the local binary; no network request is needed for size checks.
   // This is the exact RISC-V production ELF, not a placeholder or mock.
   const binary = new Uint8Array(await readFile("contracts/capability-type/build/release/capability-type"));
@@ -163,13 +156,15 @@ async function main() {
     throw new Error("Compiled contract is absent, too small or not an ELF binary; run make -C contracts/capability-type build");
   }
   const codeHash = ccc.hashCkb(binary);
-  const minimumCkb = binary.byteLength + 2000;
+  const binarySha256 = `sha256:${createHash("sha256").update(binary).digest("hex")}`;
+  const minimumCkb = REUSE_DEPLOYMENT_FILE ? 2000 : binary.byteLength + 2000;
   const lowerBound = ccc.fixedPointFrom(String(minimumCkb));
   console.log(`Preflight: RISC-V ELF=${binary.byteLength} bytes; minimum funding target ~${minimumCkb} CKB`);
 
   const sourceCommit = process.env.GITHUB_SHA || "local-run-without-git-sha";
   const start = {status: "started", network: TESTNET_NETWORK, aliceAddress: TESTNET_FUNDING_ADDRESS,
-    bobAddress: TESTNET_BOB_ADDRESS, sourceCommit, checkedAt: new Date().toISOString()};
+    bobAddress: TESTNET_BOB_ADDRESS, sourceCommit, contractBinarySha256: binarySha256,
+    workflowRun: process.env.GITHUB_RUN_ID || null, checkedAt: new Date().toISOString()};
   await save("ci-stage.json", start);
 
   // Verify network identity, then query spendable wallet capacity directly on
@@ -214,27 +209,49 @@ async function main() {
     return txHash;
   };
 
-  const deployTx = ccc.Transaction.from({
-    // Put the immutable code Cell under Bob's distinct lock: Alice's automatic
-    // capacity selector cannot accidentally spend the deployed contract as a fee.
-    outputs: [{lock: bob.script}],
-    outputsData: [ccc.hexFrom(binary)],
-  });
-  await deployTx.completeInputsByCapacity(signer);
-  await deployTx.completeFeeBy(signer);
-  const deployHash = await sendTracked(deployTx, "deploy", {});
+  let deployHash: string;
+  if (REUSE_DEPLOYMENT_FILE) {
+    // Reuse the original known-good contract only after independent chain
+    // verification against the exact ELF compiled from the current source.
+    const existing = JSON.parse(await readFile(resolve(REUSE_DEPLOYMENT_FILE), "utf8"));
+    if (existing.network !== "testnet" || existing.hashType !== "data2" ||
+        !hex32(existing.codeHash) || low(existing.codeHash) !== low(codeHash) ||
+        !hex32(existing.depTxHash) || existing.depIndex !== 0) {
+      throw new Error("Refusing contract reuse: deployment descriptor does not match compiled testnet ELF or required outpoint");
+    }
+    deployHash = existing.depTxHash;
+    await awaitLive(primary, {txHash: deployHash, index: 0}, true);
+    await awaitLive(await requireTestnet(SECONDARY_URL), {txHash: deployHash, index: 0}, true);
+    const deployedCell = await getHistoricalCell(primary, {txHash: deployHash, index: 0});
+    if (dataCodeHash(deployedCell.outputData) !== low(codeHash) ||
+        createHash("sha256").update(Buffer.from(deployedCell.outputData.slice(2), "hex")).digest("hex") !== binarySha256.slice(7)) {
+      throw new Error("Refusing contract reuse: on-chain deployed bytecode differs from the compiled ELF");
+    }
+    console.log(`Verified and reused real Testnet deployment: ${deployHash}`);
+  } else {
+    const deployTx = ccc.Transaction.from({
+      // Put the immutable code Cell under Bob's distinct lock: Alice's automatic
+      // capacity selector cannot accidentally spend it as a fee.
+      outputs: [{lock: bob.script}],
+      outputsData: [ccc.hexFrom(binary)],
+    });
+    await deployTx.completeInputsByCapacity(signer);
+    await deployTx.completeFeeBy(signer);
+    deployHash = await sendTracked(deployTx, "deploy", {});
+    await awaitLive(primary, {txHash: deployHash, index: 0}, true);
+    const deployedCell = await getHistoricalCell(primary, {txHash: deployHash, index: 0});
+    if (dataCodeHash(deployedCell.outputData) !== low(codeHash)) {
+      throw new Error("Deployed Cell data hash does not match compiled Capability Type Script!");
+    }
+  }
   const deployment = {
     network: "testnet" as const, codeHash,
     hashType: "data2" as const, depTxHash: deployHash, depIndex: 0,
   };
   await save("deployment.json", deployment);
-  await save("ci-stage.json", {...start, status: "deployed", deployTxHash: deployHash, codeHash});
-  console.log(`Contract deployed (real tx): ${deployHash}`);
-  await awaitLive(primary, {txHash: deployHash, index: 0}, true);
-  const deployedCell = await getHistoricalCell(primary, {txHash: deployHash, index: 0});
-  if (dataCodeHash(deployedCell.outputData) !== low(codeHash)) {
-    throw new Error("Deployed Cell data hash does not match compiled Capability Type Script!");
-  }
+  await save("ci-stage.json", {...start, status: REUSE_DEPLOYMENT_FILE ? "deployment-reused" : "deployed",
+    deployTxHash: deployHash, codeHash});
+  console.log(`Contract deployment confirmed (real tx): ${deployHash}`);
 
   const issue = await buildIssueCapabilityTx({
     signer, deployment, recipientAddress: derivedAddress,
@@ -246,6 +263,8 @@ async function main() {
   const issueHash = await sendTracked(issue.tx, "issue", {deployTxHash: deployHash});
   const pre = {txHash: issueHash, index: 0};
   await awaitLive(primary, pre, true);
+  const providerRpc = await requireTestnet(SECONDARY_URL);
+  await awaitLive(providerRpc, pre, true);
   await save("ci-stage.json", {...start, status: "issued", deployTxHash: deployHash,
     issueTxHash: issueHash, codeHash, capabilityId: issue.capabilityId});
   const issuedCell = await getHistoricalCell(primary, pre);
@@ -255,7 +274,7 @@ async function main() {
   const providerArgs = {
     deployment: {codeHash, hashType: deployment.hashType},
     serviceId: SERVICE_BUNDLE_V1_ENTITLEMENT_ID, issuerId: issue.issuerId,
-    capabilityData: issue.data, aliceLockHash, bobLockHash, pre,
+    capabilityId: issue.capabilityId, aliceLockHash, bobLockHash, pre,
   };
   await checkProviders({...providerArgs, phase: "before"});
 
@@ -269,9 +288,11 @@ async function main() {
     issueTxHash: issueHash, transferTxHash: transferHash, codeHash, capabilityId: issue.capabilityId});
   await awaitLive(primary, pre, false);
   await awaitLive(primary, post, true);
+  await awaitLive(providerRpc, pre, false);
+  await awaitLive(providerRpc, post, true);
 
   const manifest = {
-    network: "testnet", sourceCommit, protocolVersion: "1.8.0",
+    network: "testnet", sourceCommit, protocolVersion: "1.8.0", contractBinarySha256: binarySha256,
     codeHash, hashType: "data2", depTxHash: deployHash, depIndex: 0,
     issuerId: issue.issuerId, serviceId: SERVICE_BUNDLE_V1_ENTITLEMENT_ID,
     capabilityId: issue.capabilityId,
@@ -289,10 +310,12 @@ async function main() {
   }
   const summary = {
     status: "PASSED", realChain: true, network: TESTNET_NETWORK,
-    sourceCommit, issuerAliceAddress: derivedAddress, bobAddress: TESTNET_BOB_ADDRESS,
+    sourceCommit, contractBinarySha256: binarySha256,
+    workflowRun: process.env.GITHUB_RUN_ID || null,
+    issuerAliceAddress: derivedAddress, bobAddress: TESTNET_BOB_ADDRESS,
     codeHash, deployTxHash: deployHash, issueTxHash: issueHash, transferTxHash: transferHash,
     capabilityId: issue.capabilityId, checks: report.checks.length,
-    providerChecks: "two providers x before and after", checkedAt: new Date().toISOString(),
+    providerChecks: "two separate CI verifier processes x before and after (lock-hash checks)", checkedAt: new Date().toISOString(),
   };
   await save("run-summary.json", summary);
   await save("ci-stage.json", {...start, status: "PASSED", deployTxHash: deployHash,
@@ -304,7 +327,7 @@ async function main() {
       `- **Issue:** \`${issueHash}\`\n` +
       `- **Transfer Alice → Bob:** \`${transferHash}\`\n` +
       `- **Contract codeHash:** \`${codeHash}\`\n` +
-      `- **Two-provider checks:** before and after PASS\n` +
+      `- **Two separate provider-process checks:** before and after PASS (no independent operator or wallet-signature claim)\n` +
       `- **On-chain verification:** ${report.checks.length} checks PASS\n\n` +
       `All hashes are actual on-chain testnet transactions, not mocks.\n`);
   }

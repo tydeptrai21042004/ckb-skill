@@ -55,3 +55,9 @@ npm run providers:testnet:after
 The generated provider configs explicitly pin the deployment, trusted issuer, service ID and confirmation threshold. They declare `ownerSourceOfTruth: live-ckb-cell` and `entitlementDatabase: null`; each provider owns its own RPC setting and runs the same public `@skillpass/provider-verifier` path.
 
 For subject-bound Capability V2 rights, wire each provider's independent subject resolver into its integration. The bundled lifecycle CLI intentionally refuses to fake subject resolution.
+
+## GitHub Actions evidence rule
+
+The **Real CKB Testnet — Deploy + Lifecycle** workflow automatically writes the manifest, provider reports and independent RPC verification and attaches them to its run. A successful, inspectable GitHub Actions run is valid evidence for the checks it performed; there is no need to manually produce a duplicate archive. A green offline CI test or a configured workflow by itself is **not** proof that a real transaction was submitted.
+
+The two CI providers are separate verifier processes, but not proven separate businesses. These checks verify owner lock-hash policy and canonical live Cell state, not possession of Bob's private key.

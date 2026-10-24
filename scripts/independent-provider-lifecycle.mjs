@@ -7,6 +7,7 @@ import { createServicePolicy } from "@skillpass/service-rights";
 import { verifySkillPassAuthorization } from "@skillpass/provider-verifier";
 import { createCkbRpc, getHistoricalCell, getLiveCell } from "./ckb-rpc.mjs";
 import { validateManifestShape } from "./testnet-evidence.mjs";
+import { assessProviderDecision } from "./lifecycle-assertions.mjs";
 
 function canonical(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -91,7 +92,7 @@ export async function runIndependentProviderPhase({ phase, manifest, providerCon
     const results = [];
     for (const item of cases) {
       const decision = await authorize({ rpc, config, capability, outPoint: item.outPoint, requesterLockHash: item.requesterLockHash });
-      results.push({ ...item, actual: decision.allowed, code: decision.code, passed: decision.allowed === item.expected });
+      results.push(assessProviderDecision({id: item.id, expected: item.expected, authorized: decision.allowed, code: decision.code}));
     }
     reports.push({
       provider: config.provider,
