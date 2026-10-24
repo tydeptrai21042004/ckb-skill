@@ -4,6 +4,12 @@ name: Real CKB Testnet — Deploy + Lifecycle
 
 on:
   workflow_dispatch:
+    inputs:
+      deployment_file:
+        description: 'Optional repository path to an existing verified testnet deployment.json (leave empty to deploy a fresh contract)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -22,6 +28,7 @@ jobs:
       CKB_RPC_URL: https://testnet.ckb.dev
       CKB_SECONDARY_RPC_URL: https://testnet.ckbapp.dev
       TESTNET_EVIDENCE_DIR: evidence/testnet
+      CKB_REUSE_DEPLOYMENT_FILE: ${{ inputs.deployment_file }}
 
     steps:
       - name: Checkout committed source
@@ -32,8 +39,17 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install pinned-project JavaScript dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Install JavaScript dependencies (locked when lockfile is committed)
+        shell: bash
+        run: |
+          if [[ -f package-lock.json ]]; then
+            npm ci --ignore-scripts --no-audit --no-fund
+            echo "Dependency install: npm ci from committed lockfile" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No committed package-lock.json; release reproducibility is NOT verified"
+            echo "Dependency install: unpinned transitive resolution (commit package-lock.json to close REL-01)" >> "$GITHUB_STEP_SUMMARY"
+            npm install --ignore-scripts --no-audit --no-fund
+          fi
 
       - name: Run offline protocol/security tests (fail closed)
         run: |
@@ -41,6 +57,9 @@ jobs:
           npm run test:provider-adversarial
           npm run verify:provider-conformance
           npm run typecheck:ckb
+          npm run test:testnet-gates
+          npm run test:care-bridge
+          npm run verify:dependency-lock
 
       - name: Install Rust 1.95.0 and bare-metal CKB contract target
         uses: dtolnay/rust-toolchain@master
@@ -67,9 +86,8 @@ jobs:
             evidence/testnet/ci-stage.json
             evidence/testnet/deployment.json
             evidence/testnet/manifest.json
-            evidence/testnet/providers/lifecycle-before.json
-            evidence/testnet/providers/lifecycle-after.json
+            evidence/testnet/providers/*.json
             evidence/testnet/onchain-verification.json
             evidence/testnet/run-summary.json
           if-no-files-found: warn
-          retention-days: 30
+          retention-days: 90
