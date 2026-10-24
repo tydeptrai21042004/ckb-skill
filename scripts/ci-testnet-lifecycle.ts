@@ -15,7 +15,8 @@ import {
   TESTNET_NETWORK, TESTNET_RPC_DEFAULT, TESTNET_RPC_SECONDARY,
   TESTNET_FUNDING_ADDRESS, TESTNET_BOB_ADDRESS, TESTNET_FUNDING_PRIVATE_KEY,
 } from "./testnet-wallets.mjs";
-import { createCkbRpc, getHistoricalCell, liveCellStatus, dataCodeHash } from "./ckb-rpc.mjs";
+import { createCkbRpc, getHistoricalCell, getTransaction, liveCellStatus, transactionConfirmations, transactionConsumesOutPoint, dataCodeHash } from "./ckb-rpc.mjs";
+import { assessConsumptionProof } from "./spend-proof.mjs";
 import { verifyManifestAgainstCkb } from "./testnet-evidence.mjs";
 import { buildIssueCapabilityTx, buildTransferCapabilityTx } from "../packages/ckb-client/src/live.ts";
 import { FLAG_TRANSFERABLE, FLAG_DELEGATABLE } from "@skillpass/capability-codec";
@@ -73,13 +74,48 @@ async function getFundingCapacity(rpc: ReturnType<typeof createCkbRpc>, lock: cc
   return BigInt(capacity);
 }
 
-async function awaitLive(rpc: ReturnType<typeof createCkbRpc>, outpoint: {txHash: string; index: number}, expected: boolean) {
+async function awaitLive(rpc: ReturnType<typeof createCkbRpc>, outpoint: {txHash: string; index: number}) {
   for (let n = 0; n < 15; n++) {
     const status = await liveCellStatus(rpc, outpoint);
-    if (status === (expected ? "live" : "dead")) return;
+    if (status === "live") return;
     await sleep(3000);
   }
-  throw new Error(`Expected ${outpoint.txHash}:${outpoint.index} live=${expected}, RPC did not converge`);
+  throw new Error(`Expected ${outpoint.txHash}:${outpoint.index} live=true at ${new URL(rpc.endpoint).host}, RPC did not converge`);
+}
+
+/** Verify spent-Cell state using the actual committed transfer, not just "unknown".
+ * An absent output also returns "unknown" on modern CKB RPC nodes.
+ */
+async function awaitConsumed(rpc: ReturnType<typeof createCkbRpc>, outpoint: {txHash: string; index: number}, transferHash: string) {
+  let last: any = null;
+  for (let n = 0; n < 24; n++) {
+    try {
+      const [status, spender, confirmation] = await Promise.all([
+        liveCellStatus(rpc, outpoint),
+        getTransaction(rpc, transferHash),
+        transactionConfirmations(rpc, transferHash),
+      ]);
+      const proof = assessConsumptionProof({
+        cellStatus: status,
+        spendingTxStatus: confirmation.status,
+        spendingConfirmations: confirmation.confirmations,
+        spendingTxConsumesOutpoint: transactionConsumesOutPoint(spender.transaction, outpoint),
+        minConfirmations: 1,
+      });
+      last = proof;
+      if (proof.passed) return {rpcHost: new URL(rpc.endpoint).host, outpoint, spendingTxHash: transferHash, ...proof};
+      // If the committed transaction does not spend the claimed Cell, polling
+      // cannot correct that input mismatch: fail instead of passing by timeout.
+      if (confirmation.status === "committed" && !proof.checks.spenderConsumesExactOutpoint) {
+        throw new Error(`Confirmed transfer ${transferHash} does not consume ${outpoint.txHash}:${outpoint.index}`);
+      }
+    } catch (error: any) {
+      if (String(error?.message || '').startsWith('Confirmed transfer ')) throw error;
+      last = {rpcError: String(error?.message || error)};
+    }
+    await sleep(3000);
+  }
+  throw new Error(`Expected confirmed consumption of ${outpoint.txHash}:${outpoint.index} at ${new URL(rpc.endpoint).host}; last=${JSON.stringify(last)}`);
 }
 
 /** Separate Node processes run each provider policy using their own pinned configuration. */
@@ -220,8 +256,8 @@ async function main() {
       throw new Error("Refusing contract reuse: deployment descriptor does not match compiled testnet ELF or required outpoint");
     }
     deployHash = existing.depTxHash;
-    await awaitLive(primary, {txHash: deployHash, index: 0}, true);
-    await awaitLive(await requireTestnet(SECONDARY_URL), {txHash: deployHash, index: 0}, true);
+    await awaitLive(primary, {txHash: deployHash, index: 0});
+    await awaitLive(await requireTestnet(SECONDARY_URL), {txHash: deployHash, index: 0});
     const deployedCell = await getHistoricalCell(primary, {txHash: deployHash, index: 0});
     if (dataCodeHash(deployedCell.outputData) !== low(codeHash) ||
         createHash("sha256").update(Buffer.from(deployedCell.outputData.slice(2), "hex")).digest("hex") !== binarySha256.slice(7)) {
@@ -238,7 +274,7 @@ async function main() {
     await deployTx.completeInputsByCapacity(signer);
     await deployTx.completeFeeBy(signer);
     deployHash = await sendTracked(deployTx, "deploy", {});
-    await awaitLive(primary, {txHash: deployHash, index: 0}, true);
+    await awaitLive(primary, {txHash: deployHash, index: 0});
     const deployedCell = await getHistoricalCell(primary, {txHash: deployHash, index: 0});
     if (dataCodeHash(deployedCell.outputData) !== low(codeHash)) {
       throw new Error("Deployed Cell data hash does not match compiled Capability Type Script!");
@@ -262,9 +298,9 @@ async function main() {
   if (!hex32(issue.issuerId) || !hex32(issue.capabilityId)) throw new Error("Invalid issuance identifiers");
   const issueHash = await sendTracked(issue.tx, "issue", {deployTxHash: deployHash});
   const pre = {txHash: issueHash, index: 0};
-  await awaitLive(primary, pre, true);
+  await awaitLive(primary, pre);
   const providerRpc = await requireTestnet(SECONDARY_URL);
-  await awaitLive(providerRpc, pre, true);
+  await awaitLive(providerRpc, pre);
   await save("ci-stage.json", {...start, status: "issued", deployTxHash: deployHash,
     issueTxHash: issueHash, codeHash, capabilityId: issue.capabilityId});
   const issuedCell = await getHistoricalCell(primary, pre);
@@ -286,10 +322,11 @@ async function main() {
   const post = {txHash: transferHash, index: 0};
   await save("ci-stage.json", {...start, status: "transferred", deployTxHash: deployHash,
     issueTxHash: issueHash, transferTxHash: transferHash, codeHash, capabilityId: issue.capabilityId});
-  await awaitLive(primary, pre, false);
-  await awaitLive(primary, post, true);
-  await awaitLive(providerRpc, pre, false);
-  await awaitLive(providerRpc, post, true);
+  const primarySpendProof = await awaitConsumed(primary, pre, transferHash);
+  await awaitLive(primary, post);
+  const secondarySpendProof = await awaitConsumed(providerRpc, pre, transferHash);
+  await awaitLive(providerRpc, post);
+  await save("spend-proofs.json", {schemaVersion: 1, network: TESTNET_NETWORK, primarySpendProof, secondarySpendProof});
 
   const manifest = {
     network: "testnet", sourceCommit, protocolVersion: "1.8.0", contractBinarySha256: binarySha256,

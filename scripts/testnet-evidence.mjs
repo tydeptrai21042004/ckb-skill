@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { access, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { assessConsumptionProof } from "./spend-proof.mjs";
 import { decodeCapability, encodeTypeArgs } from "../packages/capability-codec/src/index.mjs";
 import {
   createCkbRpc,
@@ -104,15 +105,24 @@ export async function verifyManifestAgainstCkb({ manifest, rpcUrl } = {}) {
   check(equalHex(pre.lockHash, manifest.aliceLockHash), "pre-transfer Cell lock hash belongs to Alice");
   check(equalHex(post.lockHash, manifest.bobLockHash), "post-transfer Cell lock hash belongs to Bob");
   check(!equalHex(manifest.aliceLockHash, manifest.bobLockHash), "Alice and Bob lock hashes are distinct");
-  check(transactionConsumesOutPoint(transferRecord.transaction, manifest.preTransferOutpoint), "transfer transaction consumes Alice's Capability outpoint");
+  const transferConsumesAlice = transactionConsumesOutPoint(transferRecord.transaction, manifest.preTransferOutpoint);
+  check(transferConsumesAlice, "transfer transaction consumes Alice's Capability outpoint");
 
   const [preStatus, postStatus] = await Promise.all([
     liveCellStatus(rpc, manifest.preTransferOutpoint),
     liveCellStatus(rpc, manifest.postTransferOutpoint),
   ]);
-  check(preStatus === "dead", `Alice pre-transfer outpoint was consumed (status=${preStatus})`);
-  check(postStatus === "live", `Bob successor Capability outpoint is live (status=${postStatus})`);
   const minConfirmations = Number(manifest.minConfirmations ?? 1);
+  const consumption = assessConsumptionProof({
+    cellStatus: preStatus,
+    spendingTxStatus: transferRecord.status?.status ?? post.txStatus,
+    spendingConfirmations: post.confirmations,
+    spendingTxConsumesOutpoint: transferConsumesAlice,
+    minConfirmations,
+  });
+  check(consumption.passed,
+    `Alice pre-transfer outpoint was consumed by confirmed transfer (status=${preStatus}; failed=${consumption.failed.join(',') || 'none'})`);
+  check(postStatus === "live", `Bob successor Capability outpoint is live (status=${postStatus})`);
   check(Number.isSafeInteger(minConfirmations) && minConfirmations >= 1 && minConfirmations <= 1_000,
     "confirmation requirement is a positive bounded integer");
   for (const [name, cell] of [["contract", depCell], ["issue", pre], ["transfer", post]]) {

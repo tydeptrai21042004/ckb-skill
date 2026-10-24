@@ -35,3 +35,18 @@ test('lifecycle cannot claim success without verified on-chain evidence',()=>{
  assert.match(TESTNET_FUNDING_PRIVATE_KEY, /^0x[0-9a-f]{64}$/i);
  assert.doesNotMatch(runner, /process\.env\.CKB_TESTNET_PRIVATE_KEY/);
 });
+
+test('spent outpoint checks verify a committed exact-input proof, never the deprecated dead-only status', () => {
+ assert.match(runner, /awaitConsumed\(primary, pre, transferHash\)/);
+ assert.match(runner, /awaitConsumed\(providerRpc, pre, transferHash\)/);
+ assert.match(runner, /assessConsumptionProof/);
+ assert.doesNotMatch(runner, /status === \(expected \? "live" : "dead"\)/);
+});
+
+test('failed transfer guard can be recovered read-only from a previous Actions run', () => {
+ assert.match(workflow, /resume_run_id:/);
+ assert.match(workflow, /actions\/download-artifact@v4/);
+ assert.match(workflow, /ci-recover-testnet-lifecycle\.mjs/);
+ assert.match(workflow, /github-token: \$\{\{ github\.token \}\}/);
+ assert.match(workflow, /recovery-rpc-verification\.json/);
+});
