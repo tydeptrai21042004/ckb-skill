@@ -10,9 +10,15 @@ on:
         required: false
         type: string
         default: ''
+      resume_run_id:
+        description: 'Read-only recovery from an earlier run artifact; no new CKB transactions (enter GitHub Actions run ID)'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 # A single funded UTXO wallet must not run concurrent deployments/transfers.
 concurrency:
@@ -71,8 +77,22 @@ jobs:
       - name: Build real Capability Type Script ELF
         run: make -C contracts/capability-type build
 
+      - name: Download original run evidence for read-only recovery
+        if: ${{ inputs.resume_run_id != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ckb-testnet-evidence-${{ inputs.resume_run_id }}
+          path: evidence/testnet
+          run-id: ${{ inputs.resume_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Deploy to Pudge and test real issue/transfer/independent providers
+        if: ${{ inputs.resume_run_id == '' }}
         run: npm exec --no -- tsx scripts/ci-testnet-lifecycle.ts
+
+      - name: Re-verify existing real transactions and run after-transfer provider checks (no broadcast)
+        if: ${{ inputs.resume_run_id != '' }}
+        run: node scripts/ci-recover-testnet-lifecycle.mjs
 
       - name: Independently recheck the final manifest against testnet RPC
         run: npm run evidence:testnet:require
@@ -88,6 +108,8 @@ jobs:
             evidence/testnet/manifest.json
             evidence/testnet/providers/*.json
             evidence/testnet/onchain-verification.json
+            evidence/testnet/spend-proofs.json
+            evidence/testnet/recovery-rpc-verification.json
             evidence/testnet/run-summary.json
           if-no-files-found: warn
           retention-days: 90
