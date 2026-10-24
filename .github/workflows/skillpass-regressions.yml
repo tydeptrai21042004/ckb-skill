@@ -1,0 +1,40 @@
+name: SkillPass Provider + Care Regression Gates
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-gates:
+    name: Strict provider authorization and Care boundary tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify exact dependency declarations
+        run: node scripts/dependency-lock.mjs --check
+      - name: Run no-credential / no-network regression tests
+        run: |
+          node --test tests/lifecycle-assertions.test.mjs tests/ci-provider-worker.test.mjs tests/testnet-workflow-config.test.mjs
+          node --test packages/care-bridge/test/bridge.test.mjs
+      - name: Parse changed modules
+        run: |
+          node --check scripts/ci-provider-worker.mjs
+          node --check scripts/independent-provider-lifecycle.mjs
+          node --check scripts/testnet-evidence.mjs
+          node --check scripts/ckb-care-owner-adapter.mjs
+          node --check packages/care-bridge/src/index.mjs
+      - name: Record scope in GitHub Actions summary
+        run: |
+          echo '## SkillPass regression gates: passed' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo 'Checks: strict provider decisions; offline Care transfer/quota/idempotency/race tests; Testnet workflow configuration.' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '**These are offline tests, not live Testnet or independent external-provider pilot proof.**' >> "$GITHUB_STEP_SUMMARY"
