@@ -22,13 +22,16 @@ jobs:
         run: node scripts/dependency-lock.mjs --check
       - name: Run no-credential / no-network regression tests
         run: |
-          node --test tests/lifecycle-assertions.test.mjs tests/ci-provider-worker.test.mjs tests/testnet-workflow-config.test.mjs
+          npm run test:testnet-gates
           node --test packages/care-bridge/test/bridge.test.mjs
       - name: Parse changed modules
         run: |
           node --check scripts/ci-provider-worker.mjs
           node --check scripts/independent-provider-lifecycle.mjs
           node --check scripts/testnet-evidence.mjs
+          node --check scripts/spend-proof.mjs
+          node --check scripts/recover-manifest.mjs
+          node --check scripts/ci-recover-testnet-lifecycle.mjs
           node --check scripts/ckb-care-owner-adapter.mjs
           node --check packages/care-bridge/src/index.mjs
       - name: Record scope in GitHub Actions summary
